@@ -5,6 +5,12 @@ Keep a Changelog and the project uses Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-07-23
+
+### Fixed
+
+- Rejected plugin paths with a reparse point anywhere between the volume or UNC share root and the plugin directory.
+
 ## [0.1.1] - 2026-07-23
 
 ### Fixed

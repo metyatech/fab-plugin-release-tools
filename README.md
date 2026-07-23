@@ -88,10 +88,13 @@ The command runs these gates in order and stops at the first failure:
 
 There is no build-skip or validation-skip option.
 
-Allowlisted paths are rejected when the path itself or any existing parent
-between the plugin root and that path is a junction, symbolic link, or other
-reparse point. Descriptor properties documented as arrays must be JSON arrays;
-a scalar string or object cannot substitute for a one-element array.
+Every existing directory element from the volume or UNC share root through
+`PluginPath` is checked before Git and again before staging. A junction,
+symbolic link, mount point, or other reparse point anywhere in that absolute
+chain is rejected. Each allowlisted target also receives a separate path-chain
+check from `PluginPath` through the target. Descriptor properties documented as
+arrays must be JSON arrays; a scalar string or object cannot substitute for a
+one-element array.
 
 ## Outputs and failure behavior
 

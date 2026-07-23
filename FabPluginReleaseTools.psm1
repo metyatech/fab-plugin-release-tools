@@ -3,7 +3,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$script:ToolVersion = '0.1.1'
+$script:ToolVersion = '0.1.2'
 $script:MaximumPackageBytes = 15L * 1024L * 1024L * 1024L
 $script:CopyrightExtensions = @('.h', '.hh', '.hpp', '.inl', '.ipp', '.cpp', '.cc', '.cxx')
 $script:ForbiddenTopLevelDirectories = @('Binaries', 'Build', 'Intermediate', 'Saved', 'DerivedDataCache')
@@ -38,6 +38,42 @@ function Assert-NoReparsePoint {
 
     if (($Item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
         throw "Reparse points, symbolic links, and junctions are not allowed: $($Item.FullName)"
+    }
+}
+
+function Assert-FabAbsoluteDirectoryPathChain {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    $resolvedPath = [System.IO.Path]::GetFullPath($Path)
+    if (-not [System.IO.Directory]::Exists($resolvedPath)) {
+        throw "Absolute path is not an existing directory: $resolvedPath"
+    }
+
+    $pathRoot = [System.IO.Path]::GetPathRoot($resolvedPath)
+    if ([string]::IsNullOrWhiteSpace($pathRoot) -or
+        -not [System.IO.Directory]::Exists($pathRoot)) {
+        throw 'Absolute path volume or UNC share root is missing.'
+    }
+
+    Assert-NoReparsePoint -Item ([System.IO.DirectoryInfo]::new($pathRoot))
+    $relativePath = [System.IO.Path]::GetRelativePath($pathRoot, $resolvedPath)
+    if ($relativePath -ceq '.') {
+        return
+    }
+
+    $segments = @($relativePath.Split(
+            [char[]]@([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar),
+            [System.StringSplitOptions]::RemoveEmptyEntries))
+    $currentPath = $pathRoot
+    foreach ($segment in $segments) {
+        $currentPath = [System.IO.Path]::Combine($currentPath, $segment)
+        if (-not [System.IO.Directory]::Exists($currentPath)) {
+            throw "Absolute path directory element does not exist: $currentPath"
+        }
+        Assert-NoReparsePoint -Item ([System.IO.DirectoryInfo]::new($currentPath))
     }
 }
 
@@ -527,7 +563,7 @@ function Get-GitRepositoryInformation {
     if (-not [System.IO.Directory]::Exists($resolvedPluginPath)) {
         throw "PluginPath is not a directory: $resolvedPluginPath"
     }
-    Assert-FabPathChain -Root $resolvedPluginPath -Candidate $resolvedPluginPath
+    Assert-FabAbsoluteDirectoryPathChain -Path $resolvedPluginPath
     $rootResult = Invoke-NativeProcessCapture -FileName 'git.exe' `
         -ArgumentList @('-C', $resolvedPluginPath, 'rev-parse', '--show-toplevel')
     $repositoryRoot = [System.IO.Path]::GetFullPath($rootResult.StdOut).TrimEnd('\', '/')
@@ -1429,6 +1465,7 @@ function Copy-FabPluginAllowList {
     )
 
     $resolvedPluginPath = [System.IO.Path]::GetFullPath($PluginPath)
+    Assert-FabAbsoluteDirectoryPathChain -Path $resolvedPluginPath
     $resolvedDestination = [System.IO.Path]::GetFullPath($DestinationRoot)
     $validatedDirectories = [System.Collections.Generic.List[object]]::new()
     $validatedFiles = [System.Collections.Generic.List[object]]::new()
