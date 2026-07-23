@@ -1,0 +1,31 @@
+name: Bug report
+description: Report a reproducible defect in the release pipeline
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Provide the command, sanitized configuration, and exact steps.
+    validations:
+      required: true
+  - type: input
+    id: powershell
+    attributes:
+      label: PowerShell version
+    validations:
+      required: true
+  - type: input
+    id: unreal
+    attributes:
+      label: Unreal Engine version
+    validations:
+      required: true

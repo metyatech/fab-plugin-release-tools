@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Bootstrap pinned PowerShell modules
+        shell: pwsh
+        run: pwsh .\Build.ps1 -Task Bootstrap
+
+      - name: Verify
+        shell: pwsh
+        run: pwsh .\Build.ps1 -Task Verify
+
+      - name: Upload Pester results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pester-results
+          path: TestResults/Pester.xml
+          if-no-files-found: error

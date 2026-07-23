@@ -1,0 +1,11 @@
+artifacts/
+TestResults/
+*.log
+*.tmp
+.idea/
+.vs/
+coverage/
+.module-cache/
+*.zip
+*.sha256
+*.report.json

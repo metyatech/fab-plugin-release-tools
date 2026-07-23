@@ -1,0 +1,2 @@
+#!/bin/sh
+exec pwsh -NoLogo -NoProfile -NonInteractive -File .githooks/pre-commit.ps1
