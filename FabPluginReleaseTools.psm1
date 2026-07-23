@@ -3,7 +3,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$script:ToolVersion = '0.1.0'
+$script:ToolVersion = '0.1.1'
 $script:MaximumPackageBytes = 15L * 1024L * 1024L * 1024L
 $script:CopyrightExtensions = @('.h', '.hh', '.hpp', '.inl', '.ipp', '.cpp', '.cc', '.cxx')
 $script:ForbiddenTopLevelDirectories = @('Binaries', 'Build', 'Intermediate', 'Saved', 'DerivedDataCache')
@@ -38,6 +38,52 @@ function Assert-NoReparsePoint {
 
     if (($Item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
         throw "Reparse points, symbolic links, and junctions are not allowed: $($Item.FullName)"
+    }
+}
+
+function Assert-FabPathChain {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Root,
+
+        [Parameter(Mandatory)]
+        [string]$Candidate
+    )
+
+    $resolvedRoot = [System.IO.Path]::GetFullPath($Root).TrimEnd('\', '/')
+    $resolvedCandidate = [System.IO.Path]::GetFullPath($Candidate).TrimEnd('\', '/')
+    if (-not $resolvedCandidate.Equals($resolvedRoot, [System.StringComparison]::OrdinalIgnoreCase) -and
+        -not (Test-IsDescendantPath -Root $resolvedRoot -Candidate $resolvedCandidate)) {
+        throw 'Candidate path must be the validated root or one of its descendants.'
+    }
+    if (-not [System.IO.Directory]::Exists($resolvedRoot)) {
+        throw "Validated path root is not an existing directory: $resolvedRoot"
+    }
+
+    Assert-NoReparsePoint -Item ([System.IO.DirectoryInfo]::new($resolvedRoot))
+    if ($resolvedCandidate.Equals($resolvedRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return
+    }
+
+    $relativePath = [System.IO.Path]::GetRelativePath($resolvedRoot, $resolvedCandidate)
+    $segments = @($relativePath.Split(
+            [char[]]@([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar),
+            [System.StringSplitOptions]::RemoveEmptyEntries))
+    $currentPath = $resolvedRoot
+    for ($index = 0; $index -lt $segments.Count; $index++) {
+        $currentPath = [System.IO.Path]::Combine($currentPath, $segments[$index])
+        if ([System.IO.Directory]::Exists($currentPath)) {
+            Assert-NoReparsePoint -Item ([System.IO.DirectoryInfo]::new($currentPath))
+            continue
+        }
+        if ([System.IO.File]::Exists($currentPath)) {
+            if ($index -ne $segments.Count - 1) {
+                throw "A file appears where a path directory is required: $currentPath"
+            }
+            Assert-NoReparsePoint -Item ([System.IO.FileInfo]::new($currentPath))
+            continue
+        }
+        throw "Path element does not exist: $currentPath"
     }
 }
 
@@ -216,9 +262,43 @@ function Assert-HttpsUrl {
 
     $uri = $null
     if (-not [System.Uri]::TryCreate($Url, [System.UriKind]::Absolute, [ref]$uri) -or
-        $uri.Scheme -cne 'https' -or [string]::IsNullOrWhiteSpace($uri.Host)) {
-        throw "$PropertyName must be an absolute HTTPS URL: '$Url'"
+        $uri.Scheme -cne 'https' -or [string]::IsNullOrWhiteSpace($uri.Host) -or
+        -not [string]::IsNullOrEmpty($uri.UserInfo)) {
+        throw "$PropertyName must be an absolute HTTPS URL without user information."
     }
+}
+
+function ConvertTo-FabSafeReportUri {
+    param(
+        [Parameter(Mandatory)]
+        [System.Uri]$Uri
+    )
+
+    if (-not $Uri.IsAbsoluteUri) {
+        throw 'Report URI must be absolute.'
+    }
+    $builder = [System.UriBuilder]::new($Uri)
+    $builder.UserName = ''
+    $builder.Password = ''
+    $builder.Query = ''
+    $builder.Fragment = ''
+    return $builder.Uri.AbsoluteUri
+}
+
+function ConvertTo-FabSafeGitRemote {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Remote
+    )
+
+    if ($Remote -match '^[A-Za-z][A-Za-z0-9+.-]*://') {
+        $uri = $null
+        if ([System.Uri]::TryCreate($Remote, [System.UriKind]::Absolute, [ref]$uri)) {
+            return ConvertTo-FabSafeReportUri -Uri $uri
+        }
+        return '[invalid absolute URI remote omitted]'
+    }
+    return $Remote
 }
 
 function ConvertTo-NormalizedPathArray {
@@ -447,10 +527,11 @@ function Get-GitRepositoryInformation {
     if (-not [System.IO.Directory]::Exists($resolvedPluginPath)) {
         throw "PluginPath is not a directory: $resolvedPluginPath"
     }
+    Assert-FabPathChain -Root $resolvedPluginPath -Candidate $resolvedPluginPath
     $rootResult = Invoke-NativeProcessCapture -FileName 'git.exe' `
         -ArgumentList @('-C', $resolvedPluginPath, 'rev-parse', '--show-toplevel')
     $repositoryRoot = [System.IO.Path]::GetFullPath($rootResult.StdOut).TrimEnd('\', '/')
-    if ($repositoryRoot -cne $resolvedPluginPath) {
+    if (-not $repositoryRoot.Equals($resolvedPluginPath, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "PluginPath must exactly match the Git repository root. Root: $repositoryRoot"
     }
 
@@ -483,7 +564,7 @@ function Get-GitRepositoryInformation {
     return [pscustomobject]@{
         Head   = $head.StdOut
         Branch = $branch.StdOut
-        Remote = $remote.StdOut
+        Remote = ConvertTo-FabSafeGitRemote -Remote $remote.StdOut
     }
 }
 
@@ -613,7 +694,9 @@ function Test-FabHttpsUrl {
     $handler.MaxAutomaticRedirections = 10
     $client = [System.Net.Http.HttpClient]::new($handler)
     $client.Timeout = [TimeSpan]::FromSeconds($TimeoutSeconds)
-    $client.DefaultRequestHeaders.UserAgent.ParseAdd('fab-plugin-release-tools/0.1.0')
+    $client.DefaultRequestHeaders.UserAgent.ParseAdd("fab-plugin-release-tools/$script:ToolVersion")
+    $requestedUri = [System.Uri]::new($Url, [System.UriKind]::Absolute)
+    $safeRequestedUrl = ConvertTo-FabSafeReportUri -Uri $requestedUri
     try {
         $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Head, $Url)
         try {
@@ -634,12 +717,15 @@ function Test-FabHttpsUrl {
         }
         try {
             $statusCode = [int]$response.StatusCode
-            $finalUrl = $response.RequestMessage.RequestUri.AbsoluteUri
+            $finalUrl = ConvertTo-FabSafeReportUri -Uri $response.RequestMessage.RequestUri
             if ($statusCode -lt 200 -or $statusCode -gt 399) {
-                throw "URL validation failed with HTTP ${statusCode}: $Url"
+                $statusException = [System.InvalidOperationException]::new(
+                    "URL validation failed with HTTP ${statusCode}.")
+                $statusException.Data['FabSafeMessage'] = $true
+                throw $statusException
             }
             return [pscustomobject]@{
-                requestedUrl = $Url
+                requestedUrl = $safeRequestedUrl
                 finalUrl     = $finalUrl
                 statusCode   = $statusCode
             }
@@ -648,8 +734,17 @@ function Test-FabHttpsUrl {
             $response.Dispose()
         }
     }
+    catch [System.Net.Http.HttpRequestException] {
+        throw "URL request failed for '$safeRequestedUrl' (HttpRequestException)."
+    }
+    catch [System.Threading.Tasks.TaskCanceledException] {
+        throw "URL request failed for '$safeRequestedUrl' (timeout)."
+    }
     catch {
-        throw "URL validation failed for '$Url': $($_.Exception.Message)"
+        if ($_.Exception.Data['FabSafeMessage'] -eq $true) {
+            throw
+        }
+        throw "URL validation failed for '$safeRequestedUrl' ($($_.Exception.GetType().Name))."
     }
     finally {
         $client.Dispose()
@@ -667,6 +762,30 @@ function Get-JsonObjectProperty {
     )
 
     return $Object.PSObject.Properties[$Name]
+}
+
+function Assert-JsonArrayProperty {
+    param(
+        [Parameter(Mandatory)]
+        [object]$Object,
+
+        [Parameter(Mandatory)]
+        [string]$Name,
+
+        [Parameter(Mandatory)]
+        [string]$Description,
+
+        [switch]$Optional
+    )
+
+    $property = Get-JsonObjectProperty -Object $Object -Name $Name
+    if ($null -eq $property) {
+        if ($Optional) { return }
+        throw "$Description must be a JSON array."
+    }
+    if ($property.Value -isnot [System.Array]) {
+        throw "$Description must be a JSON array."
+    }
 }
 
 function Set-JsonObjectProperty {
@@ -734,9 +853,10 @@ function Assert-SourcePluginDescriptor {
     if ([string]$Descriptor.VersionName -cnotmatch '^[0-9A-Za-z][0-9A-Za-z._-]*$') {
         throw 'Descriptor VersionName is not safe for use in a file name.'
     }
-    if ($null -eq (Get-JsonObjectProperty -Object $Descriptor -Name 'Modules')) {
-        throw 'Descriptor Modules must be an array.'
-    }
+    Assert-JsonArrayProperty -Object $Descriptor -Name 'Modules' -Description 'Descriptor Modules'
+    Assert-JsonArrayProperty -Object $Descriptor -Name 'Plugins' -Description 'Descriptor Plugins' -Optional
+    Assert-JsonArrayProperty -Object $Descriptor -Name 'SupportedTargetPlatforms' `
+        -Description 'Descriptor SupportedTargetPlatforms' -Optional
     $modules = @($Descriptor.Modules)
     if ($modules.Count -eq 0) {
         throw 'Descriptor Modules must not be empty.'
@@ -749,6 +869,8 @@ function Assert-SourcePluginDescriptor {
         }
     }
     foreach ($module in $modules) {
+        Assert-JsonArrayProperty -Object $module -Name 'PlatformAllowList' `
+            -Description "Descriptor module PlatformAllowList: $($module.Name)"
         if ($null -ne (Get-JsonObjectProperty -Object $module -Name 'PlatformDenyList')) {
             throw "PlatformDenyList is forbidden in schemaVersion 1: $($module.Name)"
         }
@@ -1180,6 +1302,11 @@ function Assert-SalesPluginDescriptor {
 
     if ([string]$Descriptor.EngineVersion -cne "$EngineVersion.0") { throw 'Sales descriptor EngineVersion mismatch.' }
     if ($Descriptor.Installed -ne $true) { throw 'Sales descriptor Installed must be true.' }
+    Assert-JsonArrayProperty -Object $Descriptor -Name 'Modules' -Description 'Sales descriptor Modules'
+    Assert-JsonArrayProperty -Object $Descriptor -Name 'SupportedTargetPlatforms' `
+        -Description 'Sales descriptor SupportedTargetPlatforms'
+    Assert-JsonArrayProperty -Object $Descriptor -Name 'Plugins' `
+        -Description 'Sales descriptor Plugins' -Optional
     $platforms = @($Descriptor.SupportedTargetPlatforms)
     if ($platforms.Count -ne 1 -or [string]$platforms[0] -cne 'Win64') {
         throw 'Sales descriptor SupportedTargetPlatforms must be exactly ["Win64"].'
@@ -1200,6 +1327,8 @@ function Assert-SalesPluginDescriptor {
     Assert-ExactStringSet -Actual @($modules | ForEach-Object { [string]$_.Name }) `
         -Expected @($Configuration.distributionModules) -Description 'Sales descriptor modules'
     foreach ($module in $modules) {
+        Assert-JsonArrayProperty -Object $module -Name 'PlatformAllowList' `
+            -Description "Sales descriptor module PlatformAllowList: $($module.Name)"
         $allowList = @($module.PlatformAllowList)
         if ($allowList.Count -ne 1 -or [string]$allowList[0] -cne 'Win64' -or
             $null -ne (Get-JsonObjectProperty -Object $module -Name 'PlatformDenyList')) {
@@ -1301,17 +1430,45 @@ function Copy-FabPluginAllowList {
 
     $resolvedPluginPath = [System.IO.Path]::GetFullPath($PluginPath)
     $resolvedDestination = [System.IO.Path]::GetFullPath($DestinationRoot)
+    $validatedDirectories = [System.Collections.Generic.List[object]]::new()
+    $validatedFiles = [System.Collections.Generic.List[object]]::new()
+
+    foreach ($configuredDirectory in @($Configuration.includeDirectories)) {
+        $sourceDirectory = [System.IO.Path]::GetFullPath((Join-Path $resolvedPluginPath $configuredDirectory))
+        if (-not (Test-IsDescendantPath -Root $resolvedPluginPath -Candidate $sourceDirectory)) {
+            throw "Included directory is unsafe: $configuredDirectory"
+        }
+        Assert-FabPathChain -Root $resolvedPluginPath -Candidate $sourceDirectory
+        if (-not [System.IO.Directory]::Exists($sourceDirectory)) {
+            throw "Included directory is missing: $configuredDirectory"
+        }
+        $validatedDirectories.Add([pscustomobject]@{
+                ConfiguredPath = $configuredDirectory
+                SourcePath     = $sourceDirectory
+            })
+    }
+    foreach ($configuredFile in @($Configuration.includeFiles)) {
+        $sourceFilePath = [System.IO.Path]::GetFullPath((Join-Path $resolvedPluginPath $configuredFile))
+        if (-not (Test-IsDescendantPath -Root $resolvedPluginPath -Candidate $sourceFilePath)) {
+            throw "Included file is unsafe: $configuredFile"
+        }
+        Assert-FabPathChain -Root $resolvedPluginPath -Candidate $sourceFilePath
+        if (-not [System.IO.File]::Exists($sourceFilePath)) {
+            throw "Included file is missing: $configuredFile"
+        }
+        $validatedFiles.Add([pscustomobject]@{
+                ConfiguredPath = $configuredFile
+                SourcePath     = $sourceFilePath
+            })
+    }
+
     [System.IO.Directory]::CreateDirectory($resolvedDestination) | Out-Null
     $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     $totalBytes = 0L
 
-    foreach ($configuredDirectory in @($Configuration.includeDirectories)) {
-        $sourceDirectory = [System.IO.Path]::GetFullPath((Join-Path $resolvedPluginPath $configuredDirectory))
-        if (-not (Test-IsDescendantPath -Root $resolvedPluginPath -Candidate $sourceDirectory) -or
-            -not [System.IO.Directory]::Exists($sourceDirectory)) {
-            throw "Included directory is missing or unsafe: $configuredDirectory"
-        }
-        foreach ($sourceFile in Get-SafeTreeFile -Root $sourceDirectory) {
+    foreach ($validatedDirectory in $validatedDirectories) {
+        foreach ($sourceFile in Get-SafeTreeFile -Root $validatedDirectory.SourcePath) {
+            $configuredDirectory = [string]$validatedDirectory.ConfiguredPath
             $relative = "$configuredDirectory/$($sourceFile.RelativePath)".Trim('/')
             if (-not $seen.Add($relative)) {
                 throw "Case-insensitive staging path collision: $relative"
@@ -1325,14 +1482,10 @@ function Copy-FabPluginAllowList {
             [System.IO.File]::Copy($sourceFile.FullName, $destinationFile, $false)
         }
     }
-    foreach ($configuredFile in @($Configuration.includeFiles)) {
-        $sourceFilePath = [System.IO.Path]::GetFullPath((Join-Path $resolvedPluginPath $configuredFile))
-        if (-not (Test-IsDescendantPath -Root $resolvedPluginPath -Candidate $sourceFilePath) -or
-            -not [System.IO.File]::Exists($sourceFilePath)) {
-            throw "Included file is missing or unsafe: $configuredFile"
-        }
+    foreach ($validatedFile in $validatedFiles) {
+        $configuredFile = [string]$validatedFile.ConfiguredPath
+        $sourceFilePath = [string]$validatedFile.SourcePath
         $sourceFile = [System.IO.FileInfo]::new($sourceFilePath)
-        Assert-NoReparsePoint -Item $sourceFile
         if (-not $seen.Add($configuredFile)) {
             throw "Case-insensitive staging path collision: $configuredFile"
         }
@@ -1977,17 +2130,22 @@ function Assert-FabZipDirectly {
             }
             $segments = @($entryName.TrimEnd('/').Split('/'))
             [void]$topLevels.Add($segments[0])
-            if ($entryName.EndsWith('/')) { continue }
-            if ($segments.Count -lt 2 -or $segments[0] -cne [string]$Configuration.pluginName) {
+            $isDirectory = $entryName.EndsWith('/')
+            if ($segments[0] -cne [string]$Configuration.pluginName -or
+                ($segments.Count -lt 2 -and -not $isDirectory)) {
                 throw "ZIP entry is outside the plugin top-level directory: $entryName"
             }
             if ($entryName.Length -gt 170) {
                 throw "ZIP path exceeds 170 characters: $entryName"
             }
+            if ($segments.Count -eq 1) {
+                continue
+            }
             $relative = [string]::Join('/', $segments[1..($segments.Count - 1)])
             if (Test-ZipEntryForbidden -RelativePath $relative -Configuration $Configuration) {
                 throw "Forbidden ZIP entry is present: $entryName"
             }
+            if ($isDirectory) { continue }
             $relativeFiles.Add($relative)
             $lengths.Add($entry.Length)
             if ($relative -ceq [string]$Configuration.descriptorFile) { $descriptorEntry = $entry }

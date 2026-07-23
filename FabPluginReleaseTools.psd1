@@ -1,6 +1,6 @@
 @{
     RootModule        = 'FabPluginReleaseTools.psm1'
-    ModuleVersion     = '0.1.0'
+    ModuleVersion     = '0.1.1'
     GUID              = 'bcb11baa-afad-456f-9d90-5e64f4e5e0f8'
     Author            = 'metyatech'
     CompanyName       = 'metyatech'
