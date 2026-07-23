@@ -407,6 +407,41 @@ InModuleScope FabPluginReleaseTools {
                 }
             }
         }
+
+        It 'rejects a Git repository whose parent directory is a junction before running Git' {
+            $actualParent = Join-Path $TestDrive 'ActualParent'
+            $actualPlugin = Join-Path $actualParent 'Plugin'
+            $aliasParent = Join-Path $TestDrive 'AliasParent'
+            $aliasPlugin = Join-Path $aliasParent 'Plugin'
+            Invoke-TestPluginSetup -Root $actualPlugin -InitializeGit
+            [void](New-Item -ItemType Junction -Path $aliasParent -Target $actualParent)
+            try {
+                (([System.IO.DirectoryInfo]::new($aliasPlugin)).Attributes -band
+                    [System.IO.FileAttributes]::ReparsePoint) | Should -Be 0
+                (([System.IO.DirectoryInfo]::new($aliasParent)).Attributes -band
+                    [System.IO.FileAttributes]::ReparsePoint) | Should -Not -Be 0
+                Mock -CommandName Invoke-NativeProcessCapture -MockWith {
+                    throw 'Git must not run before absolute path validation.'
+                }
+                $errorRecord = $null
+                try {
+                    [void](Get-GitRepositoryInformation -PluginPath $aliasPlugin)
+                }
+                catch {
+                    $errorRecord = $_
+                }
+                $errorRecord | Should -Not -BeNullOrEmpty
+                $errorRecord.Exception.Message | Should -Match 'Reparse points'
+                $errorRecord.Exception.Message | Should -Match ([regex]::Escape($aliasParent))
+                Should -Invoke -CommandName Invoke-NativeProcessCapture -Times 0 -Exactly
+            }
+            finally {
+                if ([System.IO.Directory]::Exists($aliasParent)) {
+                    [System.IO.Directory]::Delete($aliasParent)
+                }
+                $actualParent | Should -Exist
+            }
+        }
     }
 
     Describe 'Public CLI contract' {
@@ -441,6 +476,48 @@ InModuleScope FabPluginReleaseTools {
     }
 
     Describe 'Allowlist parent reparse-point safety' {
+        It 'rejects a plugin parent junction before creating the copy destination' {
+            $actualParent = Join-Path $TestDrive 'CopyActualParent'
+            $actualPlugin = Join-Path $actualParent 'Plugin'
+            $aliasParent = Join-Path $TestDrive 'CopyAliasParent'
+            $aliasPlugin = Join-Path $aliasParent 'Plugin'
+            $destination = Join-Path $TestDrive 'ParentJunctionDestination'
+            Invoke-TestPluginSetup -Root $actualPlugin
+            $configuration = Import-FabPluginReleaseConfiguration `
+                -ConfigPath (Join-Path $actualPlugin 'FabPluginRelease.json') -EngineVersion '5.8'
+            $readmePath = Join-Path $actualPlugin 'README.md'
+            $readmeHash = (Get-FileHash -LiteralPath $readmePath -Algorithm SHA256).Hash
+            [void](New-Item -ItemType Junction -Path $aliasParent -Target $actualParent)
+            try {
+                (([System.IO.DirectoryInfo]::new($aliasPlugin)).Attributes -band
+                    [System.IO.FileAttributes]::ReparsePoint) | Should -Be 0
+                (([System.IO.DirectoryInfo]::new($aliasParent)).Attributes -band
+                    [System.IO.FileAttributes]::ReparsePoint) | Should -Not -Be 0
+                $errorRecord = $null
+                try {
+                    Copy-FabPluginAllowList -PluginPath $aliasPlugin `
+                        -DestinationRoot $destination -Configuration $configuration
+                }
+                catch {
+                    $errorRecord = $_
+                }
+                $errorRecord | Should -Not -BeNullOrEmpty
+                $errorRecord.Exception.Message | Should -Match 'Reparse points'
+                $errorRecord.Exception.Message | Should -Match ([regex]::Escape($aliasParent))
+                $destination | Should -Not -Exist
+                @(Get-ChildItem -LiteralPath $destination -File -Recurse -ErrorAction SilentlyContinue).Count |
+                    Should -Be 0
+                (Get-FileHash -LiteralPath $readmePath -Algorithm SHA256).Hash |
+                    Should -BeExactly $readmeHash
+            }
+            finally {
+                if ([System.IO.Directory]::Exists($aliasParent)) {
+                    [System.IO.Directory]::Delete($aliasParent)
+                }
+                $actualParent | Should -Exist
+            }
+        }
+
         It 'rejects includeFiles below a junction before copying a file' {
             $pluginRoot = Join-Path $TestDrive 'FileJunctionPlugin'
             $externalRoot = Join-Path $TestDrive 'ExternalFiles'

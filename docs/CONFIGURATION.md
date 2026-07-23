@@ -4,9 +4,10 @@
 are rejected at every object level. Paths are normalized internally to `/` and
 must be relative, non-empty, free of wildcards, `.` and `..`, drive prefixes,
 UNC prefixes, and trailing whitespace. Path arrays reject case-insensitive
-duplicates. An include path is rejected if it or any existing parent between
-the plugin root and the target is a junction, symbolic link, or other reparse
-point.
+duplicates. Every existing directory element from the volume or UNC share root
+through `PluginPath` is rejected if it is a junction, symbolic link, mount
+point, or other reparse point. Include paths receive an additional chain check
+from `PluginPath` through each target.
 
 The authoritative machine-readable definition is
 [`FabPluginRelease.schema.json`](../FabPluginRelease.schema.json). A complete
