@@ -4,7 +4,9 @@
 are rejected at every object level. Paths are normalized internally to `/` and
 must be relative, non-empty, free of wildcards, `.` and `..`, drive prefixes,
 UNC prefixes, and trailing whitespace. Path arrays reject case-insensitive
-duplicates.
+duplicates. An include path is rejected if it or any existing parent between
+the plugin root and the target is a junction, symbolic link, or other reparse
+point.
 
 The authoritative machine-readable definition is
 [`FabPluginRelease.schema.json`](../FabPluginRelease.schema.json). A complete
@@ -24,8 +26,8 @@ example is in
 | `enabledPluginDependencies` | string array | yes | Case-insensitively unique; use `[]` when there are no dependencies. |
 | `publisher` | object | yes | Strict object described below. |
 | `listingId` | string or null | yes | Lowercase UUID, or `null` when no listing is assigned. |
-| `documentationUrl` | URL string | yes | Absolute HTTPS URL that returns HTTP 200-399 after redirects. |
-| `supportUrl` | URL string | yes | Absolute HTTPS URL that returns HTTP 200-399 after redirects. |
+| `documentationUrl` | URL string | yes | Absolute HTTPS URL without user information that returns HTTP 200-399 after redirects. |
+| `supportUrl` | URL string | yes | Absolute HTTPS URL without user information that returns HTTP 200-399 after redirects. |
 | `content` | object | yes | Strict object described below. |
 | `includeDirectories` | relative path array | yes | Only these directory trees are staged. Parent/child overlaps are rejected. |
 | `includeFiles` | relative path array | yes | Only these files are staged. A file already under an included directory is rejected. |
@@ -83,6 +85,18 @@ Each object has exactly two required properties:
 
 Missing, extra, empty, case-mismatched, or reparse-point license files fail.
 The tool never guesses which third-party licenses should ship.
+
+## Descriptor arrays and report redaction
+
+`.uplugin` properties defined as arrays, including `Modules`,
+`SupportedTargetPlatforms`, module `PlatformAllowList`, and `Plugins`, must be
+JSON arrays. A scalar object or string is rejected even when it represents one
+item.
+
+HTTP requests use the configured documentation and support URLs. The JSON
+report removes user information, query, and fragment from requested and final
+redirect URLs. Absolute HTTP(S) Git remotes receive the same redaction before
+being stored as `repositoryRemote`; SCP-style Git remotes are preserved.
 
 ## `FilterPlugin.ini`
 

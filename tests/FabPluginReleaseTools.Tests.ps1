@@ -206,6 +206,36 @@ InModuleScope FabPluginReleaseTools {
             Save-TestConfiguration -Configuration $Configuration -Path $path
             return Import-FabPluginReleaseConfiguration -ConfigPath $path -EngineVersion '5.8'
         }
+
+        function New-TestInspectableZip {
+            [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Low')]
+            param(
+                [Parameter(Mandatory)]
+                [string]$SourceRoot,
+
+                [Parameter(Mandatory)]
+                [string]$PackageRoot,
+
+                [Parameter(Mandatory)]
+                [string]$ZipPath
+            )
+
+            if (-not $PSCmdlet.ShouldProcess($ZipPath, 'Create an inspectable test ZIP')) {
+                return
+            }
+            Invoke-TestPluginSetup -Root $SourceRoot
+            $configuration = Import-FabPluginReleaseConfiguration `
+                -ConfigPath (Join-Path $SourceRoot 'FabPluginRelease.json') -EngineVersion '5.8'
+            $sourceDescriptor = Read-PluginDescriptor -DescriptorPath (Join-Path $SourceRoot 'TestPlugin.uplugin')
+            Copy-FabPluginAllowList -PluginPath $SourceRoot -DestinationRoot $PackageRoot `
+                -Configuration $configuration
+            [void](ConvertTo-SalesPluginDescriptor -SourceDescriptor $sourceDescriptor `
+                    -Configuration $configuration -EngineVersion '5.8' `
+                    -DestinationPath (Join-Path $PackageRoot 'TestPlugin.uplugin'))
+            New-DeterministicFabZip -PluginRoot $PackageRoot -PluginName 'TestPlugin' `
+                -ZipPath $ZipPath -Confirm:$false
+            return $configuration
+        }
     }
 
     Describe 'Strict configuration validation' {
@@ -275,6 +305,22 @@ InModuleScope FabPluginReleaseTools {
                 Should -Throw
         }
 
+        It 'rejects documentation URL userinfo' {
+            $configuration = Get-TestConfigurationObject
+            $configuration.documentationUrl = 'https://user:fixed-test-secret@example.com/docs'
+            Save-TestConfiguration -Configuration $configuration -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'rejects support URL userinfo' {
+            $configuration = Get-TestConfigurationObject
+            $configuration.supportUrl = 'https://user@example.com/support'
+            Save-TestConfiguration -Configuration $configuration -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
         It 'rejects unsafe relative path <Path>' -ForEach @(
             @{ Path = 'C:\absolute' },
             @{ Path = '\\server\share' },
@@ -312,6 +358,57 @@ InModuleScope FabPluginReleaseTools {
         }
     }
 
+    Describe 'Report secrecy and Git repository safety' {
+        It 'removes userinfo, query, and fragment from a report URI' {
+            $actual = ConvertTo-FabSafeReportUri `
+                -Uri ([uri]'https://user:fixed-test-secret@example.com/docs?id=query-secret#part')
+            $actual | Should -BeExactly 'https://example.com/docs'
+        }
+
+        It 'removes query and fragment from URL validation results' {
+            $result = Test-FabHttpsUrl -Url 'https://github.com/metyatech?fixed-query=value#part'
+            $result.requestedUrl | Should -BeExactly 'https://github.com/metyatech'
+            $result.finalUrl | Should -Not -Match '[?#]'
+        }
+
+        It 'sanitizes an HTTPS origin containing a fixed test credential' {
+            $pluginRoot = Join-Path $TestDrive 'SanitizedRemotePlugin'
+            Invoke-TestPluginSetup -Root $pluginRoot -InitializeGit
+            [void](Invoke-NativeProcessCapture -FileName 'git.exe' -ArgumentList @(
+                    '-C', $pluginRoot, 'remote', 'set-url', 'origin',
+                    'https://x-access-token:fixed-test-secret@example.com/TestPlugin.git?token=query-secret#part'))
+            $result = Get-GitRepositoryInformation -PluginPath $pluginRoot
+            $result.Remote | Should -BeExactly 'https://example.com/TestPlugin.git'
+        }
+
+        It 'preserves an SCP-style Git remote' {
+            ConvertTo-FabSafeGitRemote -Remote 'git@github.com:owner/repo.git' |
+                Should -BeExactly 'git@github.com:owner/repo.git'
+        }
+
+        It 'accepts a Git root whose path differs only by Windows letter case' {
+            $pluginRoot = Join-Path $TestDrive 'MixedCasePlugin'
+            Invoke-TestPluginSetup -Root $pluginRoot -InitializeGit
+            $result = Get-GitRepositoryInformation -PluginPath $pluginRoot.ToUpperInvariant()
+            $result.Head | Should -Not -BeNullOrEmpty
+        }
+
+        It 'rejects a Git repository root specified through a junction' {
+            $pluginRoot = Join-Path $TestDrive 'ActualGitPlugin'
+            $junctionRoot = Join-Path $TestDrive 'JunctionGitPlugin'
+            Invoke-TestPluginSetup -Root $pluginRoot -InitializeGit
+            [void](New-Item -ItemType Junction -Path $junctionRoot -Target $pluginRoot)
+            try {
+                { Get-GitRepositoryInformation -PluginPath $junctionRoot } | Should -Throw
+            }
+            finally {
+                if ([System.IO.Directory]::Exists($junctionRoot)) {
+                    [System.IO.Directory]::Delete($junctionRoot)
+                }
+            }
+        }
+    }
+
     Describe 'Public CLI contract' {
         It 'exports only Invoke-FabPluginRelease with the allowed parameter surface' {
             $module = Get-Module FabPluginReleaseTools
@@ -340,6 +437,131 @@ InModuleScope FabPluginReleaseTools {
             if ([System.IO.Directory]::Exists($fallback)) {
                 [System.IO.Directory]::Delete($fallback, $true)
             }
+        }
+    }
+
+    Describe 'Allowlist parent reparse-point safety' {
+        It 'rejects includeFiles below a junction before copying a file' {
+            $pluginRoot = Join-Path $TestDrive 'FileJunctionPlugin'
+            $externalRoot = Join-Path $TestDrive 'ExternalFiles'
+            $junctionRoot = Join-Path $pluginRoot 'Linked'
+            $destination = Join-Path $TestDrive 'FileJunctionDestination'
+            [System.IO.Directory]::CreateDirectory($pluginRoot) | Out-Null
+            [System.IO.Directory]::CreateDirectory($externalRoot) | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $externalRoot 'secret.txt'), 'outside')
+            [void](New-Item -ItemType Junction -Path $junctionRoot -Target $externalRoot)
+            $configuration = [pscustomobject]@{
+                includeDirectories = @()
+                includeFiles       = @('Linked/secret.txt')
+            }
+            try {
+                { Copy-FabPluginAllowList -PluginPath $pluginRoot -DestinationRoot $destination `
+                        -Configuration $configuration } | Should -Throw
+                @(Get-ChildItem -LiteralPath $destination -File -Recurse -ErrorAction SilentlyContinue).Count |
+                    Should -Be 0
+            }
+            finally {
+                if ([System.IO.Directory]::Exists($junctionRoot)) {
+                    [System.IO.Directory]::Delete($junctionRoot)
+                }
+            }
+        }
+
+        It 'rejects includeDirectories below a parent junction' {
+            $pluginRoot = Join-Path $TestDrive 'DirectoryJunctionPlugin'
+            $externalRoot = Join-Path $TestDrive 'ExternalDirectories'
+            $externalNested = Join-Path $externalRoot 'Nested'
+            $junctionRoot = Join-Path $pluginRoot 'Linked'
+            $destination = Join-Path $TestDrive 'DirectoryJunctionDestination'
+            [System.IO.Directory]::CreateDirectory($pluginRoot) | Out-Null
+            [System.IO.Directory]::CreateDirectory($externalNested) | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $externalNested 'outside.txt'), 'outside')
+            [void](New-Item -ItemType Junction -Path $junctionRoot -Target $externalRoot)
+            $configuration = [pscustomobject]@{
+                includeDirectories = @('Linked/Nested')
+                includeFiles       = @()
+            }
+            try {
+                { Copy-FabPluginAllowList -PluginPath $pluginRoot -DestinationRoot $destination `
+                        -Configuration $configuration } | Should -Throw
+                @(Get-ChildItem -LiteralPath $destination -File -Recurse -ErrorAction SilentlyContinue).Count |
+                    Should -Be 0
+            }
+            finally {
+                if ([System.IO.Directory]::Exists($junctionRoot)) {
+                    [System.IO.Directory]::Delete($junctionRoot)
+                }
+            }
+        }
+    }
+
+    Describe 'Descriptor JSON array typing' {
+        It 'rejects source Modules encoded as an object' {
+            $configuration = Get-TestConfigurationObject
+            $descriptorObject = Get-TestDescriptorObject
+            $descriptorObject.Modules = $descriptorObject.Modules[0]
+            $descriptor = $descriptorObject | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+            { Assert-SourcePluginDescriptor -Descriptor $descriptor -Configuration $configuration } |
+                Should -Throw
+        }
+
+        It 'rejects source PlatformAllowList encoded as a string' {
+            $configuration = Get-TestConfigurationObject
+            $descriptorObject = Get-TestDescriptorObject
+            $descriptorObject.Modules[0].PlatformAllowList = 'Win64'
+            $descriptor = $descriptorObject | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+            { Assert-SourcePluginDescriptor -Descriptor $descriptor -Configuration $configuration } |
+                Should -Throw
+        }
+
+        It 'rejects source Plugins encoded as an object' {
+            $configuration = Get-TestConfigurationObject
+            $configuration.enabledPluginDependencies = @('ProceduralMeshComponent')
+            $descriptorObject = Get-TestDescriptorObject
+            $descriptorObject.Plugins = [ordered]@{
+                Name = 'ProceduralMeshComponent'; Enabled = $true
+            }
+            $descriptor = $descriptorObject | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+            { Assert-SourcePluginDescriptor -Descriptor $descriptor -Configuration $configuration } |
+                Should -Throw
+        }
+
+        It 'rejects source SupportedTargetPlatforms encoded as a string' {
+            $configuration = Get-TestConfigurationObject
+            $descriptorObject = Get-TestDescriptorObject
+            $descriptorObject.SupportedTargetPlatforms = 'Win64'
+            $descriptor = $descriptorObject | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+            { Assert-SourcePluginDescriptor -Descriptor $descriptor -Configuration $configuration } |
+                Should -Throw
+        }
+
+        It 'rejects sales descriptor scalar substitution for <Property>' -ForEach @(
+            @{ Property = 'Modules' },
+            @{ Property = 'SupportedTargetPlatforms' },
+            @{ Property = 'PlatformAllowList' },
+            @{ Property = 'Plugins' }) {
+            $configurationObject = Get-TestConfigurationObject
+            $dependencies = @()
+            if ($Property -eq 'Plugins') {
+                $dependencies = @('ProceduralMeshComponent')
+                $configurationObject.enabledPluginDependencies = $dependencies
+            }
+            $configuration = Import-TestConfiguration -Directory `
+                (Join-Path $TestDrive "SalesArray-$Property") -Configuration $configurationObject
+            $source = Get-TestDescriptorObject -Dependencies $dependencies
+            $destination = Join-Path $TestDrive "SalesArray-$Property\TestPlugin.uplugin"
+            $sales = ConvertTo-SalesPluginDescriptor `
+                -SourceDescriptor ($source | ConvertTo-Json -Depth 30 | ConvertFrom-Json) `
+                -Configuration $configuration -EngineVersion '5.8' -DestinationPath $destination
+            switch ($Property) {
+                'Modules' { $sales.Modules = $sales.Modules[0] }
+                'SupportedTargetPlatforms' { $sales.SupportedTargetPlatforms = 'Win64' }
+                'PlatformAllowList' { $sales.Modules[0].PlatformAllowList = 'Win64' }
+                'Plugins' { $sales.Plugins = $sales.Plugins[0] }
+            }
+            $descriptor = $sales | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+            { Assert-SalesPluginDescriptor -Descriptor $descriptor -Configuration $configuration `
+                    -EngineVersion '5.8' } | Should -Throw
         }
     }
 
@@ -727,6 +949,49 @@ const char* Text = "UPROPERTY(EditAnywhere)";
             $changed = @(Get-FabFileManifest -PluginRoot $actualRoot)
             { Assert-FabManifestsEqual -Expected $expected -Actual $changed } | Should -Throw
         }
+
+        It 'rejects a forbidden empty Tests directory during direct ZIP inspection' {
+            $sourceRoot = Join-Path $TestDrive 'DirectTestsSource'
+            $packageRoot = Join-Path $TestDrive 'DirectTestsPackage'
+            $zipPath = Join-Path $TestDrive 'DirectTests.zip'
+            $configuration = New-TestInspectableZip -SourceRoot $sourceRoot `
+                -PackageRoot $packageRoot -ZipPath $zipPath
+            $archive = [System.IO.Compression.ZipFile]::Open(
+                $zipPath, [System.IO.Compression.ZipArchiveMode]::Update)
+            try { [void]$archive.CreateEntry('TestPlugin/Tests/') } finally { $archive.Dispose() }
+            { Assert-FabZipDirectly -ZipPath $zipPath -Configuration $configuration `
+                    -EngineVersion '5.8' } | Should -Throw
+        }
+
+        It 'rejects a 171-character empty directory during direct ZIP inspection' {
+            $sourceRoot = Join-Path $TestDrive 'DirectLongSource'
+            $packageRoot = Join-Path $TestDrive 'DirectLongPackage'
+            $zipPath = Join-Path $TestDrive 'DirectLong.zip'
+            $configuration = New-TestInspectableZip -SourceRoot $sourceRoot `
+                -PackageRoot $packageRoot -ZipPath $zipPath
+            $prefix = 'TestPlugin/'
+            $entryName = "$prefix$('A' * (171 - $prefix.Length - 1))/"
+            $archive = [System.IO.Compression.ZipFile]::Open(
+                $zipPath, [System.IO.Compression.ZipArchiveMode]::Update)
+            try { [void]$archive.CreateEntry($entryName) } finally { $archive.Dispose() }
+            { Assert-FabZipDirectly -ZipPath $zipPath -Configuration $configuration `
+                    -EngineVersion '5.8' } | Should -Throw
+        }
+
+        It 'accepts a 170-character allowed empty directory during direct ZIP inspection' {
+            $sourceRoot = Join-Path $TestDrive 'DirectBoundarySource'
+            $packageRoot = Join-Path $TestDrive 'DirectBoundaryPackage'
+            $zipPath = Join-Path $TestDrive 'DirectBoundary.zip'
+            $configuration = New-TestInspectableZip -SourceRoot $sourceRoot `
+                -PackageRoot $packageRoot -ZipPath $zipPath
+            $prefix = 'TestPlugin/'
+            $entryName = "$prefix$('A' * (170 - $prefix.Length - 1))/"
+            $archive = [System.IO.Compression.ZipFile]::Open(
+                $zipPath, [System.IO.Compression.ZipArchiveMode]::Update)
+            try { [void]$archive.CreateEntry($entryName) } finally { $archive.Dispose() }
+            { Assert-FabZipDirectly -ZipPath $zipPath -Configuration $configuration `
+                    -EngineVersion '5.8' } | Should -Not -Throw
+        }
     }
 
     Describe 'Engine root resolution' {
@@ -922,6 +1187,29 @@ const char* Text = "UPROPERTY(EditAnywhere)";
             @(Get-ChildItem -LiteralPath $outputRoot -File -Filter '*.sha256').Count | Should -Be 1
             @(Get-ChildItem -LiteralPath $outputRoot -File -Filter '*.report.json').Count | Should -Be 1
             @(Get-ChildItem -LiteralPath $outputRoot -File -Filter '*.log').Count | Should -Be 1
+        }
+
+        It 'does not expose a fixed test credential from the Git origin in report or log' {
+            $pluginRoot = Join-Path $TestDrive 'SecretRemotePlugin'
+            $engineRoot = Join-Path $TestDrive 'SecretRemoteEngine'
+            $outputRoot = Join-Path $TestDrive 'SecretRemoteOutput'
+            $testSecret = 'fixed-test-secret-value'
+            Invoke-TestPluginSetup -Root $pluginRoot -InitializeGit
+            [void](Invoke-NativeProcessCapture -FileName 'git.exe' -ArgumentList @(
+                    '-C', $pluginRoot, 'remote', 'set-url', 'origin',
+                    "https://x-access-token:${testSecret}@example.invalid/TestPlugin.git?token=query-secret#part"))
+            Invoke-FakeEngineSetup -Root $engineRoot -Behavior Success
+            $result = Invoke-TestEntryPoint -PluginRoot $pluginRoot -EngineRoot $engineRoot `
+                -OutputRoot $outputRoot
+            $result.ExitCode | Should -Be 0 -Because $result.StdErr
+            $reportText = [System.IO.File]::ReadAllText(
+                @(Get-ChildItem -LiteralPath $outputRoot -File -Filter '*.report.json')[0].FullName)
+            $logText = [System.IO.File]::ReadAllText(
+                @(Get-ChildItem -LiteralPath $outputRoot -File -Filter '*.log')[0].FullName)
+            $reportText | Should -Not -Match ([regex]::Escape($testSecret))
+            $reportText | Should -Not -Match 'query-secret|x-access-token|#part'
+            $logText | Should -Not -Match ([regex]::Escape($testSecret))
+            $logText | Should -Not -Match 'query-secret|x-access-token|#part'
         }
 
         It 'returns 1, ends in FAIL, removes ZIP/checksum, and retains report/log on BuildPlugin failure' {

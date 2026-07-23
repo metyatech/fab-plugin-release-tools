@@ -34,6 +34,13 @@ from [the Runtime Asset Import example](examples/RuntimeAssetImport/FabPluginRel
 and adapt its explicit allowlists. Every property is documented in
 [Configuration](docs/CONFIGURATION.md).
 
+Documentation and support URLs must not contain user information. URL checks
+use the configured URL for the request, but reports omit user information, the
+entire query, and the fragment from both requested and redirected URLs. Reports
+also omit user information, query, and fragment from absolute HTTP(S) Git
+remote URLs; SCP-style remotes such as `git@github.com:owner/repo.git` are kept
+unchanged.
+
 ## Release a plugin
 
 ```powershell
@@ -80,6 +87,11 @@ The command runs these gates in order and stops at the first failure:
 12. atomic artifact finalization
 
 There is no build-skip or validation-skip option.
+
+Allowlisted paths are rejected when the path itself or any existing parent
+between the plugin root and that path is a junction, symbolic link, or other
+reparse point. Descriptor properties documented as arrays must be JSON arrays;
+a scalar string or object cannot substitute for a one-element array.
 
 ## Outputs and failure behavior
 
