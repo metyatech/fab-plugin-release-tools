@@ -3,7 +3,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$script:ToolVersion = '0.1.2'
+$script:ToolVersion = '0.2.0'
 $script:MaximumPackageBytes = 15L * 1024L * 1024L * 1024L
 $script:CopyrightExtensions = @('.h', '.hh', '.hpp', '.inl', '.ipp', '.cpp', '.cc', '.cxx')
 $script:ForbiddenTopLevelDirectories = @('Binaries', 'Build', 'Intermediate', 'Saved', 'DerivedDataCache')
@@ -375,6 +375,14 @@ function Import-FabPluginReleaseConfiguration {
     catch {
         throw "Configuration is not valid JSON: $ConfigPath. $($_.Exception.Message)"
     }
+    $allowedContentModes = @('pack', 'plugin', 'none')
+    $contentProperty = $configuration.PSObject.Properties['content']
+    if ($null -ne $contentProperty -and $null -ne $contentProperty.Value) {
+        $modeProperty = $contentProperty.Value.PSObject.Properties['mode']
+        if ($null -ne $modeProperty -and [string]$modeProperty.Value -cnotin $allowedContentModes) {
+            throw 'content.mode must be pack, plugin, or none.'
+        }
+    }
     if (-not ($json | Test-Json -SchemaFile $SchemaPath -ErrorAction Stop)) {
         throw "Configuration does not conform to FabPluginRelease.schema.json: $ConfigPath"
     }
@@ -437,8 +445,8 @@ function Import-FabPluginReleaseConfiguration {
     Assert-HttpsUrl -Url ([string]$configuration.documentationUrl) -PropertyName 'documentationUrl'
     Assert-HttpsUrl -Url ([string]$configuration.supportUrl) -PropertyName 'supportUrl'
 
-    if ([string]$configuration.content.mode -cnotin @('pack', 'none')) {
-        throw 'content.mode must be pack or none.'
+    if ([string]$configuration.content.mode -cnotin $allowedContentModes) {
+        throw 'content.mode must be pack, plugin, or none.'
     }
     if ($configuration.content.mode -ceq 'pack') {
         if ($configuration.content.packFolder -cne $configuration.pluginName) {
@@ -446,7 +454,7 @@ function Import-FabPluginReleaseConfiguration {
         }
     }
     elseif ($null -ne $configuration.content.PSObject.Properties['packFolder']) {
-        throw 'content.packFolder is forbidden in none mode.'
+        throw "content.packFolder is forbidden in $($configuration.content.mode) mode."
     }
 
     foreach ($propertyName in @(
@@ -800,6 +808,28 @@ function Get-JsonObjectProperty {
     return $Object.PSObject.Properties[$Name]
 }
 
+function Assert-DescriptorCanContainContent {
+    param(
+        [Parameter(Mandatory)]
+        [object]$Descriptor,
+
+        [Parameter(Mandatory)]
+        [object]$Configuration,
+
+        [Parameter(Mandatory)]
+        [string]$DescriptorKind
+    )
+
+    $property = Get-JsonObjectProperty -Object $Descriptor -Name 'CanContainContent'
+    if ($null -eq $property -or $property.Value -isnot [bool]) {
+        throw "$DescriptorKind CanContainContent must be a JSON boolean."
+    }
+    $expected = [string]$Configuration.content.mode -in @('pack', 'plugin')
+    if ([bool]$property.Value -ne $expected) {
+        throw "$DescriptorKind CanContainContent mismatch."
+    }
+}
+
 function Assert-JsonArrayProperty {
     param(
         [Parameter(Mandatory)]
@@ -889,6 +919,8 @@ function Assert-SourcePluginDescriptor {
     if ([string]$Descriptor.VersionName -cnotmatch '^[0-9A-Za-z][0-9A-Za-z._-]*$') {
         throw 'Descriptor VersionName is not safe for use in a file name.'
     }
+    Assert-DescriptorCanContainContent -Descriptor $Descriptor -Configuration $Configuration `
+        -DescriptorKind 'Source descriptor'
     Assert-JsonArrayProperty -Object $Descriptor -Name 'Modules' -Description 'Descriptor Modules'
     Assert-JsonArrayProperty -Object $Descriptor -Name 'Plugins' -Description 'Descriptor Plugins' -Optional
     Assert-JsonArrayProperty -Object $Descriptor -Name 'SupportedTargetPlatforms' `
@@ -1268,6 +1300,8 @@ function ConvertTo-SalesPluginDescriptor {
         [string]$DestinationPath
     )
 
+    Assert-DescriptorCanContainContent -Descriptor $SourceDescriptor -Configuration $Configuration `
+        -DescriptorKind 'Source descriptor'
     $descriptor = ($SourceDescriptor | ConvertTo-Json -Depth 100) | ConvertFrom-Json -Depth 100
     Set-JsonObjectProperty -Object $descriptor -Name EngineVersion -Value "$EngineVersion.0"
     Set-JsonObjectProperty -Object $descriptor -Name Installed -Value $true
@@ -1279,7 +1313,7 @@ function ConvertTo-SalesPluginDescriptor {
     Set-JsonObjectProperty -Object $descriptor -Name IsBetaVersion -Value $false
     Set-JsonObjectProperty -Object $descriptor -Name IsExperimentalVersion -Value $false
     Set-JsonObjectProperty -Object $descriptor -Name CanContainContent `
-        -Value ($Configuration.content.mode -ceq 'pack')
+        -Value ($Configuration.content.mode -in @('pack', 'plugin'))
 
     $modules = @(@($descriptor.Modules) |
             Where-Object { @($Configuration.distributionModules) -ccontains [string]$_.Name })
@@ -1356,9 +1390,8 @@ function Assert-SalesPluginDescriptor {
     if ($Descriptor.IsBetaVersion -ne $false -or $Descriptor.IsExperimentalVersion -ne $false) {
         throw 'Sales descriptor beta and experimental flags must be false.'
     }
-    if ($Descriptor.CanContainContent -ne ($Configuration.content.mode -ceq 'pack')) {
-        throw 'Sales descriptor CanContainContent mismatch.'
-    }
+    Assert-DescriptorCanContainContent -Descriptor $Descriptor -Configuration $Configuration `
+        -DescriptorKind 'Sales descriptor'
     $modules = @($Descriptor.Modules)
     Assert-ExactStringSet -Actual @($modules | ForEach-Object { [string]$_.Name }) `
         -Expected @($Configuration.distributionModules) -Description 'Sales descriptor modules'
@@ -1592,16 +1625,29 @@ function Assert-ContentLayout {
         }
         return
     }
+    $mode = [string]$Configuration.content.mode
     if (-not [System.IO.Directory]::Exists($contentRoot)) {
-        throw 'Content directory is required in pack mode.'
+        throw "Content directory is required in $mode mode."
     }
-    $topFiles = @([System.IO.Directory]::EnumerateFiles($contentRoot))
-    $topDirectories = @([System.IO.Directory]::EnumerateDirectories($contentRoot))
-    if ($topFiles.Count -ne 0 -or $topDirectories.Count -ne 1 -or
-        [System.IO.Path]::GetFileName($topDirectories[0]) -cne [string]$Configuration.pluginName) {
-        throw "Content must contain exactly one top-level '$($Configuration.pluginName)' directory and no files."
+    if ($mode -ceq 'pack') {
+        $topFiles = @([System.IO.Directory]::EnumerateFiles($contentRoot))
+        $topDirectories = @([System.IO.Directory]::EnumerateDirectories($contentRoot))
+        if ($topFiles.Count -ne 0 -or $topDirectories.Count -ne 1 -or
+            [System.IO.Path]::GetFileName($topDirectories[0]) -cne [string]$Configuration.pluginName) {
+            throw "Content must contain exactly one top-level '$($Configuration.pluginName)' directory and no files."
+        }
+        $files = @(Get-SafeTreeFile -Root $contentRoot)
     }
-    foreach ($file in Get-SafeTreeFile -Root $contentRoot) {
+    elseif ($mode -ceq 'plugin') {
+        $files = @(Get-SafeTreeFile -Root $contentRoot)
+        if ($files.Count -eq 0) {
+            throw 'Content must contain at least one regular file in plugin mode.'
+        }
+    }
+    else {
+        throw "Unsupported content mode: $mode"
+    }
+    foreach ($file in $files) {
         $relative = $file.RelativePath
         if ($relative.Length -gt 140) {
             throw "Content-relative path exceeds 140 characters: $relative"

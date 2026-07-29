@@ -75,6 +75,14 @@
           "additionalProperties": false,
           "required": ["mode"],
           "properties": { "mode": { "const": "none" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode"],
+          "properties": {
+            "mode": { "const": "plugin" }
+          }
         }
       ]
     },

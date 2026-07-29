@@ -58,7 +58,36 @@ Example:
 
 ## `content`
 
-Use pack mode for a content plugin:
+Use `plugin` mode when a code plugin places required assets directly under
+`Content` or in any number of feature-specific subdirectories:
+
+```json
+{ "mode": "plugin" }
+```
+
+For example:
+
+```text
+MyPlugin/
+├─ Content/
+│  ├─ DefaultMaterial.uasset
+│  └─ UI/
+│     └─ DefaultIcon.uasset
+├─ Config/
+├─ Source/
+└─ MyPlugin.uplugin
+```
+
+`Content` is required and must contain at least one regular file. Content
+files may be directly under `Content` or under multiple subdirectories.
+Reparse points, spaces, non-ASCII characters, hyphens, colons, dot segments,
+and empty path segments are rejected. Directory segments must match
+`^[0-9A-Za-z_]+$`; file segments must match
+`^[0-9A-Za-z_]+(?:\.[0-9A-Za-z_]+)*$`. Each path is limited to 140 characters
+relative to `Content`.
+
+Use `pack` mode when a content product intentionally uses one strict pack
+directory:
 
 ```json
 { "mode": "pack", "packFolder": "MyPlugin" }
@@ -69,13 +98,19 @@ directory and no other top-level item. All content segments must use ASCII
 letters, digits, and underscores; file extensions may use dots. Paths longer
 than 140 characters relative to `Content` fail.
 
-Use none mode for a code-only plugin:
+Use `none` mode for a plugin that ships no content:
 
 ```json
 { "mode": "none" }
 ```
 
 `packFolder` is forbidden and `Content` must not be staged in none mode.
+
+Fab's content-product requirement for one `Content/<PluginName>/` pack folder
+must not be confused with the natural `Content` layout of a code plugin. Use
+`pack` only for the former and `plugin` for the latter. In both `pack` and
+`plugin` modes, source and sales descriptors must set
+`CanContainContent` to `true`; `none` requires `false`.
 
 ## `thirdPartyLicenseSets`
 

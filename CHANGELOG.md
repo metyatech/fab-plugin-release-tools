@@ -5,6 +5,19 @@ Keep a Changelog and the project uses Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-29
+
+### Added
+
+- Added the `plugin` content mode for standard code-plugin Content layouts.
+- Added `agent-ruleset.json` and generated `AGENTS.md` using the `generic`
+  profile.
+
+### Fixed
+
+- Updated the Runtime Asset Import example to use its direct Content asset
+  path and centralized documentation URL.
+
 ## [0.1.2] - 2026-07-23
 
 ### Fixed
