@@ -26,8 +26,13 @@ Clone this repository and bootstrap the pinned development dependencies:
 ```powershell
 git clone https://github.com/metyatech/fab-plugin-release-tools.git
 Set-Location fab-plugin-release-tools
+compose-agentsmd
 pwsh .\Build.ps1 -Task Bootstrap
 ```
+
+`compose-agentsmd` synchronizes the repository's generated `AGENTS.md` from
+`agent-ruleset.json`. Run it after cloning or when the selected rules source
+changes; do not edit `AGENTS.md` by hand.
 
 Add a `FabPluginRelease.json` file to the root of each plugin repository. Start
 from [the Runtime Asset Import example](examples/RuntimeAssetImport/FabPluginRelease.json)
@@ -87,6 +92,37 @@ The command runs these gates in order and stops at the first failure:
 12. atomic artifact finalization
 
 There is no build-skip or validation-skip option.
+
+## Content modes
+
+The configuration supports three strict content modes:
+
+- `plugin` is for code plugins whose required assets live directly under
+  `Content` or in any number of subdirectories. For example:
+
+  ```json
+  { "mode": "plugin" }
+  ```
+
+  ```text
+  MyPlugin/
+  ├─ Content/
+  │  ├─ DefaultMaterial.uasset
+  │  └─ UI/
+  │     └─ DefaultIcon.uasset
+  ├─ Config/
+  ├─ Source/
+  └─ MyPlugin.uplugin
+  ```
+
+- `pack` remains the strict mode for a content product with exactly one
+  `Content/<PluginName>/` pack directory.
+- `none` is for plugins that ship no `Content` at all.
+
+Fab's single-pack-folder rule for content products is distinct from the
+natural `Content` layout of a code plugin. Choose the mode that matches the
+product structure; do not move code-plugin assets just to create a pack
+folder.
 
 Every existing directory element from the volume or UNC share root through
 `PluginPath` is checked before Git and again before staging. A junction,

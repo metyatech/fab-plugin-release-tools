@@ -23,11 +23,10 @@
     "copyrightNotice": "// Copyright (c) 2026 metyatech. All rights reserved."
   },
   "listingId": "19cb2daa-b018-46ae-b28c-7bfe21075c4a",
-  "documentationUrl": "https://github.com/metyatech/RuntimeAssetImportPlugin/blob/master/README.md",
+  "documentationUrl": "https://metyatech.github.io/unreal-plugin-docs/runtime-asset-import/",
   "supportUrl": "https://github.com/metyatech/RuntimeAssetImportPlugin/issues",
   "content": {
-    "mode": "pack",
-    "packFolder": "RuntimeAssetImport"
+    "mode": "plugin"
   },
   "includeDirectories": [
     "Config",
@@ -45,7 +44,7 @@
   "requiredPackageFiles": [
     "RuntimeAssetImport.uplugin",
     "Config/FilterPlugin.ini",
-    "Content/RuntimeAssetImport/AssetImporterMeshMaterial.uasset",
+    "Content/AssetImporterMeshMaterial.uasset",
     "Resources/Icon128.png",
     "Source/RuntimeAssetImport/RuntimeAssetImport.Build.cs",
     "Source/ThirdParty/assimp/assimp.Build.cs",

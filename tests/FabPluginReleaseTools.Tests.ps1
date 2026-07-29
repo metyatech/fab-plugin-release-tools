@@ -249,6 +249,56 @@ InModuleScope FabPluginReleaseTools {
             $result.pluginName | Should -BeExactly 'TestPlugin'
         }
 
+        It 'accepts plugin content mode without a pack folder' {
+            $configuration = Get-TestConfigurationObject
+            $configuration.content = [ordered]@{ mode = 'plugin' }
+            Save-TestConfiguration -Configuration $configuration -Path $configurationPath
+            $result = Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8'
+            $result.content.mode | Should -BeExactly 'plugin'
+            $result.content.PSObject.Properties.Name | Should -Not -Contain 'packFolder'
+        }
+
+        It 'rejects packFolder in plugin content mode' {
+            $configuration = Get-TestConfigurationObject
+            $configuration.content = [ordered]@{ mode = 'plugin'; packFolder = 'TestPlugin' }
+            Save-TestConfiguration -Configuration $configuration -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'rejects unknown properties in plugin content mode' {
+            $configuration = Get-TestConfigurationObject
+            $configuration.content = [ordered]@{ mode = 'plugin'; extra = $true }
+            Save-TestConfiguration -Configuration $configuration -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'continues to accept the valid pack content mode' {
+            $configuration = Get-TestConfigurationObject
+            $configuration.content = [ordered]@{ mode = 'pack'; packFolder = 'TestPlugin' }
+            Save-TestConfiguration -Configuration $configuration -Path $configurationPath
+            $result = Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8'
+            $result.content.mode | Should -BeExactly 'pack'
+        }
+
+        It 'rejects an unknown content mode with all supported modes in the error' {
+            $configuration = Get-TestConfigurationObject
+            $configuration.content = [ordered]@{ mode = 'invalid' }
+            Save-TestConfiguration -Configuration $configuration -Path $configurationPath
+            $errorRecord = $null
+            try {
+                Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8'
+            }
+            catch {
+                $errorRecord = $_
+            }
+            $errorRecord | Should -Not -BeNullOrEmpty
+            $errorRecord.Exception.Message | Should -Match 'pack'
+            $errorRecord.Exception.Message | Should -Match 'plugin'
+            $errorRecord.Exception.Message | Should -Match 'none'
+        }
+
         It 'rejects an unknown property' {
             $configuration = Get-TestConfigurationObject
             $configuration.unknown = $true
@@ -689,6 +739,89 @@ InModuleScope FabPluginReleaseTools {
         }
     }
 
+    Describe 'Descriptor content capability alignment' {
+        It 'accepts true CanContainContent for plugin mode in source and sales descriptors' {
+            $configurationObject = Get-TestConfigurationObject
+            $configurationObject.content = [ordered]@{ mode = 'plugin' }
+            $configuration = Import-TestConfiguration -Directory (Join-Path $TestDrive 'PluginContentDescriptor') `
+                -Configuration $configurationObject
+            $source = Get-TestDescriptorObject | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+            $source.CanContainContent = $true
+            { Assert-SourcePluginDescriptor -Descriptor $source -Configuration $configuration } |
+                Should -Not -Throw
+            $destination = Join-Path $TestDrive 'PluginContentDescriptorSales.uplugin'
+            $sales = ConvertTo-SalesPluginDescriptor -SourceDescriptor $source `
+                -Configuration $configuration -EngineVersion '5.8' -DestinationPath $destination
+            $sales.CanContainContent | Should -BeTrue
+            { Assert-SalesPluginDescriptor -Descriptor $sales -Configuration $configuration -EngineVersion '5.8' } |
+                Should -Not -Throw
+        }
+
+        It 'rejects false CanContainContent for plugin mode' {
+            $configurationObject = Get-TestConfigurationObject
+            $configurationObject.content = [ordered]@{ mode = 'plugin' }
+            $configuration = Import-TestConfiguration -Directory (Join-Path $TestDrive 'PluginContentFalse') `
+                -Configuration $configurationObject
+            $source = Get-TestDescriptorObject | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+            { Assert-SourcePluginDescriptor -Descriptor $source -Configuration $configuration } |
+                Should -Throw
+            $source.CanContainContent = $true
+            $destination = Join-Path $TestDrive 'PluginContentFalseSales.uplugin'
+            $sales = ConvertTo-SalesPluginDescriptor -SourceDescriptor $source `
+                -Configuration $configuration -EngineVersion '5.8' -DestinationPath $destination
+            $sales.CanContainContent = $false
+            { Assert-SalesPluginDescriptor -Descriptor $sales -Configuration $configuration -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'rejects true CanContainContent for none mode' {
+            $configuration = Import-TestConfiguration -Directory (Join-Path $TestDrive 'NoneContentTrue')
+            $source = Get-TestDescriptorObject | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+            $source.CanContainContent = $true
+            { Assert-SourcePluginDescriptor -Descriptor $source -Configuration $configuration } |
+                Should -Throw
+            $source.CanContainContent = $false
+            $destination = Join-Path $TestDrive 'NoneContentTrueSales.uplugin'
+            $sales = ConvertTo-SalesPluginDescriptor -SourceDescriptor $source `
+                -Configuration $configuration -EngineVersion '5.8' -DestinationPath $destination
+            $sales.CanContainContent = $true
+            { Assert-SalesPluginDescriptor -Descriptor $sales -Configuration $configuration -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'rejects missing, string, number, array, object, and null CanContainContent' -ForEach @(
+            @{ Name = 'missing'; Missing = $true; Value = $null },
+            @{ Name = 'string'; Missing = $false; Value = 'true' },
+            @{ Name = 'number'; Missing = $false; Value = 1 },
+            @{ Name = 'array'; Missing = $false; Value = @($true) },
+            @{ Name = 'object'; Missing = $false; Value = [pscustomobject]@{ value = $true } },
+            @{ Name = 'null'; Missing = $false; Value = $null }) {
+            $configuration = Import-TestConfiguration -Directory (Join-Path $TestDrive "InvalidContentFlag-$Name")
+            $source = Get-TestDescriptorObject | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+            if ($Missing) {
+                [void]$source.PSObject.Properties.Remove('CanContainContent')
+            }
+            else {
+                $source.CanContainContent = $Value
+            }
+            { Assert-SourcePluginDescriptor -Descriptor $source -Configuration $configuration } |
+                Should -Throw
+
+            $validSource = Get-TestDescriptorObject | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+            $destination = Join-Path $TestDrive "InvalidContentFlagSales-$Name.uplugin"
+            $sales = ConvertTo-SalesPluginDescriptor -SourceDescriptor $validSource `
+                -Configuration $configuration -EngineVersion '5.8' -DestinationPath $destination
+            if ($Missing) {
+                [void]$sales.PSObject.Properties.Remove('CanContainContent')
+            }
+            else {
+                $sales.CanContainContent = $Value
+            }
+            { Assert-SalesPluginDescriptor -Descriptor $sales -Configuration $configuration -EngineVersion '5.8' } |
+                Should -Throw
+        }
+    }
+
     Describe 'Copyright validation' {
         BeforeEach {
             Set-Variable -Name root -Value (Join-Path $TestDrive "Plugin-$([guid]::NewGuid())")
@@ -715,6 +848,79 @@ InModuleScope FabPluginReleaseTools {
         It 'excludes ThirdParty C++ sources' {
             [System.IO.File]::WriteAllText((Join-Path $root 'Source\ThirdParty\Vendor\vendor.cpp'), "// vendor`n")
             { Test-SourceCopyright -PluginPath $root -ExpectedNotice $notice } | Should -Not -Throw
+        }
+    }
+
+    Describe 'Runtime Asset Import example and plugin package layout' {
+        It 'imports the Runtime Asset Import example as schemaVersion 1' {
+            $examplePath = Join-Path (Get-Module FabPluginReleaseTools).ModuleBase `
+                'examples\RuntimeAssetImport\FabPluginRelease.json'
+            $configuration = Import-FabPluginReleaseConfiguration -ConfigPath $examplePath -EngineVersion '5.8'
+            $configuration.schemaVersion | Should -Be 1
+        }
+
+        It 'uses plugin content mode in the Runtime Asset Import example' {
+            $examplePath = Join-Path (Get-Module FabPluginReleaseTools).ModuleBase `
+                'examples\RuntimeAssetImport\FabPluginRelease.json'
+            $configuration = Import-FabPluginReleaseConfiguration -ConfigPath $examplePath -EngineVersion '5.8'
+            $configuration.content.mode | Should -BeExactly 'plugin'
+        }
+
+        It 'requires the direct Runtime Asset Import Content asset path' {
+            $examplePath = Join-Path (Get-Module FabPluginReleaseTools).ModuleBase `
+                'examples\RuntimeAssetImport\FabPluginRelease.json'
+            $configuration = Import-FabPluginReleaseConfiguration -ConfigPath $examplePath -EngineVersion '5.8'
+            @($configuration.requiredPackageFiles) | Should -Contain 'Content/AssetImporterMeshMaterial.uasset'
+        }
+
+        It 'does not retain the old nested Runtime Asset Import Content path' {
+            $examplePath = Join-Path (Get-Module FabPluginReleaseTools).ModuleBase `
+                'examples\RuntimeAssetImport\FabPluginRelease.json'
+            $configuration = Import-FabPluginReleaseConfiguration -ConfigPath $examplePath -EngineVersion '5.8'
+            @($configuration.requiredPackageFiles) |
+                Should -Not -Contain 'Content/RuntimeAssetImport/AssetImporterMeshMaterial.uasset'
+        }
+
+        It 'validates a Runtime Asset Import-style plugin fixture and catches a missing required Content asset' {
+            $sourceRoot = Join-Path $TestDrive 'RuntimeAssetImportStyleSource'
+            $stagedRoot = Join-Path $TestDrive 'RuntimeAssetImportStyleStaged'
+            Invoke-TestPluginSetup -Root $sourceRoot
+            [System.IO.Directory]::CreateDirectory((Join-Path $sourceRoot 'Content')) | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $sourceRoot 'Content\Asset.uasset'), 'asset')
+            [System.IO.File]::WriteAllText((Join-Path $sourceRoot 'Content\Keep.uasset'), 'keep')
+
+            $configurationObject = Get-TestConfigurationObject
+            $configurationObject.content = [ordered]@{ mode = 'plugin' }
+            $configurationObject.includeDirectories = @('Config', 'Content', 'Source/TestPlugin')
+            $configurationObject.requiredPackageFiles = @(
+                'TestPlugin.uplugin',
+                'Config/FilterPlugin.ini',
+                'Content/Asset.uasset',
+                'Source/TestPlugin/TestPlugin.Build.cs',
+                'README.md',
+                'LICENSE')
+            Save-TestConfiguration -Configuration $configurationObject `
+                -Path (Join-Path $sourceRoot 'FabPluginRelease.json')
+            $descriptor = Get-TestDescriptorObject
+            $descriptor.CanContainContent = $true
+            [System.IO.File]::WriteAllText(
+                (Join-Path $sourceRoot 'TestPlugin.uplugin'),
+                (($descriptor | ConvertTo-Json -Depth 30) + [Environment]::NewLine))
+
+            $configuration = Import-TestConfiguration -Directory $sourceRoot `
+                -Configuration $configurationObject
+            Copy-FabPluginAllowList -PluginPath $sourceRoot -DestinationRoot $stagedRoot `
+                -Configuration $configuration
+            [void](ConvertTo-SalesPluginDescriptor `
+                    -SourceDescriptor (Read-PluginDescriptor -DescriptorPath (Join-Path $sourceRoot 'TestPlugin.uplugin')) `
+                    -Configuration $configuration -EngineVersion '5.8' `
+                    -DestinationPath (Join-Path $stagedRoot 'TestPlugin.uplugin'))
+            { Assert-FabPackage -PluginRoot $stagedRoot -Configuration $configuration -EngineVersion '5.8' } |
+                Should -Not -Throw
+
+            [System.IO.File]::Delete((Join-Path $stagedRoot 'Content\Asset.uasset'))
+            { Assert-FabPackage -PluginRoot $stagedRoot -Configuration $configuration -EngineVersion '5.8' } |
+                Should -Throw -ExpectedMessage '*Required package file is missing*'
         }
     }
 
@@ -797,6 +1003,70 @@ const char* Text = "UPROPERTY(EditAnywhere)";
                 [System.IO.Directory]::CreateDirectory((Join-Path $root 'Content\Other')) | Out-Null
             }
             { Assert-ContentLayout -PluginRoot $root -Configuration $configuration } | Should -Throw
+        }
+
+        It 'accepts a plugin-mode asset directly under Content' {
+            $configuration.content = [pscustomobject]@{ mode = 'plugin' }
+            [System.IO.Directory]::CreateDirectory((Join-Path $root 'Content')) | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $root 'Content\Asset.uasset'), 'asset')
+            { Assert-ContentLayout -PluginRoot $root -Configuration $configuration } | Should -Not -Throw
+        }
+
+        It 'accepts multiple plugin-mode Content subdirectories' {
+            $configuration.content = [pscustomobject]@{ mode = 'plugin' }
+            [System.IO.Directory]::CreateDirectory((Join-Path $root 'Content\UI')) | Out-Null
+            [System.IO.Directory]::CreateDirectory((Join-Path $root 'Content\Materials')) | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $root 'Content\UI\Icon.uasset'), 'icon')
+            [System.IO.File]::WriteAllText((Join-Path $root 'Content\Materials\Default.uasset'), 'material')
+            { Assert-ContentLayout -PluginRoot $root -Configuration $configuration } | Should -Not -Throw
+        }
+
+        It 'rejects missing Content in plugin mode' {
+            $configuration.content = [pscustomobject]@{ mode = 'plugin' }
+            { Assert-ContentLayout -PluginRoot $root -Configuration $configuration } | Should -Throw
+        }
+
+        It 'rejects empty Content in plugin mode' {
+            $configuration.content = [pscustomobject]@{ mode = 'plugin' }
+            [System.IO.Directory]::CreateDirectory((Join-Path $root 'Content')) | Out-Null
+            { Assert-ContentLayout -PluginRoot $root -Configuration $configuration } | Should -Throw
+        }
+
+        It 'rejects spaces and non-ASCII plugin content names' -ForEach @(
+            @{ Name = 'Bad Name.uasset' },
+            @{ Name = ([string][char]0x65E5 + [char]0x672C + '.uasset') }) {
+            $configuration.content = [pscustomobject]@{ mode = 'plugin' }
+            [System.IO.Directory]::CreateDirectory((Join-Path $root 'Content')) | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $root "Content\$Name"), 'asset')
+            { Assert-ContentLayout -PluginRoot $root -Configuration $configuration } | Should -Throw
+        }
+
+        It 'rejects a plugin content path longer than 140 characters' {
+            $configuration.content = [pscustomobject]@{ mode = 'plugin' }
+            $contentRoot = Join-Path $root 'Content'
+            [System.IO.Directory]::CreateDirectory($contentRoot) | Out-Null
+            $longName = ('A' * 134) + '.uasset'
+            [System.IO.File]::WriteAllText((Join-Path $contentRoot $longName), 'asset')
+            { Assert-ContentLayout -PluginRoot $root -Configuration $configuration } | Should -Throw
+        }
+
+        It 'rejects reparse-point directories inside plugin Content' {
+            $configuration.content = [pscustomobject]@{ mode = 'plugin' }
+            $contentRoot = Join-Path $root 'Content'
+            $targetRoot = Join-Path $TestDrive 'ReparseTarget'
+            $linkPath = Join-Path $contentRoot 'Linked'
+            [System.IO.Directory]::CreateDirectory($targetRoot) | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $targetRoot 'Asset.uasset'), 'asset')
+            [System.IO.Directory]::CreateDirectory($contentRoot) | Out-Null
+            try {
+                [void](New-Item -ItemType Junction -Path $linkPath -Target $targetRoot)
+                { Assert-ContentLayout -PluginRoot $root -Configuration $configuration } | Should -Throw
+            }
+            finally {
+                if (Test-Path -LiteralPath $linkPath) {
+                    [System.IO.Directory]::Delete($linkPath)
+                }
+            }
         }
 
         It 'accepts 140 content-relative characters and rejects 141' {
