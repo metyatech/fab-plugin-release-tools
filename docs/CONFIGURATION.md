@@ -26,6 +26,7 @@ example is in
 | `distributionModules` | string array | yes | Non-empty and case-insensitively unique. Only these modules ship. |
 | `enabledPluginDependencies` | string array | yes | Case-insensitively unique; use `[]` when there are no dependencies. |
 | `publisher` | object | yes | Strict object described below. |
+| `sourceCopyrightOverrides` | object array | no | Ordered per-file source notice sequences; omitted means every file uses the publisher notice. |
 | `listingId` | string or null | yes | Lowercase UUID, or `null` when no listing is assigned. |
 | `documentationUrl` | URL string | yes | Absolute HTTPS URL without user information that returns HTTP 200-399 after redirects. |
 | `supportUrl` | URL string | yes | Absolute HTTPS URL without user information that returns HTTP 200-399 after redirects. |
@@ -44,7 +45,7 @@ example is in
 | --- | --- | --- | --- |
 | `name` | string | yes | Non-empty descriptor publisher name. |
 | `url` | URL string | yes | Absolute HTTPS publisher URL. |
-| `copyrightNotice` | string | yes | Exact first non-empty line required in publisher source files. |
+| `copyrightNotice` | string | yes | Default exact first non-empty line required in every in-scope source file. |
 
 Example:
 
@@ -55,6 +56,40 @@ Example:
   "copyrightNotice": "// Copyright (c) 2026 metyatech. All rights reserved."
 }
 ```
+
+## `sourceCopyrightOverrides`
+
+This optional array handles a source file that must retain multiple notices.
+Each item has exactly `path` and `notices`:
+
+```json
+{
+  "path": "Source/Example/Private/Example.cpp",
+  "notices": [
+    "// Copyright Example Vendor. All Rights Reserved.",
+    "// Copyright (c) 2026 metyatech. All rights reserved."
+  ]
+}
+```
+
+`path` must be a single, case-exact regular file below `Source/`; wildcard
+paths and the `Source` directory itself are forbidden. The file must be in the
+copyright validation scope, must not be a directory or reparse point, and
+missing, unused, unsupported-extension, duplicate, or case-mismatched paths
+fail configuration validation. `notices` must contain at least two unique
+single-line, non-empty strings with no leading or trailing whitespace. The
+last notice must exactly equal `publisher.copyrightNotice`.
+
+The tool compares exactly as many first non-empty lines as the expected
+sequence, ignoring only a leading UTF-8 BOM and blank lines before the notices.
+A missing, shifted, or reordered line fails; there is no per-file copyright
+skip. Source `.Build.cs` files are always in scope, including under
+`Source/ThirdParty/`. C/C++ files under `Source/ThirdParty/` remain outside the
+scope, exactly as they are without an override. This validation is technical
+and does not determine legal ownership or licensing.
+
+Do not remove or unconditionally replace an existing third-party notice. Do
+not register a notice with unknown provenance merely to make a file pass.
 
 ## `content`
 

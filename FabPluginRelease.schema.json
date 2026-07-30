@@ -53,6 +53,27 @@
         "copyrightNotice": { "type": "string", "minLength": 1 }
       }
     },
+    "sourceCopyrightOverrides": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "notices"],
+        "properties": {
+          "path": { "$ref": "#/definitions/relativePath" },
+          "notices": {
+            "type": "array",
+            "minItems": 2,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[^\\r\\n]+$"
+            }
+          }
+        }
+      }
+    },
     "listingId": {
       "type": ["string", "null"],
       "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
