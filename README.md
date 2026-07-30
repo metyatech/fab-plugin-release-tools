@@ -93,6 +93,25 @@ The command runs these gates in order and stops at the first failure:
 
 There is no build-skip or validation-skip option.
 
+Copyright validation uses `publisher.copyrightNotice` as the required single
+notice for every source file by default. A configuration may add
+`sourceCopyrightOverrides` for specific files below `Source/`; each override
+must provide an ordered array of at least two unique, single-line notices, and
+the final notice must be the publisher notice. The exact ordered prefix of
+non-empty lines is checked, so missing, shifted, or reordered notices fail the
+release.
+Overrides do not skip copyright validation, and wildcard paths and directory
+paths are forbidden. Override files must exist as regular non-reparse files,
+match their actual case, and be in the existing copyright scope. Source
+`.Build.cs` files are always checked, including under `Source/ThirdParty/`;
+C/C++ files under `Source/ThirdParty/` remain excluded.
+
+This technical gate does not make a legal determination about copyright
+ownership or licensing. Reviewers remain responsible for the legal accuracy of
+the configured notices and third-party declarations. Existing third-party
+notices must not be removed or replaced unconditionally, and a notice with
+unknown provenance must not be added to an override speculatively.
+
 ## Content modes
 
 The configuration supports three strict content modes:

@@ -5,6 +5,17 @@ Keep a Changelog and the project uses Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-30
+
+### Added
+
+- Added file-specific ordered copyright notice sequences while retaining the
+  publisher notice as the default and requiring it as the final override
+  notice.
+- Added strict rejection of missing, unused, and case-mismatched overrides.
+- Added the Runtime Asset Import example's Epic Games and metyatech sequence
+  for its two Unreal template-derived files.
+
 ## [0.2.0] - 2026-07-29
 
 ### Added

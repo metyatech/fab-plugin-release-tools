@@ -236,6 +236,21 @@ InModuleScope FabPluginReleaseTools {
                 -ZipPath $ZipPath -Confirm:$false
             return $configuration
         }
+
+        function Get-TestCopyrightOverride {
+            param(
+                [Parameter(Mandatory)]
+                [string]$Path,
+
+                [Parameter(Mandatory)]
+                [string[]]$Notices
+            )
+
+            return [pscustomobject]@{
+                path    = $Path
+                notices = @($Notices)
+            }
+        }
     }
 
     Describe 'Strict configuration validation' {
@@ -848,6 +863,522 @@ InModuleScope FabPluginReleaseTools {
         It 'excludes ThirdParty C++ sources' {
             [System.IO.File]::WriteAllText((Join-Path $root 'Source\ThirdParty\Vendor\vendor.cpp'), "// vendor`n")
             { Test-SourceCopyright -PluginPath $root -ExpectedNotice $notice } | Should -Not -Throw
+        }
+    }
+
+    Describe 'Ordered source copyright overrides' {
+        BeforeEach {
+            Set-Variable -Name root -Value (Join-Path $TestDrive "OrderedCopyright-$([guid]::NewGuid())")
+            [System.IO.Directory]::CreateDirectory((Join-Path $root 'Source\TestPlugin')) | Out-Null
+            [System.IO.Directory]::CreateDirectory((Join-Path $root 'Source\ThirdParty\Vendor')) | Out-Null
+            Set-Variable -Name notice -Value '// Copyright (c) 2026 metyatech. All rights reserved.'
+            Set-Variable -Name epicNotice -Value '// Copyright Epic Games, Inc. All Rights Reserved.'
+            [System.IO.File]::WriteAllText(
+                (Join-Path $root 'Source\TestPlugin\TestPlugin.Build.cs'), "$notice`n")
+            [System.IO.File]::WriteAllText(
+                (Join-Path $root 'Source\TestPlugin\TestPlugin.h'), "$notice`n")
+            [System.IO.File]::WriteAllText(
+                (Join-Path $root 'Source\TestPlugin\TestPlugin.cpp'), "$notice`n")
+            Set-Variable -Name configurationPath -Value (Join-Path $TestDrive 'OrderedCopyright.json')
+        }
+
+        It 'normalizes an omitted override array to empty' {
+            Save-TestConfiguration -Configuration (Get-TestConfigurationObject) -Path $configurationPath
+            $configuration = Import-FabPluginReleaseConfiguration `
+                -ConfigPath $configurationPath -EngineVersion '5.8'
+            @($configuration.sourceCopyrightOverrides).Count | Should -Be 0
+        }
+
+        It 'accepts a valid ordered override' {
+            $source = Get-TestConfigurationObject
+            $source.sourceCopyrightOverrides = @(
+                (Get-TestCopyrightOverride -Path 'Source/TestPlugin/TestPlugin.h' -Notices @($epicNotice, $notice)))
+            Save-TestConfiguration -Configuration $source -Path $configurationPath
+            $configuration = Import-FabPluginReleaseConfiguration `
+                -ConfigPath $configurationPath -EngineVersion '5.8'
+            $configuration.sourceCopyrightOverrides[0].path | Should -BeExactly 'Source/TestPlugin/TestPlugin.h'
+        }
+
+        It 'normalizes backslashes while preserving path casing' {
+            $source = Get-TestConfigurationObject
+            $source.sourceCopyrightOverrides = @(
+                (Get-TestCopyrightOverride -Path 'Source\TestPlugin\TestPlugin.h' -Notices @($epicNotice, $notice)))
+            Save-TestConfiguration -Configuration $source -Path $configurationPath
+            $configuration = Import-FabPluginReleaseConfiguration `
+                -ConfigPath $configurationPath -EngineVersion '5.8'
+            $configuration.sourceCopyrightOverrides[0].path | Should -BeExactly 'Source/TestPlugin/TestPlugin.h'
+        }
+
+        It 'preserves the configured notice order' {
+            $source = Get-TestConfigurationObject
+            $source.sourceCopyrightOverrides = @(
+                (Get-TestCopyrightOverride -Path 'Source/TestPlugin/TestPlugin.h' -Notices @($epicNotice, $notice)))
+            Save-TestConfiguration -Configuration $source -Path $configurationPath
+            $configuration = Import-FabPluginReleaseConfiguration `
+                -ConfigPath $configurationPath -EngineVersion '5.8'
+            @($configuration.sourceCopyrightOverrides[0].notices)[0] | Should -BeExactly $epicNotice
+            @($configuration.sourceCopyrightOverrides[0].notices)[1] | Should -BeExactly $notice
+        }
+
+        It 'requires the publisher notice as the final exact notice' {
+            $source = Get-TestConfigurationObject
+            $source.sourceCopyrightOverrides = @(
+                (Get-TestCopyrightOverride -Path 'Source/TestPlugin/TestPlugin.h' -Notices @($epicNotice, $notice)))
+            Save-TestConfiguration -Configuration $source -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Not -Throw
+        }
+
+        It 'rejects a null override array' {
+            $source = Get-TestConfigurationObject
+            $source.sourceCopyrightOverrides = $null
+            Save-TestConfiguration -Configuration $source -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'rejects a scalar override array' {
+            $source = Get-TestConfigurationObject
+            $source.sourceCopyrightOverrides = 'not-an-array'
+            Save-TestConfiguration -Configuration $source -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'rejects an override without a path' {
+            $source = Get-TestConfigurationObject
+            $source.sourceCopyrightOverrides = @([ordered]@{ notices = @($epicNotice, $notice) })
+            Save-TestConfiguration -Configuration $source -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'rejects an override without notices' {
+            $source = Get-TestConfigurationObject
+            $source.sourceCopyrightOverrides = @([ordered]@{ path = 'Source/TestPlugin/TestPlugin.h' })
+            Save-TestConfiguration -Configuration $source -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'rejects an unknown override property' {
+            $source = Get-TestConfigurationObject
+            $source.sourceCopyrightOverrides = @([ordered]@{
+                    path = 'Source/TestPlugin/TestPlugin.h'
+                    notices = @($epicNotice, $notice)
+                    extra = $true
+                })
+            Save-TestConfiguration -Configuration $source -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'rejects scalar notices' {
+            $source = Get-TestConfigurationObject
+            $source.sourceCopyrightOverrides = @([ordered]@{
+                    path = 'Source/TestPlugin/TestPlugin.h'
+                    notices = $notice
+                })
+            Save-TestConfiguration -Configuration $source -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'rejects object notices' {
+            $source = Get-TestConfigurationObject
+            $source.sourceCopyrightOverrides = @([ordered]@{
+                    path = 'Source/TestPlugin/TestPlugin.h'
+                    notices = @([ordered]@{ value = $notice }, $notice)
+                })
+            Save-TestConfiguration -Configuration $source -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'rejects fewer than two notices' {
+            $source = Get-TestConfigurationObject
+            $source.sourceCopyrightOverrides = @(
+                (Get-TestCopyrightOverride -Path 'Source/TestPlugin/TestPlugin.h' -Notices @($notice)))
+            Save-TestConfiguration -Configuration $source -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'rejects duplicate notices' {
+            $source = Get-TestConfigurationObject
+            $source.sourceCopyrightOverrides = @(
+                (Get-TestCopyrightOverride -Path 'Source/TestPlugin/TestPlugin.h' -Notices @($notice, $notice)))
+            Save-TestConfiguration -Configuration $source -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'rejects an empty notice' {
+            $source = Get-TestConfigurationObject
+            $source.sourceCopyrightOverrides = @([ordered]@{
+                    path = 'Source/TestPlugin/TestPlugin.h'
+                    notices = @('', $notice)
+                })
+            Save-TestConfiguration -Configuration $source -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'rejects a whitespace-only notice' {
+            $source = Get-TestConfigurationObject
+            $source.sourceCopyrightOverrides = @(
+                (Get-TestCopyrightOverride -Path 'Source/TestPlugin/TestPlugin.h' -Notices @('   ', $notice)))
+            Save-TestConfiguration -Configuration $source -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'rejects leading notice whitespace' {
+            $source = Get-TestConfigurationObject
+            $source.sourceCopyrightOverrides = @(
+                (Get-TestCopyrightOverride -Path 'Source/TestPlugin/TestPlugin.h' -Notices @(' ' + $epicNotice, $notice)))
+            Save-TestConfiguration -Configuration $source -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'rejects trailing notice whitespace' {
+            $source = Get-TestConfigurationObject
+            $source.sourceCopyrightOverrides = @(
+                (Get-TestCopyrightOverride -Path 'Source/TestPlugin/TestPlugin.h' -Notices @($epicNotice, $notice + ' ')))
+            Save-TestConfiguration -Configuration $source -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'rejects a notice containing a carriage return' {
+            $source = Get-TestConfigurationObject
+            $source.sourceCopyrightOverrides = @(
+                (Get-TestCopyrightOverride -Path 'Source/TestPlugin/TestPlugin.h' -Notices @($epicNotice + "`r", $notice)))
+            Save-TestConfiguration -Configuration $source -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'rejects a notice containing a line feed' {
+            $source = Get-TestConfigurationObject
+            $source.sourceCopyrightOverrides = @(
+                (Get-TestCopyrightOverride -Path 'Source/TestPlugin/TestPlugin.h' -Notices @($epicNotice + "`n", $notice)))
+            Save-TestConfiguration -Configuration $source -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'rejects a sequence whose final notice differs from the publisher' {
+            $source = Get-TestConfigurationObject
+            $source.sourceCopyrightOverrides = @(
+                (Get-TestCopyrightOverride -Path 'Source/TestPlugin/TestPlugin.h' -Notices @($epicNotice, '// other')))
+            Save-TestConfiguration -Configuration $source -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'rejects a path outside Source' {
+            $source = Get-TestConfigurationObject
+            $source.sourceCopyrightOverrides = @(
+                (Get-TestCopyrightOverride -Path 'README.md' -Notices @($epicNotice, $notice)))
+            Save-TestConfiguration -Configuration $source -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'rejects the Source directory itself' {
+            $source = Get-TestConfigurationObject
+            $source.sourceCopyrightOverrides = @(
+                (Get-TestCopyrightOverride -Path 'Source' -Notices @($epicNotice, $notice)))
+            Save-TestConfiguration -Configuration $source -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'rejects an absolute override path' {
+            $source = Get-TestConfigurationObject
+            $source.sourceCopyrightOverrides = @(
+                (Get-TestCopyrightOverride -Path 'C:\Source\TestPlugin.h' -Notices @($epicNotice, $notice)))
+            Save-TestConfiguration -Configuration $source -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'rejects a traversal override path' {
+            $source = Get-TestConfigurationObject
+            $source.sourceCopyrightOverrides = @(
+                (Get-TestCopyrightOverride -Path 'Source/../README.md' -Notices @($epicNotice, $notice)))
+            Save-TestConfiguration -Configuration $source -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'rejects a wildcard override path' {
+            $source = Get-TestConfigurationObject
+            $source.sourceCopyrightOverrides = @(
+                (Get-TestCopyrightOverride -Path 'Source/TestPlugin/*.h' -Notices @($epicNotice, $notice)))
+            Save-TestConfiguration -Configuration $source -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'rejects an empty override path' {
+            $source = Get-TestConfigurationObject
+            $source.sourceCopyrightOverrides = @([ordered]@{
+                    path = ''
+                    notices = @($epicNotice, $notice)
+                })
+            Save-TestConfiguration -Configuration $source -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'rejects trailing whitespace in an override path' {
+            $source = Get-TestConfigurationObject
+            $source.sourceCopyrightOverrides = @(
+                (Get-TestCopyrightOverride -Path 'Source/TestPlugin/TestPlugin.h ' -Notices @($epicNotice, $notice)))
+            Save-TestConfiguration -Configuration $source -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'rejects a trailing separator in an override path' {
+            $source = Get-TestConfigurationObject
+            $source.sourceCopyrightOverrides = @([ordered]@{
+                    path = 'Source/TestPlugin/'
+                    notices = @($epicNotice, $notice)
+                })
+            Save-TestConfiguration -Configuration $source -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'rejects case-insensitive duplicate override paths' {
+            $source = Get-TestConfigurationObject
+            $source.sourceCopyrightOverrides = @(
+                (Get-TestCopyrightOverride -Path 'Source/TestPlugin/TestPlugin.h' -Notices @($epicNotice, $notice)),
+                (Get-TestCopyrightOverride -Path 'source/testplugin/testplugin.h' -Notices @($epicNotice, $notice)))
+            Save-TestConfiguration -Configuration $source -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'rejects a missing override file' {
+            $override = Get-TestCopyrightOverride -Path 'Source/TestPlugin/Missing.h' -Notices @($epicNotice, $notice)
+            { Test-SourceCopyright -PluginPath $root -ExpectedNotice $notice `
+                    -SourceCopyrightOverrides @($override) } | Should -Throw
+        }
+
+        It 'rejects a directory override target' {
+            $override = Get-TestCopyrightOverride -Path 'Source/TestPlugin' -Notices @($epicNotice, $notice)
+            { Test-SourceCopyright -PluginPath $root -ExpectedNotice $notice `
+                    -SourceCopyrightOverrides @($override) } | Should -Throw
+        }
+
+        It 'rejects an override below a reparse-point directory' {
+            $externalRoot = Join-Path $TestDrive 'OrderedCopyrightExternal'
+            $linkedRoot = Join-Path $root 'Source\TestPlugin\Linked'
+            [System.IO.Directory]::CreateDirectory($externalRoot) | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $externalRoot 'secret.cpp'), "$notice`n")
+            [void](New-Item -ItemType Junction -Path $linkedRoot -Target $externalRoot)
+            try {
+                $override = Get-TestCopyrightOverride `
+                    -Path 'Source/TestPlugin/Linked/secret.cpp' -Notices @($epicNotice, $notice)
+                { Test-SourceCopyright -PluginPath $root -ExpectedNotice $notice `
+                        -SourceCopyrightOverrides @($override) } | Should -Throw
+            }
+            finally {
+                if ([System.IO.Directory]::Exists($linkedRoot)) {
+                    [System.IO.Directory]::Delete($linkedRoot)
+                }
+            }
+        }
+
+        It 'rejects an unsupported extension' {
+            [System.IO.File]::WriteAllText((Join-Path $root 'Source\TestPlugin\notes.txt'), "$notice`n")
+            $override = Get-TestCopyrightOverride -Path 'Source/TestPlugin/notes.txt' -Notices @($epicNotice, $notice)
+            { Test-SourceCopyright -PluginPath $root -ExpectedNotice $notice `
+                    -SourceCopyrightOverrides @($override) } | Should -Throw
+        }
+
+        It 'rejects a ThirdParty C++ override while retaining the existing scope' {
+            [System.IO.File]::WriteAllText(
+                (Join-Path $root 'Source\ThirdParty\Vendor\vendor.cpp'), "$notice`n")
+            $override = Get-TestCopyrightOverride `
+                -Path 'Source/ThirdParty/Vendor/vendor.cpp' -Notices @($epicNotice, $notice)
+            { Test-SourceCopyright -PluginPath $root -ExpectedNotice $notice `
+                    -SourceCopyrightOverrides @($override) } | Should -Throw
+        }
+
+        It 'rejects a file outside the source copyright scope' {
+            [System.IO.File]::WriteAllText((Join-Path $root 'README.md'), "$notice`n")
+            $override = Get-TestCopyrightOverride -Path 'README.md' -Notices @($epicNotice, $notice)
+            { Test-SourceCopyright -PluginPath $root -ExpectedNotice $notice `
+                    -SourceCopyrightOverrides @($override) } | Should -Throw
+        }
+
+        It 'rejects an override path whose case differs from the file' {
+            $override = Get-TestCopyrightOverride `
+                -Path 'Source/testplugin/TestPlugin.h' -Notices @($epicNotice, $notice)
+            { Test-SourceCopyright -PluginPath $root -ExpectedNotice $notice `
+                    -SourceCopyrightOverrides @($override) } | Should -Throw
+        }
+
+        It 'accepts a Build.cs override under ThirdParty' {
+            [System.IO.File]::WriteAllText(
+                (Join-Path $root 'Source\ThirdParty\Vendor\Vendor.Build.cs'), "$epicNotice`n$notice`n")
+            $override = Get-TestCopyrightOverride `
+                -Path 'Source/ThirdParty/Vendor/Vendor.Build.cs' -Notices @($epicNotice, $notice)
+            { Test-SourceCopyright -PluginPath $root -ExpectedNotice $notice `
+                    -SourceCopyrightOverrides @($override) } | Should -Not -Throw
+        }
+
+        It 'accepts a BOM and leading blank lines before an ordered sequence' {
+            $content = [char]0xFEFF + "`n`n$epicNotice`r`n$notice`r`nimplementation"
+            [System.IO.File]::WriteAllText((Join-Path $root 'Source\TestPlugin\TestPlugin.h'), $content)
+            $override = Get-TestCopyrightOverride `
+                -Path 'Source/TestPlugin/TestPlugin.h' -Notices @($epicNotice, $notice)
+            { Test-SourceCopyright -PluginPath $root -ExpectedNotice $notice `
+                    -SourceCopyrightOverrides @($override) } | Should -Not -Throw
+        }
+
+        It 'rejects a missing first override notice' {
+            [System.IO.File]::WriteAllText(
+                (Join-Path $root 'Source\TestPlugin\TestPlugin.h'), "$notice`n")
+            $override = Get-TestCopyrightOverride `
+                -Path 'Source/TestPlugin/TestPlugin.h' -Notices @($epicNotice, $notice)
+            { Test-SourceCopyright -PluginPath $root -ExpectedNotice $notice `
+                    -SourceCopyrightOverrides @($override) } | Should -Throw
+        }
+
+        It 'rejects an Epic-only override notice' {
+            [System.IO.File]::WriteAllText(
+                (Join-Path $root 'Source\TestPlugin\TestPlugin.h'), "$epicNotice`n")
+            $override = Get-TestCopyrightOverride `
+                -Path 'Source/TestPlugin/TestPlugin.h' -Notices @($epicNotice, $notice)
+            { Test-SourceCopyright -PluginPath $root -ExpectedNotice $notice `
+                    -SourceCopyrightOverrides @($override) } | Should -Throw
+        }
+
+        It 'rejects an extra non-empty line that shifts an override sequence' {
+            [System.IO.File]::WriteAllText(
+                (Join-Path $root 'Source\TestPlugin\TestPlugin.h'), "extra`n$epicNotice`n$notice`n")
+            $override = Get-TestCopyrightOverride `
+                -Path 'Source/TestPlugin/TestPlugin.h' -Notices @($epicNotice, $notice)
+            { Test-SourceCopyright -PluginPath $root -ExpectedNotice $notice `
+                    -SourceCopyrightOverrides @($override) } | Should -Throw
+        }
+
+        It 'rejects a reordered override sequence' {
+            [System.IO.File]::WriteAllText(
+                (Join-Path $root 'Source\TestPlugin\TestPlugin.h'), "$notice`n$epicNotice`n")
+            $override = Get-TestCopyrightOverride `
+                -Path 'Source/TestPlugin/TestPlugin.h' -Notices @($epicNotice, $notice)
+            { Test-SourceCopyright -PluginPath $root -ExpectedNotice $notice `
+                    -SourceCopyrightOverrides @($override) } | Should -Throw
+        }
+
+        It 'rejects an empty overridden file' {
+            [System.IO.File]::WriteAllText((Join-Path $root 'Source\TestPlugin\TestPlugin.h'), '')
+            $override = Get-TestCopyrightOverride `
+                -Path 'Source/TestPlugin/TestPlugin.h' -Notices @($epicNotice, $notice)
+            { Test-SourceCopyright -PluginPath $root -ExpectedNotice $notice `
+                    -SourceCopyrightOverrides @($override) } | Should -Throw
+        }
+
+        It 'keeps the default single notice on non-overridden files' {
+            [System.IO.File]::WriteAllText(
+                (Join-Path $root 'Source\TestPlugin\TestPlugin.h'), "$epicNotice`n$notice`n")
+            $override = Get-TestCopyrightOverride `
+                -Path 'Source/TestPlugin/TestPlugin.h' -Notices @($epicNotice, $notice)
+            { Test-SourceCopyright -PluginPath $root -ExpectedNotice $notice `
+                    -SourceCopyrightOverrides @($override) } | Should -Not -Throw
+        }
+
+        It 'reports override path, counts, lines, and mismatch index' {
+            [System.IO.File]::WriteAllText(
+                (Join-Path $root 'Source\TestPlugin\TestPlugin.h'), "// wrong`n$notice`n")
+            $override = Get-TestCopyrightOverride `
+                -Path 'Source/TestPlugin/TestPlugin.h' -Notices @($epicNotice, $notice)
+            $errorRecord = $null
+            try {
+                Test-SourceCopyright -PluginPath $root -ExpectedNotice $notice `
+                    -SourceCopyrightOverrides @($override)
+            }
+            catch {
+                $errorRecord = $_
+            }
+            $errorRecord.Exception.Message | Should -Match 'Source/TestPlugin/TestPlugin.h'
+            $errorRecord.Exception.Message | Should -Match 'override'
+            $errorRecord.Exception.Message | Should -Match 'Expected count: 2'
+            $errorRecord.Exception.Message | Should -Match 'actual count: 2'
+            $errorRecord.Exception.Message | Should -Match 'mismatch index: 1'
+        }
+
+        It 'accepts multiple ordered overrides and the default file together' {
+            [System.IO.File]::WriteAllText(
+                (Join-Path $root 'Source\TestPlugin\TestPlugin.h'), "$epicNotice`n$notice`n")
+            [System.IO.File]::WriteAllText(
+                (Join-Path $root 'Source\TestPlugin\TestPlugin.cpp'), "$epicNotice`n$notice`n")
+            $overrides = @(
+                (Get-TestCopyrightOverride -Path 'Source/TestPlugin/TestPlugin.h' -Notices @($epicNotice, $notice)),
+                (Get-TestCopyrightOverride -Path 'Source/TestPlugin/TestPlugin.cpp' -Notices @($epicNotice, $notice)))
+            { Test-SourceCopyright -PluginPath $root -ExpectedNotice $notice `
+                    -SourceCopyrightOverrides $overrides } | Should -Not -Throw
+        }
+
+        It 'reports default validation failures as default rather than override' {
+            [System.IO.File]::WriteAllText(
+                (Join-Path $root 'Source\TestPlugin\TestPlugin.cpp'), '// wrong`n')
+            $errorRecord = $null
+            try {
+                Test-SourceCopyright -PluginPath $root -ExpectedNotice $notice
+            }
+            catch {
+                $errorRecord = $_
+            }
+            $errorRecord.Exception.Message | Should -Match 'Source/TestPlugin/TestPlugin.cpp'
+            $errorRecord.Exception.Message | Should -Match '\(default\)'
+        }
+
+        It 'rejects an Epic notice on a file without an override' {
+            [System.IO.File]::WriteAllText(
+                (Join-Path $root 'Source\TestPlugin\TestPlugin.cpp'), "$epicNotice`n")
+            { Test-SourceCopyright -PluginPath $root -ExpectedNotice $notice } | Should -Throw
+        }
+
+        It 'imports exactly the two Runtime Asset Import overrides' {
+            $examplePath = Join-Path (Get-Module FabPluginReleaseTools).ModuleBase `
+                'examples\RuntimeAssetImport\FabPluginRelease.json'
+            $configuration = Import-FabPluginReleaseConfiguration -ConfigPath $examplePath -EngineVersion '5.8'
+            @($configuration.sourceCopyrightOverrides).Count | Should -Be 2
+            @($configuration.sourceCopyrightOverrides.path) | Should -Contain `
+                'Source/RuntimeAssetImport/Private/RuntimeAssetImport.cpp'
+            @($configuration.sourceCopyrightOverrides.path) | Should -Contain `
+                'Source/RuntimeAssetImport/Public/RuntimeAssetImport.h'
+        }
+
+        It 'imports the Runtime Asset Import notices in exact Epic then publisher order' {
+            $examplePath = Join-Path (Get-Module FabPluginReleaseTools).ModuleBase `
+                'examples\RuntimeAssetImport\FabPluginRelease.json'
+            $configuration = Import-FabPluginReleaseConfiguration -ConfigPath $examplePath -EngineVersion '5.8'
+            foreach ($override in @($configuration.sourceCopyrightOverrides)) {
+                @($override.notices).Count | Should -Be 2
+                @($override.notices)[0] | Should -BeExactly '// Copyright Epic Games, Inc. All Rights Reserved.'
+                @($override.notices)[1] | Should -BeExactly $notice
+            }
+        }
+
+        It 'keeps the Runtime Asset Import publisher-only files out of overrides' {
+            $examplePath = Join-Path (Get-Module FabPluginReleaseTools).ModuleBase `
+                'examples\RuntimeAssetImport\FabPluginRelease.json'
+            $configuration = Import-FabPluginReleaseConfiguration -ConfigPath $examplePath -EngineVersion '5.8'
+            $paths = @($configuration.sourceCopyrightOverrides.path)
+            $paths | Should -Not -Contain 'Source/RuntimeAssetImport/Public/LogAssetConstructor.h'
+            $paths | Should -Not -Contain 'Source/RuntimeAssetImport/Public/LogAssetLoader.h'
+            $paths | Should -Not -Contain 'Source/RuntimeAssetImport/Public/HasFeatureFix.h'
+            $paths | Should -Not -Contain 'Source/RuntimeAssetImportTest/Private/RuntimeAssetImportTest.cpp'
         }
     }
 

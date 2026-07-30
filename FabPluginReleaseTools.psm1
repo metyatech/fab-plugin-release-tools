@@ -3,7 +3,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$script:ToolVersion = '0.2.0'
+$script:ToolVersion = '0.3.0'
 $script:MaximumPackageBytes = 15L * 1024L * 1024L * 1024L
 $script:CopyrightExtensions = @('.h', '.hh', '.hpp', '.inl', '.ipp', '.cpp', '.cc', '.cxx')
 $script:ForbiddenTopLevelDirectories = @('Binaries', 'Build', 'Intermediate', 'Saved', 'DerivedDataCache')
@@ -354,6 +354,73 @@ function ConvertTo-NormalizedPathArray {
     return ,$result
 }
 
+function ConvertTo-NormalizedSourceCopyrightOverride {
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [object[]]$Values,
+
+        [Parameter(Mandatory)]
+        [string]$PublisherNotice
+    )
+
+    $result = [System.Collections.Generic.List[object]]::new()
+    $paths = [System.Collections.Generic.List[string]]::new()
+    foreach ($value in $Values) {
+        if ($null -eq $value) {
+            throw 'sourceCopyrightOverrides must contain objects.'
+        }
+        $pathProperty = $value.PSObject.Properties['path']
+        $noticesProperty = $value.PSObject.Properties['notices']
+        if ($null -eq $pathProperty -or $null -eq $noticesProperty) {
+            throw 'Each sourceCopyrightOverrides item must contain path and notices.'
+        }
+        $rawPath = [string]$pathProperty.Value
+        if ($rawPath -ne $rawPath.Trim()) {
+            throw "sourceCopyrightOverrides.path contains leading or trailing whitespace: '$rawPath'"
+        }
+        if ($rawPath.EndsWith('/') -or $rawPath.EndsWith('\')) {
+            throw "sourceCopyrightOverrides.path must not have a trailing separator: '$rawPath'"
+        }
+        $path = ConvertTo-NormalizedRelativePath `
+            -Path $rawPath -PropertyName 'sourceCopyrightOverrides.path'
+        if (-not $path.StartsWith('Source/', [System.StringComparison]::OrdinalIgnoreCase) -or
+            $path.Equals('Source', [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "sourceCopyrightOverrides.path must name a file below Source/: '$path'"
+        }
+
+        $notices = @($noticesProperty.Value | ForEach-Object { [string]$_ })
+        if ($notices.Count -lt 2) {
+            throw "sourceCopyrightOverrides.notices must contain at least two notices for '$path'."
+        }
+        foreach ($notice in $notices) {
+            if ([string]::IsNullOrWhiteSpace($notice)) {
+                throw "sourceCopyrightOverrides.notices contains an empty notice for '$path'."
+            }
+            if ($notice -ne $notice.Trim()) {
+                throw "sourceCopyrightOverrides.notices contains a notice with leading or trailing whitespace for '$path'."
+            }
+            if ($notice.IndexOfAny([char[]]"`r`n") -ge 0) {
+                throw "sourceCopyrightOverrides.notices contains a multi-line notice for '$path'."
+            }
+        }
+        Assert-UniqueStringSet -Values $notices `
+            -PropertyName "sourceCopyrightOverrides.notices for '$path'" -CaseSensitive
+        if ($notices[-1] -cne $PublisherNotice) {
+            throw "sourceCopyrightOverrides.notices for '$path' must end with publisher.copyrightNotice."
+        }
+
+        $paths.Add($path)
+        $result.Add([pscustomobject]@{
+                path    = $path
+                notices = $notices
+            })
+    }
+    Assert-UniqueStringSet -Values $paths.ToArray() `
+        -PropertyName 'sourceCopyrightOverrides.path'
+    return ,$result.ToArray()
+}
+
 function Import-FabPluginReleaseConfiguration {
     param(
         [Parameter(Mandatory)]
@@ -444,6 +511,23 @@ function Import-FabPluginReleaseConfiguration {
     Assert-HttpsUrl -Url ([string]$configuration.publisher.url) -PropertyName 'publisher.url'
     Assert-HttpsUrl -Url ([string]$configuration.documentationUrl) -PropertyName 'documentationUrl'
     Assert-HttpsUrl -Url ([string]$configuration.supportUrl) -PropertyName 'supportUrl'
+
+    $sourceCopyrightOverridesProperty = $configuration.PSObject.Properties['sourceCopyrightOverrides']
+    if ($null -eq $sourceCopyrightOverridesProperty) {
+        $sourceCopyrightOverrides = [System.Array]::CreateInstance([object], 0)
+    }
+    else {
+        $sourceCopyrightOverrides = ConvertTo-NormalizedSourceCopyrightOverride `
+            -Values @($sourceCopyrightOverridesProperty.Value) `
+            -PublisherNotice ([string]$configuration.publisher.copyrightNotice)
+    }
+    if ($null -eq $sourceCopyrightOverridesProperty) {
+        Add-Member -InputObject $configuration -NotePropertyName sourceCopyrightOverrides `
+            -NotePropertyValue ([object[]]$sourceCopyrightOverrides)
+    }
+    else {
+        $configuration.sourceCopyrightOverrides = $sourceCopyrightOverrides
+    }
 
     if ([string]$configuration.content.mode -cnotin $allowedContentModes) {
         throw 'content.mode must be pack, plugin, or none.'
@@ -975,7 +1059,56 @@ function Get-CopyrightFile {
             $isCppFile = $script:CopyrightExtensions -ccontains $_.Extension
             $isThirdParty = $relative.StartsWith('ThirdParty/', [System.StringComparison]::OrdinalIgnoreCase)
             $isBuildScript -or ($isCppFile -and -not $isThirdParty)
-        })
+    })
+}
+
+function Get-ExactSourceCopyrightOverrideFile {
+    param(
+        [Parameter(Mandatory)]
+        [string]$PluginPath,
+
+        [Parameter(Mandatory)]
+        [string]$RelativePath
+    )
+
+    $currentPath = [System.IO.Path]::GetFullPath($PluginPath)
+    $segments = @($RelativePath.Split('/'))
+    for ($index = 0; $index -lt $segments.Count; $index++) {
+        $segment = $segments[$index]
+        $entries = @(Get-ChildItem -LiteralPath $currentPath -Force -ErrorAction Stop)
+        $exactMatches = @($entries | Where-Object {
+                $_.Name.Equals($segment, [System.StringComparison]::Ordinal)
+            })
+        if ($exactMatches.Count -ne 1) {
+            $caseInsensitiveMatches = @($entries | Where-Object {
+                    $_.Name.Equals($segment, [System.StringComparison]::OrdinalIgnoreCase)
+                })
+            if ($caseInsensitiveMatches.Count -eq 1) {
+                $actualPath = $caseInsensitiveMatches[0].FullName
+                for ($remaining = $index + 1; $remaining -lt $segments.Count; $remaining++) {
+                    $actualPath = Join-Path $actualPath $segments[$remaining]
+                }
+                $actualRelative = [System.IO.Path]::GetRelativePath($PluginPath, $actualPath).Replace('\', '/')
+                throw "sourceCopyrightOverrides path '$RelativePath' does not match the file's actual case '$actualRelative'."
+            }
+            throw "sourceCopyrightOverrides path '$RelativePath' does not exist."
+        }
+
+        $entry = $exactMatches[0]
+        if (($entry.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "sourceCopyrightOverrides path '$RelativePath' must not contain a reparse point."
+        }
+        if ($index -lt $segments.Count - 1 -and $entry -isnot [System.IO.DirectoryInfo]) {
+            throw "sourceCopyrightOverrides path '$RelativePath' is not a regular file."
+        }
+        $currentPath = $entry.FullName
+    }
+
+    $resolved = Get-Item -LiteralPath $currentPath -Force
+    if ($resolved -isnot [System.IO.FileInfo]) {
+        throw "sourceCopyrightOverrides path '$RelativePath' is not a regular file."
+    }
+    return $resolved
 }
 
 function Test-SourceCopyright {
@@ -984,21 +1117,79 @@ function Test-SourceCopyright {
         [string]$PluginPath,
 
         [Parameter(Mandatory)]
-        [string]$ExpectedNotice
+        [string]$ExpectedNotice,
+
+        [AllowEmptyCollection()]
+        [object[]]$SourceCopyrightOverrides = @()
     )
 
-    foreach ($file in Get-CopyrightFile -PluginPath $PluginPath) {
+    $copyrightFiles = @(Get-CopyrightFile -PluginPath $PluginPath)
+    $copyrightFilesByPath = [System.Collections.Generic.Dictionary[string, object]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($file in $copyrightFiles) {
+        $relative = [System.IO.Path]::GetRelativePath($PluginPath, $file.FullName).Replace('\', '/')
+        $copyrightFilesByPath[$relative] = $file
+    }
+
+    $overridesByPath = [System.Collections.Generic.Dictionary[string, object]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($override in @($SourceCopyrightOverrides)) {
+        $relative = [string]$override.path
+        $candidate = Get-ExactSourceCopyrightOverrideFile -PluginPath $PluginPath -RelativePath $relative
+        $actualRelative = [System.IO.Path]::GetRelativePath($PluginPath, $candidate.FullName).Replace('\', '/')
+        if (-not $copyrightFilesByPath.ContainsKey($actualRelative)) {
+            throw "sourceCopyrightOverrides path '$relative' is outside the copyright validation scope or uses an unsupported extension."
+        }
+        $overridesByPath.Add($actualRelative, $override)
+    }
+
+    foreach ($file in $copyrightFiles) {
+        $relative = [System.IO.Path]::GetRelativePath($PluginPath, $file.FullName).Replace('\', '/')
+        $override = if ($overridesByPath.ContainsKey($relative)) {
+            $overridesByPath[$relative]
+        }
+        else {
+            $null
+        }
+        $expectedLines = [System.Collections.Generic.List[string]]::new()
+        if ($null -eq $override) {
+            $expectedLines.Add($ExpectedNotice)
+        }
+        else {
+            foreach ($notice in @($override.notices)) {
+                $expectedLines.Add([string]$notice)
+            }
+        }
+
         $content = [System.IO.File]::ReadAllText($file.FullName)
         if ($content.Length -gt 0 -and $content[0] -eq [char]0xFEFF) {
             $content = $content.Substring(1)
         }
-        $actualFirstLine = @($content -split "`r?`n" |
-                Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-                Select-Object -First 1)
-        $actual = if ($actualFirstLine.Count -eq 0) { '' } else { $actualFirstLine[0] }
-        if ($actual -cne $ExpectedNotice) {
-            $relative = [System.IO.Path]::GetRelativePath($PluginPath, $file.FullName).Replace('\', '/')
-            throw "Copyright mismatch in '$relative'. Actual first line: '$actual'. Expected: '$ExpectedNotice'."
+        $actualLines = [System.Collections.Generic.List[string]]::new()
+        foreach ($line in @($content -split "`r`n|`n|`r")) {
+            if (-not [string]::IsNullOrWhiteSpace($line)) {
+                $actualLines.Add([string]$line)
+                if ($actualLines.Count -eq $expectedLines.Count) {
+                    break
+                }
+            }
+        }
+        $mismatchIndex = 0
+        $actualCount = $actualLines.Count
+        $expectedCount = $expectedLines.Count
+        $comparisonCount = [Math]::Min($actualCount, $expectedCount)
+        for ($index = 0; $index -lt $comparisonCount; $index++) {
+            if ($actualLines[$index] -cne $expectedLines[$index]) {
+                $mismatchIndex = $index + 1
+                break
+            }
+        }
+        if ($mismatchIndex -eq 0 -and $actualCount -ne $expectedCount) {
+            $mismatchIndex = $comparisonCount + 1
+        }
+        if ($mismatchIndex -ne 0) {
+            $source = if ($null -eq $override) { 'default' } else { 'override' }
+            throw "Copyright mismatch in '$relative' ($source). Expected count: $expectedCount; expected lines: [$($expectedLines -join ' | ')]; actual count: $actualCount; actual lines: [$($actualLines -join ' | ')]; mismatch index: $mismatchIndex."
         }
     }
 }
@@ -2554,7 +2745,8 @@ function Invoke-FabPluginReleaseCore {
             $descriptor = Read-PluginDescriptor -DescriptorPath $descriptorPath
             Assert-SourcePluginDescriptor -Descriptor $descriptor -Configuration $configuration
             Test-SourceCopyright -PluginPath $resolvedPluginPath `
-                -ExpectedNotice ([string]$configuration.publisher.copyrightNotice)
+                -ExpectedNotice ([string]$configuration.publisher.copyrightNotice) `
+                -SourceCopyrightOverrides @($configuration.sourceCopyrightOverrides)
             Test-UnrealCategorySpecifier -PluginPath $resolvedPluginPath
             $descriptor
         }
