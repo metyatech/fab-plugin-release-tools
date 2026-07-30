@@ -97,14 +97,20 @@ Copyright validation uses `publisher.copyrightNotice` as the required single
 notice for every source file by default. A configuration may add
 `sourceCopyrightOverrides` for specific files below `Source/`; each override
 must provide an ordered array of at least two unique, single-line notices, and
-the final notice must be the publisher notice. The exact ordered prefix of
-non-empty lines is checked, so missing, shifted, or reordered notices fail the
-release.
+the final notice must be the publisher notice. Only the UTF-8 BOM and blank or
+whitespace-only lines before the first notice are ignored. Every notice in the
+sequence must then occupy consecutive physical lines; a blank line inside the
+sequence fails, while blank lines or code after the completed sequence are
+allowed. Missing, shifted, or reordered notices fail the release.
 Overrides do not skip copyright validation, and wildcard paths and directory
 paths are forbidden. Override files must exist as regular non-reparse files,
 match their actual case, and be in the existing copyright scope. Source
 `.Build.cs` files are always checked, including under `Source/ThirdParty/`;
 C/C++ files under `Source/ThirdParty/` remain excluded.
+Override paths must use `/` separators; backslashes are rejected rather than
+converted. Copyright validation also rejects case-insensitive collisions
+between target relative paths instead of allowing one file to overwrite
+another in the index.
 
 This technical gate does not make a legal determination about copyright
 ownership or licensing. Reviewers remain responsible for the legal accuracy of

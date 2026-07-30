@@ -80,10 +80,15 @@ fail configuration validation. `notices` must contain at least two unique
 single-line, non-empty strings with no leading or trailing whitespace. The
 last notice must exactly equal `publisher.copyrightNotice`.
 
-The tool compares exactly as many first non-empty lines as the expected
-sequence, ignoring only a leading UTF-8 BOM and blank lines before the notices.
-A missing, shifted, or reordered line fails; there is no per-file copyright
-skip. Source `.Build.cs` files are always in scope, including under
+The tool ignores only a leading UTF-8 BOM and blank or whitespace-only lines
+before the first notice. Starting at the first non-empty line, it compares
+exactly as many consecutive physical lines as the expected sequence. A blank
+line inside the sequence fails; blank lines or code after the completed
+sequence are allowed. Missing, shifted, or reordered lines fail, and there is
+no per-file copyright skip. Override paths must use `/` separators; a
+backslash is rejected rather than converted. Case-insensitive collisions
+between copyright validation paths also fail instead of overwriting an index
+entry. Source `.Build.cs` files are always in scope, including under
 `Source/ThirdParty/`. C/C++ files under `Source/ThirdParty/` remain outside the
 scope, exactly as they are without an override. This validation is technical
 and does not determine legal ownership or licensing.

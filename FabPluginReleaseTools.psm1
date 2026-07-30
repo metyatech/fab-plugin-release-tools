@@ -3,7 +3,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$script:ToolVersion = '0.3.0'
+$script:ToolVersion = '0.3.1'
 $script:MaximumPackageBytes = 15L * 1024L * 1024L * 1024L
 $script:CopyrightExtensions = @('.h', '.hh', '.hpp', '.inl', '.ipp', '.cpp', '.cc', '.cxx')
 $script:ForbiddenTopLevelDirectories = @('Binaries', 'Build', 'Intermediate', 'Saved', 'DerivedDataCache')
@@ -378,6 +378,9 @@ function ConvertTo-NormalizedSourceCopyrightOverride {
         $rawPath = [string]$pathProperty.Value
         if ($rawPath -ne $rawPath.Trim()) {
             throw "sourceCopyrightOverrides.path contains leading or trailing whitespace: '$rawPath'"
+        }
+        if ($rawPath.Contains('\')) {
+            throw "sourceCopyrightOverrides.path must use forward slashes: '$rawPath'"
         }
         if ($rawPath.EndsWith('/') -or $rawPath.EndsWith('\')) {
             throw "sourceCopyrightOverrides.path must not have a trailing separator: '$rawPath'"
@@ -1111,6 +1114,31 @@ function Get-ExactSourceCopyrightOverrideFile {
     return $resolved
 }
 
+function Get-CopyrightFileIndex {
+    param(
+        [Parameter(Mandatory)]
+        [string]$PluginPath,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [object[]]$Files
+    )
+
+    $index = [System.Collections.Generic.Dictionary[string, object]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($file in $Files) {
+        $relative = [System.IO.Path]::GetRelativePath($PluginPath, $file.FullName).Replace('\', '/')
+        if ($index.ContainsKey($relative)) {
+            $existing = $index[$relative]
+            $existingRelative = [System.IO.Path]::GetRelativePath(
+                $PluginPath, $existing.FullName).Replace('\', '/')
+            throw "Case-insensitive copyright validation path collision: '$existingRelative' and '$relative'"
+        }
+        $index.Add($relative, $file)
+    }
+    return ,$index
+}
+
 function Test-SourceCopyright {
     param(
         [Parameter(Mandatory)]
@@ -1124,12 +1152,7 @@ function Test-SourceCopyright {
     )
 
     $copyrightFiles = @(Get-CopyrightFile -PluginPath $PluginPath)
-    $copyrightFilesByPath = [System.Collections.Generic.Dictionary[string, object]]::new(
-        [System.StringComparer]::OrdinalIgnoreCase)
-    foreach ($file in $copyrightFiles) {
-        $relative = [System.IO.Path]::GetRelativePath($PluginPath, $file.FullName).Replace('\', '/')
-        $copyrightFilesByPath[$relative] = $file
-    }
+    $copyrightFilesByPath = Get-CopyrightFileIndex -PluginPath $PluginPath -Files $copyrightFiles
 
     $overridesByPath = [System.Collections.Generic.Dictionary[string, object]]::new(
         [System.StringComparer]::OrdinalIgnoreCase)
@@ -1165,13 +1188,20 @@ function Test-SourceCopyright {
         if ($content.Length -gt 0 -and $content[0] -eq [char]0xFEFF) {
             $content = $content.Substring(1)
         }
+        $physicalLines = @($content -split "`r`n|`n|`r")
+        $startIndex = -1
+        for ($index = 0; $index -lt $physicalLines.Count; $index++) {
+            if (-not [string]::IsNullOrWhiteSpace($physicalLines[$index])) {
+                $startIndex = $index
+                break
+            }
+        }
         $actualLines = [System.Collections.Generic.List[string]]::new()
-        foreach ($line in @($content -split "`r`n|`n|`r")) {
-            if (-not [string]::IsNullOrWhiteSpace($line)) {
-                $actualLines.Add([string]$line)
-                if ($actualLines.Count -eq $expectedLines.Count) {
-                    break
-                }
+        if ($startIndex -ge 0) {
+            for ($index = $startIndex;
+                $index -lt $physicalLines.Count -and $actualLines.Count -lt $expectedLines.Count;
+                $index++) {
+                $actualLines.Add([string]$physicalLines[$index])
             }
         }
         $mismatchIndex = 0

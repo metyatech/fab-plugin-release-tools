@@ -5,6 +5,14 @@ Keep a Changelog and the project uses Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-30
+
+### Fixed
+
+- Require ordered copyright notices to occupy consecutive physical lines.
+- Allow only forward slashes in `sourceCopyrightOverrides.path`.
+- Reject case-insensitive collisions among copyright validation paths.
+
 ## [0.3.0] - 2026-07-30
 
 ### Added
