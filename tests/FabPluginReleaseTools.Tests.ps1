@@ -899,14 +899,73 @@ InModuleScope FabPluginReleaseTools {
             $configuration.sourceCopyrightOverrides[0].path | Should -BeExactly 'Source/TestPlugin/TestPlugin.h'
         }
 
-        It 'normalizes backslashes while preserving path casing' {
+        It 'rejects backslashes in sourceCopyrightOverrides.path' {
             $source = Get-TestConfigurationObject
             $source.sourceCopyrightOverrides = @(
                 (Get-TestCopyrightOverride -Path 'Source\TestPlugin\TestPlugin.h' -Notices @($epicNotice, $notice)))
             Save-TestConfiguration -Configuration $source -Path $configurationPath
-            $configuration = Import-FabPluginReleaseConfiguration `
-                -ConfigPath $configurationPath -EngineVersion '5.8'
-            $configuration.sourceCopyrightOverrides[0].path | Should -BeExactly 'Source/TestPlugin/TestPlugin.h'
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'accepts a BOM-free consecutive ordered sequence' {
+            [System.IO.File]::WriteAllText(
+                (Join-Path $root 'Source\TestPlugin\TestPlugin.h'), "$epicNotice`n$notice`n")
+            $override = Get-TestCopyrightOverride `
+                -Path 'Source/TestPlugin/TestPlugin.h' -Notices @($epicNotice, $notice)
+            { Test-SourceCopyright -PluginPath $root -ExpectedNotice $notice -SourceCopyrightOverrides @($override) } |
+                Should -Not -Throw
+        }
+
+        It 'accepts a BOM-prefixed consecutive ordered sequence' {
+            [System.IO.File]::WriteAllText(
+                (Join-Path $root 'Source\TestPlugin\TestPlugin.h'), ([char]0xFEFF + "$epicNotice`n$notice`n"))
+            $override = Get-TestCopyrightOverride `
+                -Path 'Source/TestPlugin/TestPlugin.h' -Notices @($epicNotice, $notice)
+            { Test-SourceCopyright -PluginPath $root -ExpectedNotice $notice -SourceCopyrightOverrides @($override) } |
+                Should -Not -Throw
+        }
+
+        It 'accepts leading blank lines before a consecutive ordered sequence' {
+            [System.IO.File]::WriteAllText(
+                (Join-Path $root 'Source\TestPlugin\TestPlugin.h'), "`n`n$epicNotice`n$notice`n")
+            $override = Get-TestCopyrightOverride `
+                -Path 'Source/TestPlugin/TestPlugin.h' -Notices @($epicNotice, $notice)
+            { Test-SourceCopyright -PluginPath $root -ExpectedNotice $notice -SourceCopyrightOverrides @($override) } |
+                Should -Not -Throw
+        }
+
+        It 'rejects a blank line between ordered notices' {
+            [System.IO.File]::WriteAllText(
+                (Join-Path $root 'Source\TestPlugin\TestPlugin.h'), "$epicNotice`n`n$notice`n")
+            $override = Get-TestCopyrightOverride `
+                -Path 'Source/TestPlugin/TestPlugin.h' -Notices @($epicNotice, $notice)
+            { Test-SourceCopyright -PluginPath $root -ExpectedNotice $notice -SourceCopyrightOverrides @($override) } |
+                Should -Throw
+        }
+
+        It 'rejects a whitespace-only line between ordered notices' {
+            [System.IO.File]::WriteAllText(
+                (Join-Path $root 'Source\TestPlugin\TestPlugin.h'), "$epicNotice`n   `n$notice`n")
+            $override = Get-TestCopyrightOverride `
+                -Path 'Source/TestPlugin/TestPlugin.h' -Notices @($epicNotice, $notice)
+            { Test-SourceCopyright -PluginPath $root -ExpectedNotice $notice -SourceCopyrightOverrides @($override) } |
+                Should -Throw
+        }
+
+        It 'accepts the default publisher notice after leading blank lines' {
+            [System.IO.File]::WriteAllText(
+                (Join-Path $root 'Source\TestPlugin\TestPlugin.cpp'), "`n`n$notice`n")
+            { Test-SourceCopyright -PluginPath $root -ExpectedNotice $notice } | Should -Not -Throw
+        }
+
+        It 'accepts blank lines after a completed ordered sequence' {
+            [System.IO.File]::WriteAllText(
+                (Join-Path $root 'Source\TestPlugin\TestPlugin.h'), "$epicNotice`n$notice`n`n#include ""Example.h""`n")
+            $override = Get-TestCopyrightOverride `
+                -Path 'Source/TestPlugin/TestPlugin.h' -Notices @($epicNotice, $notice)
+            { Test-SourceCopyright -PluginPath $root -ExpectedNotice $notice -SourceCopyrightOverrides @($override) } |
+                Should -Not -Throw
         }
 
         It 'preserves the configured notice order' {
@@ -1232,6 +1291,32 @@ InModuleScope FabPluginReleaseTools {
                 -Path 'Source/ThirdParty/Vendor/Vendor.Build.cs' -Notices @($epicNotice, $notice)
             { Test-SourceCopyright -PluginPath $root -ExpectedNotice $notice `
                     -SourceCopyrightOverrides @($override) } | Should -Not -Throw
+        }
+
+        It 'creates a case-insensitive copyright file index for unique paths' {
+            $files = @(
+                [pscustomobject]@{ FullName = 'C:\fixture\Source\Main\Foo.h' },
+                [pscustomobject]@{ FullName = 'C:\fixture\Source\Main\Bar.cpp' })
+            $index = Get-CopyrightFileIndex -PluginPath 'C:\fixture' -Files $files
+            $index.Count | Should -Be 2
+            $index['Source/Main/Foo.h'].FullName | Should -BeExactly 'C:\fixture\Source\Main\Foo.h'
+            $index['Source/Main/Bar.cpp'].FullName | Should -BeExactly 'C:\fixture\Source\Main\Bar.cpp'
+        }
+
+        It 'rejects a case-insensitive copyright file path collision without overwriting' {
+            $files = @(
+                [pscustomobject]@{ FullName = 'C:\fixture\Source\Main\Foo.h' },
+                [pscustomobject]@{ FullName = 'C:\fixture\Source\Main\foo.h' })
+            $errorRecord = $null
+            try {
+                Get-CopyrightFileIndex -PluginPath 'C:\fixture' -Files $files
+            }
+            catch {
+                $errorRecord = $_
+            }
+            $errorRecord.Exception.Message | Should -Match 'Case-insensitive copyright validation path collision'
+            $errorRecord.Exception.Message | Should -Match 'Source/Main/Foo.h'
+            $errorRecord.Exception.Message | Should -Match 'Source/Main/foo.h'
         }
 
         It 'accepts a BOM and leading blank lines before an ordered sequence' {
