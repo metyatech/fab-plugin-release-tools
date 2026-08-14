@@ -11,6 +11,26 @@ guarantee acceptance by Fab's human review. Product descriptions, media,
 third-party software declarations in the portal, pricing, and other portal-only
 submission work remain manual.
 
+## Fab submission preflight
+
+Portal Technical Information is kept separate from `FabPluginRelease.json`.
+Each product repository carries a root `FabSubmissionMetadata.json`, which is
+validated against [the submission metadata schema](FabSubmissionMetadata.schema.json)
+and cross-checked against the plugin descriptor, release configuration, and
+distribution source modules:
+
+```powershell
+pwsh .\Test-FabPluginSubmission.ps1 `
+  -PluginPath ..\RuntimeAssetImportPlugin
+```
+
+On success, the command writes `FabTechnicalInformation.txt` under
+`artifacts/<PluginName>/submission/`. The text is formatted for direct copying
+into Fab's Technical Information fields. An optional `-PackageZipPath` reports
+standalone license-related files as Review Required warnings and reports `.tps`
+Third Party Software metadata separately; it never changes the meaning of
+`thirdPartyLicenseSets` or fails a package solely because a license file exists.
+
 ## Requirements
 
 - Windows 10 or Windows 11

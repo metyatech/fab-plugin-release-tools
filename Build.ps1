@@ -69,7 +69,7 @@ function Invoke-Analysis {
     Import-Module PSScriptAnalyzer -RequiredVersion $analyzerVersion -Force
     $sourceFiles = @(Get-ChildItem -LiteralPath $PSScriptRoot -Recurse -File |
             Where-Object Extension -In @('.ps1', '.psm1', '.psd1') |
-            Where-Object FullName -NotMatch '[\\/]TestResults[\\/]')
+            Where-Object FullName -NotMatch '[\\/](?:TestResults|artifacts)[\\/]')
     foreach ($file in $sourceFiles) {
         $tokens = $null
         $parseErrors = $null
@@ -87,8 +87,11 @@ function Invoke-Analysis {
             throw "PowerShell formatting drift detected: $($file.FullName)"
         }
     }
-    $findings = @(Invoke-ScriptAnalyzer -Path $PSScriptRoot -Recurse -Settings (
-            Join-Path $PSScriptRoot 'PSScriptAnalyzerSettings.psd1'))
+    $findings = @()
+    foreach ($analysisFile in $sourceFiles) {
+        $findings += @(Invoke-ScriptAnalyzer -Path $analysisFile.FullName -Settings (
+                Join-Path $PSScriptRoot 'PSScriptAnalyzerSettings.psd1'))
+    }
     if ($findings.Count -gt 0) {
         $findings | Format-Table -AutoSize | Out-String | Write-Output
         throw "PSScriptAnalyzer reported $($findings.Count) Error/Warning finding(s)."
