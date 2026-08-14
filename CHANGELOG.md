@@ -5,6 +5,12 @@ Keep a Changelog and the project uses Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-14
+
+- Added independent Fab submission metadata schema and preflight validation.
+- Added hardcoded plugin-location detection and package license inventory reporting.
+- Added copy-ready `FabTechnicalInformation.txt` generation.
+
 ## [0.3.1] - 2026-07-30
 
 ### Fixed
