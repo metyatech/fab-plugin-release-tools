@@ -162,10 +162,16 @@ function Test-SubmissionUrl {
 function Get-HardcodedPluginLocationFinding {
     param(
         [Parameter(Mandatory)]
-        [string]$SourceRoot
+        [string]$SourceRoot,
+
+        [Parameter(Mandatory)]
+        [string]$PluginName
     )
 
     $findings = [System.Collections.Generic.List[string]]::new()
+    $pluginNamePattern = [regex]::Escape($PluginName)
+    $pluginLocationLiteralPattern = '(?i)TEXT\s*\(\s*"[^"]*(?:[\\/])?' +
+        $pluginNamePattern + '(?:[\\/]|")'
     if (-not [System.IO.Directory]::Exists($SourceRoot)) {
         return $findings.ToArray()
     }
@@ -177,8 +183,7 @@ function Get-HardcodedPluginLocationFinding {
             if ($block -match '(?i)FindPlugin\s*\(') {
                 continue
             }
-            if ($block -match '(?i)TEXT\s*\(\s*"[^"]*[\\/][^"]*"\s*\)' -or
-                $block -match '(?i)TEXT\s*\(\s*"[^"]+"\s*\)') {
+            if ($block -match $pluginLocationLiteralPattern) {
                 $relative = [System.IO.Path]::GetRelativePath($SourceRoot, $file.FullName).Replace('\', '/')
                 $findings.Add("${relative}: $($block.Trim())")
             }
@@ -238,12 +243,17 @@ function ConvertTo-TechnicalInformationText {
     $lines.Add('')
     $lines.Add("Number of Blueprints: $($technical.numberOfBlueprints)")
     $lines.Add("Number of C++ Classes: $($technical.numberOfCppClasses)")
-    $lines.Add("Network Replicated: $($technical.networkReplicated)")
+    $networkReplicated = if ($technical.networkReplicated) { 'Yes' } else { 'No' }
+    $lines.Add("Network Replicated: $networkReplicated")
     $lines.Add("Network Replication Notes: $($technical.networkReplicationNotes)")
     $lines.Add("Supported Development Platforms: $([string]::Join(', ', @($technical.supportedDevelopmentPlatforms)))")
     $lines.Add("Supported Target Build Platforms: $([string]::Join(', ', @($technical.supportedTargetBuildPlatforms)))")
-    $lines.Add("Dependencies: $([string]::Join(', ', @($technical.dependencies)))")
-    $lines.Add("Prerequisites: $([string]::Join(', ', @($technical.prerequisites)))")
+    $dependencies = @($technical.dependencies)
+    $prerequisites = @($technical.prerequisites)
+    $dependenciesText = if ($dependencies.Count -eq 0) { 'None' } else { [string]::Join(', ', $dependencies) }
+    $prerequisitesText = if ($prerequisites.Count -eq 0) { 'None' } else { [string]::Join(', ', $prerequisites) }
+    $lines.Add("Dependencies: $dependenciesText")
+    $lines.Add("Prerequisites: $prerequisitesText")
     $lines.Add("Documentation: $($technical.documentationUrl)")
     $example = if ($null -eq $technical.exampleProjectUrl) { 'Not applicable' } else { [string]$technical.exampleProjectUrl }
     $lines.Add("Example Project: $example — $($technical.exampleProjectNotes)")
@@ -306,7 +316,8 @@ try {
         Test-SubmissionUrl -Url ([string]$metadata.technicalInformation.exampleProjectUrl) -Name 'exampleProjectUrl'
     }
 
-    $hardcodedLocations = @(Get-HardcodedPluginLocationFinding -SourceRoot (Join-Path $resolvedPluginPath 'Source'))
+    $hardcodedLocations = @(Get-HardcodedPluginLocationFinding -SourceRoot (Join-Path $resolvedPluginPath 'Source') `
+        -PluginName ([string]$config.pluginName))
     if ($hardcodedLocations.Count -gt 0) {
         throw "Hardcoded plugin location detected:`n$($hardcodedLocations -join "`n")"
     }

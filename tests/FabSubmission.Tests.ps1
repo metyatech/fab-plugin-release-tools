@@ -12,7 +12,11 @@ Describe 'Fab submission preflight' {
                 [Parameter(Mandatory)]
                 [string]$Root,
 
-                [switch]$BadLocation
+                [switch]$BadLocation,
+
+                [switch]$OtherPluginLocation,
+
+                [switch]$NetworkReplicated
             )
 
             [System.IO.Directory]::CreateDirectory((Join-Path $Root 'Config')) | Out-Null
@@ -26,6 +30,9 @@ Describe 'Fab submission preflight' {
                 "// Copyright (c) 2026 metyatech. All rights reserved.`nUCLASS()`nclass UTestPlugin {};`n")
             $location = if ($BadLocation) {
                 'FPaths::ProjectPluginsDir() + TEXT("TestPlugin");'
+            }
+            elseif ($OtherPluginLocation) {
+                'FPaths::Combine(FPaths::ProjectPluginsDir(), TEXT("SomeOtherPlugin"));'
             }
             else {
                 'IPluginManager::Get().FindPlugin(TEXT("TestPlugin"));'
@@ -90,6 +97,10 @@ Describe 'Fab submission preflight' {
   }
 }
 '@)
+            $metadataPath = Join-Path $Root 'FabSubmissionMetadata.json'
+            $metadata = Get-Content -Raw -LiteralPath $metadataPath | ConvertFrom-Json
+            if ($NetworkReplicated) { $metadata.technicalInformation.networkReplicated = $true }
+            $metadata | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $metadataPath
         }
 
         function Invoke-SubmissionFixture {
@@ -114,6 +125,32 @@ Describe 'Fab submission preflight' {
         $result = Invoke-SubmissionFixture -Root $root
         $result.ExitCode | Should -Be 1
         $result.Output | Should -Match 'Hardcoded plugin location detected'
+    }
+
+    It 'permits a different plugin location reference' {
+        $root = Join-Path $TestDrive 'OtherLocation'
+        Initialize-SubmissionFixture -Root $root -OtherPluginLocation
+        $result = Invoke-SubmissionFixture -Root $root
+        $result.ExitCode | Should -Be 0 -Because $result.Output
+        $result.Output | Should -Match 'FAB SUBMISSION CHECK: PASS'
+    }
+
+    It 'renders empty lists and boolean values for Fab copy and paste' {
+        $root = Join-Path $TestDrive 'TechnicalInformation'
+        Initialize-SubmissionFixture -Root $root
+        $result = Invoke-SubmissionFixture -Root $root
+        $result.ExitCode | Should -Be 0 -Because $result.Output
+        $text = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot '..\artifacts\TestPlugin\submission\FabTechnicalInformation.txt')
+        $text | Should -Match '(?m)^Dependencies: None$'
+        $text | Should -Match '(?m)^Prerequisites: None$'
+        $text | Should -Match '(?m)^Network Replicated: No$'
+
+        $root = Join-Path $TestDrive 'TechnicalInformationReplicated'
+        Initialize-SubmissionFixture -Root $root -NetworkReplicated
+        $result = Invoke-SubmissionFixture -Root $root
+        $result.ExitCode | Should -Be 0 -Because $result.Output
+        $text = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot '..\artifacts\TestPlugin\submission\FabTechnicalInformation.txt')
+        $text | Should -Match '(?m)^Network Replicated: Yes$'
     }
 
     It 'reports standalone license files and tps files separately without failing' {
