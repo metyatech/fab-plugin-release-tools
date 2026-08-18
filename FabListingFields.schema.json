@@ -1,0 +1,96 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/metyatech/fab-plugin-release-tools/raw/master/FabListingFields.schema.json",
+  "title": "Fab Listing Fields",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "product",
+    "version",
+    "title",
+    "short_description",
+    "long_description",
+    "product_type",
+    "category",
+    "subcategory",
+    "tags_ordered",
+    "included_format",
+    "engine_versions",
+    "platforms",
+    "license",
+    "personal_price_usd",
+    "professional_price_usd",
+    "mature_content",
+    "generated_with_ai",
+    "allows_usage_with_ai",
+    "promotional_content",
+    "forum_post",
+    "activation",
+    "documentation_url",
+    "support_url",
+    "source_repository_url",
+    "media_order"
+  ],
+  "properties": {
+    "schema_version": { "type": ["string", "number"] },
+    "product": { "type": "string", "minLength": 1 },
+    "version": { "type": "string", "minLength": 1 },
+    "title": { "type": "string", "minLength": 1 },
+    "short_description": { "type": "string", "minLength": 1 },
+    "long_description": { "type": "string", "minLength": 1 },
+    "product_type": { "type": "string", "minLength": 1 },
+    "category": { "type": "string", "minLength": 1 },
+    "subcategory": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "tags_ordered": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "included_format": { "type": "string", "minLength": 1 },
+    "engine_versions": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "platforms": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "license": { "type": "string", "minLength": 1 },
+    "personal_price_usd": { "type": "number", "minimum": 0 },
+    "professional_price_usd": { "type": "number", "minimum": 0 },
+    "mature_content": { "type": "boolean" },
+    "generated_with_ai": { "type": "boolean" },
+    "allows_usage_with_ai": { "type": "boolean" },
+    "promotional_content": { "type": "boolean" },
+    "forum_post": { "type": "boolean" },
+    "activation": { "type": "string", "minLength": 1 },
+    "documentation_url": { "$ref": "#/definitions/httpsUrl" },
+    "support_url": { "$ref": "#/definitions/httpsUrl" },
+    "source_repository_url": { "$ref": "#/definitions/httpsUrl" },
+    "media_order": {
+      "type": "array",
+      "minItems": 2,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "project_file_link": { "$ref": "#/definitions/httpsUrl" },
+    "project_file_links": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/definitions/httpsUrl" }
+    }
+  },
+  "definitions": {
+    "httpsUrl": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://"
+    }
+  }
+}

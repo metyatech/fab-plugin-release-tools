@@ -79,20 +79,58 @@ pwsh .\Invoke-FabProductRelease.ps1 `
 ```
 
 The product repository must also contain `FabListingFields.json` unless
-`-ListingFieldsPath` is supplied. It must provide `title`, `short_description`,
-`long_description`, `engine_versions`, `platforms`, `documentation_url`,
-`support_url`, and the ordered `media_order` array. The listing values are
+`-ListingFieldsPath` is supplied. The file is validated by
+[FabListingFields.schema.json](FabListingFields.schema.json). It contains the
+listing copy, prices, booleans, ordered tags, per-engine metadata, and ordered
+PNG/JPEG media. Existing listing files may retain additional useful metadata.
+The engine versions, platforms, documentation URL, and support URL are
 cross-checked against `FabPluginRelease.json`; media files must be regular
-files below the plugin root.
+files below the plugin root. The first media file is the thumbnail and all
+remaining files are gallery images.
 
 Optional parameters are `-EngineRoot`, `-ListingFieldsPath`,
-`-OutputDirectory`, and `-KeepWorkingDirectory`. `-OutputDirectory` is the
-artifact root; the default is this repository's `artifacts` directory. The
-bundle is written to `artifacts/<pluginName>/FabSubmission/` and contains
-`FabPortalSubmission.json`, `SubmissionChecklist.txt`, ordered media copies,
-the technical information text, and each version's ZIP plus checksum, report,
-and log. The manifest contains only bundle-relative paths and is intended as
-the input contract for future Fab Portal browser automation.
+`-OutputDirectory`, `-KeepWorkingDirectory`, and `-PublishProjectFiles`.
+`-OutputDirectory` is the artifact root; the default is this repository's
+`artifacts` directory. Each run stages under
+`<artifactRoot>/<pluginName>/.sessions/<guid>/` on the same volume as the final
+bundle, so repeated runs do not collide with the lower-level release's
+intentional no-overwrite behavior. Failed runs retain only reports and logs
+under `<artifactRoot>/<pluginName>/failures/<guid>/`; a previous good bundle is
+restored if finalization fails.
+
+For a local validated bundle:
+
+```powershell
+pwsh .\Invoke-FabProductRelease.ps1 -PluginPath <path>
+```
+
+Without `-PublishProjectFiles`, project file links must be supplied in
+`project_file_links` for every engine version. The legacy singular
+`project_file_link` is accepted only for a one-version product. Missing or
+unreachable links leave `portalReady` false and are shown as PENDING in
+`SubmissionChecklist.txt`; no URL is invented.
+
+For a portal-ready bundle with public project files:
+
+```powershell
+pwsh .\Invoke-FabProductRelease.ps1 `
+  -PluginPath <path> `
+  -PublishProjectFiles
+```
+
+`gh` is required only for `-PublishProjectFiles`. The local repository must be
+clean, pushed, and match a public `source_repository_url` on GitHub. The
+command creates or resumes the draft `fab-v<VersionName>` GitHub Release,
+uploads only validated ZIPs without overwriting conflicting assets, verifies
+GitHub SHA-256 digests, publishes the release, and verifies each public
+`browser_download_url` without authentication. Matching assets are reused on
+retry. A successful `portalReady` value means every current automation field,
+media item, package, and public project file link has passed validation.
+
+`FabPortalSubmission.json` is the sole structured input contract for future
+Playwright Fab Portal automation. Its paths are forward-slash paths relative
+to `FabSubmission`; it does not require source inspection or heuristic file
+discovery.
 
 ## Release one engine version
 
