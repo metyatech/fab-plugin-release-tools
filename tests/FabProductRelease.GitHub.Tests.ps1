@@ -7,6 +7,7 @@ Describe 'Fab product GitHub project-file publication boundary' {
     BeforeAll {
         $scriptPath = Join-Path $PSScriptRoot '..\Invoke-FabProductRelease.ps1'
         . $scriptPath -PluginPath $PSScriptRoot
+        $script:PublishTestHead = 'a' * 40
 
         function Get-PublishTestRelease {
             param(
@@ -32,6 +33,59 @@ Describe 'Fab product GitHub project-file publication boundary' {
 
         function Get-PublishTestConfiguration {
             return [pscustomobject]@{ pluginName = 'TestPlugin' }
+        }
+
+        function Get-PublishTestPrerequisite {
+            param(
+                [string]$Head = $script:PublishTestHead
+            )
+
+            return [pscustomobject]@{
+                RepositoryKey = 'metyatech/TestPlugin'
+                Local         = [pscustomobject]@{ Head = $Head }
+            }
+        }
+
+        function Get-PublishTestMarker {
+            param(
+                [Parameter(Mandatory)]
+                [string[]]$EngineVersions,
+
+                [string]$SourceCommit = $script:PublishTestHead
+            )
+
+            return Get-FabProductReleaseMarker -RepositoryKey 'metyatech/TestPlugin' `
+                -PluginName 'TestPlugin' -ProductVersion '1.0.0' `
+                -EngineVersions $EngineVersions -SourceCommit $SourceCommit
+        }
+
+        function Get-PublishTestReleaseInfo {
+            param(
+                [Parameter(Mandatory)]
+                [string[]]$EngineVersions,
+
+                [object[]]$Assets = @(),
+
+                [bool]$IsDraft = $false,
+
+                [string]$SourceCommit = $script:PublishTestHead,
+
+                [string]$TargetCommitish = $script:PublishTestHead
+            )
+
+            return [pscustomobject]@{
+                tagName         = 'fab-v1.0.0'
+                isDraft         = $IsDraft
+                targetCommitish = $TargetCommitish
+                body            = Get-PublishTestMarker -EngineVersions $EngineVersions -SourceCommit $SourceCommit
+                assets          = @($Assets)
+            }
+        }
+    }
+
+    BeforeEach {
+        Mock -CommandName Get-FabProductReleaseTagCommit -MockWith {
+            return $script:PublishTestHead
         }
     }
 
@@ -89,21 +143,16 @@ Describe 'Fab product GitHub project-file publication boundary' {
         $release = Get-PublishTestRelease -EngineVersion '5.8' -Hash $hash
         $script:ReleaseInfoCallCount = 0
         Mock -CommandName Assert-FabProductGitHubPublicationPrerequisite -MockWith {
-            return [pscustomobject]@{ RepositoryKey = 'metyatech/TestPlugin' }
+            return Get-PublishTestPrerequisite
         }
         Mock -CommandName Get-FabProductReleaseInfo -MockWith {
             $script:ReleaseInfoCallCount++
-            $isDraft = $script:ReleaseInfoCallCount -eq 1
-            return [pscustomobject]@{
-                tagName = 'fab-v1.0.0'
-                isDraft = $isDraft
-                body    = "fab-plugin-release-tools`nrepository=metyatech/TestPlugin`npluginName=TestPlugin`nproductVersion=1.0.0`nengineVersions=5.8"
-                assets  = @([pscustomobject]@{
-                        name               = [System.IO.Path]::GetFileName($release.ZipPath)
-                        digest             = "sha256:$hash"
-                        browserDownloadUrl = 'https://github.com/metyatech/TestPlugin/releases/download/fab-v1.0.0/TestPlugin_1.0.0_UE5.8_Win64.zip'
-                    })
-            }
+            $isDraft = $false
+            return Get-PublishTestReleaseInfo -EngineVersions @('5.8') -IsDraft $isDraft -Assets @([pscustomobject]@{
+                    name               = [System.IO.Path]::GetFileName($release.ZipPath)
+                    digest             = "sha256:$hash"
+                    browserDownloadUrl = 'https://github.com/metyatech/TestPlugin/releases/download/fab-v1.0.0/TestPlugin_1.0.0_UE5.8_Win64.zip'
+                })
         }
         Mock -CommandName Invoke-FabProductGhCommand -MockWith {
             param([string[]]$Arguments)
@@ -119,22 +168,166 @@ Describe 'Fab product GitHub project-file publication boundary' {
         @($script:GitHubCalls | Where-Object { $_ -like '*release upload*' }) | Should -HaveCount 0
     }
 
+    It 'requests targetCommitish when reading release information' {
+        $script:GitHubArguments = @()
+        Mock -CommandName Invoke-FabProductGhCommand -MockWith {
+            param([string[]]$Arguments)
+            $script:GitHubArguments = @($Arguments)
+            return '{"tagName":"fab-v1.0.0","isDraft":true,"body":"","assets":[],"targetCommitish":"master"}'
+        }
+        $info = Get-FabProductReleaseInfo -RepositoryKey 'metyatech/TestPlugin' -Tag 'fab-v1.0.0'
+        $info.targetCommitish | Should -BeExactly 'master'
+        [string]::Join(',', $script:GitHubArguments) | Should -Match 'tagName,isDraft,body,assets,targetCommitish'
+    }
+
+    It 'generates a marker with the exact full source commit' {
+        $head = 'c' * 40
+        $marker = Get-PublishTestMarker -EngineVersions @('5.8') -SourceCommit $head
+        $marker | Should -Match "(?m)^sourceCommit=$head$"
+        $marker | Should -Not -Match '(?m)^sourceCommit=[0-9a-fA-F]{1,39}$'
+    }
+
+    It 'creates a new release with the exact validated HEAD target and marker' {
+        $head = 'c' * 40
+        $hash = 'a' * 64
+        $release = Get-PublishTestRelease -EngineVersion '5.8' -Hash $hash
+        $script:ReleaseInfoCallCount = 0
+        $script:GitHubCalls = @()
+        Mock -CommandName Assert-FabProductGitHubPublicationPrerequisite -MockWith {
+            return Get-PublishTestPrerequisite -Head $head
+        }
+        Mock -CommandName Get-FabProductReleaseInfo -MockWith {
+            $script:ReleaseInfoCallCount++
+            if ($script:ReleaseInfoCallCount -eq 1) {
+                return $null
+            }
+            return Get-PublishTestReleaseInfo -EngineVersions @('5.8') `
+                -Assets @([pscustomobject]@{
+                    name               = [System.IO.Path]::GetFileName($release.ZipPath)
+                    digest             = "sha256:$hash"
+                    browserDownloadUrl = 'https://example.invalid/file.zip'
+                }) -SourceCommit $head -TargetCommitish $head
+        }
+        Mock -CommandName Get-FabProductReleaseTagCommit -MockWith { return $head }
+        Mock -CommandName Invoke-FabProductGhCommand -MockWith {
+            param([string[]]$Arguments)
+            $script:GitHubCalls += @([string]::Join(' ', $Arguments))
+            return ''
+        }
+        Mock -CommandName Test-FabProductPublicUrl -MockWith { return $true }
+        [void](Publish-FabProductProjectFile -PluginRoot $TestDrive `
+            -Configuration (Get-PublishTestConfiguration) -Listing (Get-PublishTestListing) `
+            -Releases @($release) -EngineVersions @('5.8') -ProductVersion '1.0.0')
+        $createCall = @($script:GitHubCalls | Where-Object { $_ -like '*release create*' })
+        $createCall | Should -HaveCount 1
+        $createCall[0] | Should -Match "--target $head"
+        $createCall[0] | Should -Match "sourceCommit=$head"
+    }
+
+    It 'rejects a release marker from another source commit before mutation' {
+        $head = 'a' * 40
+        $otherHead = 'b' * 40
+        $release = Get-PublishTestRelease -EngineVersion '5.8' -Hash ('a' * 64)
+        $script:GitHubCalls = @()
+        Mock -CommandName Assert-FabProductGitHubPublicationPrerequisite -MockWith {
+            return Get-PublishTestPrerequisite -Head $head
+        }
+        Mock -CommandName Get-FabProductReleaseInfo -MockWith {
+            return Get-PublishTestReleaseInfo -EngineVersions @('5.8') `
+                -Assets @() -SourceCommit $otherHead -TargetCommitish $head
+        }
+        Mock -CommandName Invoke-FabProductGhCommand -MockWith {
+            param([string[]]$Arguments)
+            $script:GitHubCalls += @([string]::Join(' ', $Arguments))
+            return ''
+        }
+        {
+            Publish-FabProductProjectFile -PluginRoot $TestDrive `
+                -Configuration (Get-PublishTestConfiguration) -Listing (Get-PublishTestListing) `
+                -Releases @($release) -EngineVersions @('5.8') -ProductVersion '1.0.0'
+        } | Should -Throw '*ownership marker mismatch*'
+        @($script:GitHubCalls | Where-Object { $_ -match 'release (create|upload|edit)' }) | Should -HaveCount 0
+    }
+
+    It 'rejects a release target that resolves to another source commit before mutation' {
+        $head = 'a' * 40
+        $otherHead = 'b' * 40
+        $release = Get-PublishTestRelease -EngineVersion '5.8' -Hash ('a' * 64)
+        $script:GitHubCalls = @()
+        Mock -CommandName Assert-FabProductGitHubPublicationPrerequisite -MockWith {
+            return Get-PublishTestPrerequisite -Head $head
+        }
+        Mock -CommandName Get-FabProductReleaseInfo -MockWith {
+            return Get-PublishTestReleaseInfo -EngineVersions @('5.8') `
+                -Assets @() -SourceCommit $head -TargetCommitish $otherHead
+        }
+        Mock -CommandName Invoke-FabProductGhCommand -MockWith {
+            param([string[]]$Arguments)
+            $script:GitHubCalls += @([string]::Join(' ', $Arguments))
+            return ''
+        }
+        {
+            Publish-FabProductProjectFile -PluginRoot $TestDrive `
+                -Configuration (Get-PublishTestConfiguration) -Listing (Get-PublishTestListing) `
+                -Releases @($release) -EngineVersions @('5.8') -ProductVersion '1.0.0'
+        } | Should -Throw '*targetCommitish*not validated local HEAD*'
+        @($script:GitHubCalls | Where-Object { $_ -match 'release (create|upload|edit)' }) | Should -HaveCount 0
+    }
+
+    It 'rejects a tag resolving to another source commit before mutation' {
+        $head = 'a' * 40
+        $otherHead = 'b' * 40
+        $release = Get-PublishTestRelease -EngineVersion '5.8' -Hash ('a' * 64)
+        $script:GitHubCalls = @()
+        Mock -CommandName Assert-FabProductGitHubPublicationPrerequisite -MockWith {
+            return Get-PublishTestPrerequisite -Head $head
+        }
+        Mock -CommandName Get-FabProductReleaseInfo -MockWith {
+            return Get-PublishTestReleaseInfo -EngineVersions @('5.8') `
+                -Assets @() -SourceCommit $head -TargetCommitish $head
+        }
+        Mock -CommandName Get-FabProductReleaseTagCommit -MockWith { return $otherHead }
+        Mock -CommandName Invoke-FabProductGhCommand -MockWith {
+            param([string[]]$Arguments)
+            $script:GitHubCalls += @([string]::Join(' ', $Arguments))
+            return ''
+        }
+        {
+            Publish-FabProductProjectFile -PluginRoot $TestDrive `
+                -Configuration (Get-PublishTestConfiguration) -Listing (Get-PublishTestListing) `
+                -Releases @($release) -EngineVersions @('5.8') -ProductVersion '1.0.0'
+        } | Should -Throw '*tag resolves to source commit*'
+        @($script:GitHubCalls | Where-Object { $_ -match 'release (create|upload|edit)' }) | Should -HaveCount 0
+    }
+
+    It 'resolves a branch/ref target and accepts it only at the validated HEAD' {
+        $head = 'c' * 40
+        Mock -CommandName Get-FabProductReleaseTagCommit -MockWith { return $head }
+        Mock -CommandName Invoke-FabProductGhCommand -MockWith {
+            param([string[]]$Arguments)
+            if ($Arguments[0] -eq 'api' -and $Arguments[1] -like '*git/ref/heads/*') {
+                return ([pscustomobject]@{
+                        object = [pscustomobject]@{ sha = $head; type = 'commit' }
+                    } | ConvertTo-Json -Compress)
+            }
+            throw 'Unexpected GitHub API call in branch/ref resolution test.'
+        }
+        Assert-FabProductReleaseSourceCommit -RepositoryKey 'metyatech/TestPlugin' `
+            -Tag 'fab-v1.0.0' -TargetCommitish 'refs/heads/master' `
+            -ExpectedSourceCommit $head
+    }
+
     It 'rejects an existing conflicting remote asset' {
         $release = Get-PublishTestRelease -EngineVersion '5.8' -Hash ('a' * 64)
         Mock -CommandName Assert-FabProductGitHubPublicationPrerequisite -MockWith {
-            return [pscustomobject]@{ RepositoryKey = 'metyatech/TestPlugin' }
+            return Get-PublishTestPrerequisite
         }
         Mock -CommandName Get-FabProductReleaseInfo -MockWith {
-            return [pscustomobject]@{
-                tagName = 'fab-v1.0.0'
-                isDraft = $true
-                body    = "fab-plugin-release-tools`nrepository=metyatech/TestPlugin`npluginName=TestPlugin`nproductVersion=1.0.0`nengineVersions=5.8"
-                assets  = @([pscustomobject]@{
-                        name               = [System.IO.Path]::GetFileName($release.ZipPath)
-                        digest             = "sha256:$('b' * 64)"
-                        browserDownloadUrl = 'https://example.invalid/file.zip'
-                    })
-            }
+            return Get-PublishTestReleaseInfo -EngineVersions @('5.8') -IsDraft $true -Assets @([pscustomobject]@{
+                    name               = [System.IO.Path]::GetFileName($release.ZipPath)
+                    digest             = "sha256:$('b' * 64)"
+                    browserDownloadUrl = 'https://example.invalid/file.zip'
+                })
         }
         {
             Publish-FabProductProjectFile -PluginRoot $TestDrive `
@@ -149,7 +342,7 @@ Describe 'Fab product GitHub project-file publication boundary' {
         $script:ReleaseInfoCallCount = 0
         $script:GitHubCalls = @()
         Mock -CommandName Assert-FabProductGitHubPublicationPrerequisite -MockWith {
-            return [pscustomobject]@{ RepositoryKey = 'metyatech/TestPlugin' }
+            return Get-PublishTestPrerequisite
         }
         Mock -CommandName Get-FabProductReleaseInfo -MockWith {
             $script:ReleaseInfoCallCount++
@@ -165,12 +358,8 @@ Describe 'Fab product GitHub project-file publication boundary' {
                     browserDownloadUrl = 'https://example.invalid/59.zip'
                 }
             }
-            return [pscustomobject]@{
-                tagName = 'fab-v1.0.0'
-                isDraft = $script:ReleaseInfoCallCount -lt 4
-                body    = "fab-plugin-release-tools`nrepository=metyatech/TestPlugin`npluginName=TestPlugin`nproductVersion=1.0.0`nengineVersions=5.8,5.9"
-                assets  = $assets
-            }
+            return Get-PublishTestReleaseInfo -EngineVersions @('5.8', '5.9') `
+                -IsDraft ($script:ReleaseInfoCallCount -lt 4) -Assets $assets
         }
         Mock -CommandName Invoke-FabProductGhCommand -MockWith {
             param([string[]]$Arguments)
@@ -189,21 +378,17 @@ Describe 'Fab product GitHub project-file publication boundary' {
         $release = Get-PublishTestRelease -EngineVersion '5.8' -Hash ('a' * 64)
         $script:ReleaseInfoCallCount = 0
         Mock -CommandName Assert-FabProductGitHubPublicationPrerequisite -MockWith {
-            return [pscustomobject]@{ RepositoryKey = 'metyatech/TestPlugin' }
+            return Get-PublishTestPrerequisite
         }
         Mock -CommandName Get-FabProductReleaseInfo -MockWith {
             $script:ReleaseInfoCallCount++
             $digest = if ($script:ReleaseInfoCallCount -lt 3) { "sha256:$('a' * 64)" } else { "sha256:$('b' * 64)" }
-            return [pscustomobject]@{
-                tagName = 'fab-v1.0.0'
-                isDraft = $script:ReleaseInfoCallCount -lt 3
-                body    = "fab-plugin-release-tools`nrepository=metyatech/TestPlugin`npluginName=TestPlugin`nproductVersion=1.0.0`nengineVersions=5.8"
-                assets  = @([pscustomobject]@{
-                        name               = [System.IO.Path]::GetFileName($release.ZipPath)
-                        digest             = $digest
-                        browserDownloadUrl = 'https://example.invalid/file.zip'
-                    })
-            }
+            return Get-PublishTestReleaseInfo -EngineVersions @('5.8') `
+                -IsDraft ($script:ReleaseInfoCallCount -lt 3) -Assets @([pscustomobject]@{
+                    name               = [System.IO.Path]::GetFileName($release.ZipPath)
+                    digest             = $digest
+                    browserDownloadUrl = 'https://example.invalid/file.zip'
+                })
         }
         Mock -CommandName Invoke-FabProductGhCommand -MockWith { return '' }
         {
@@ -218,19 +403,14 @@ Describe 'Fab product GitHub project-file publication boundary' {
         @{ Name = 'unreachable'; Url = 'https://example.invalid/file.zip' }) {
         $release = Get-PublishTestRelease -EngineVersion '5.8' -Hash ('a' * 64)
         Mock -CommandName Assert-FabProductGitHubPublicationPrerequisite -MockWith {
-            return [pscustomobject]@{ RepositoryKey = 'metyatech/TestPlugin' }
+            return Get-PublishTestPrerequisite
         }
         Mock -CommandName Get-FabProductReleaseInfo -MockWith {
-            return [pscustomobject]@{
-                tagName = 'fab-v1.0.0'
-                isDraft = $false
-                body    = "fab-plugin-release-tools`nrepository=metyatech/TestPlugin`npluginName=TestPlugin`nproductVersion=1.0.0`nengineVersions=5.8"
-                assets  = @([pscustomobject]@{
-                        name               = [System.IO.Path]::GetFileName($release.ZipPath)
-                        digest             = "sha256:$('a' * 64)"
-                        browserDownloadUrl = $Url
-                    })
-            }
+            return Get-PublishTestReleaseInfo -EngineVersions @('5.8') -Assets @([pscustomobject]@{
+                    name               = [System.IO.Path]::GetFileName($release.ZipPath)
+                    digest             = "sha256:$('a' * 64)"
+                    browserDownloadUrl = $Url
+                })
         }
         Mock -CommandName Test-FabProductPublicUrl -MockWith {
             param([switch]$ThrowOnFailure)

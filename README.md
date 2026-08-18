@@ -123,9 +123,12 @@ clean, pushed, and match a public `source_repository_url` on GitHub. The
 command creates or resumes the draft `fab-v<VersionName>` GitHub Release,
 uploads only validated ZIPs without overwriting conflicting assets, verifies
 GitHub SHA-256 digests, publishes the release, and verifies each public
-`browser_download_url` without authentication. Matching assets are reused on
-retry. A successful `portalReady` value means every current automation field,
-media item, package, and public project file link has passed validation.
+`browser_download_url` without authentication. The release tag and
+`sourceCommit` marker are bound to the exact validated, pushed local HEAD;
+existing releases that resolve to another source commit fail before any remote
+release mutation. Matching assets are reused on retry. A successful
+`portalReady` value means every current automation field, media item, package,
+and public project file link has passed validation.
 
 `FabPortalSubmission.json` is the sole structured input contract for future
 Playwright Fab Portal automation. Its paths are forward-slash paths relative

@@ -680,7 +680,10 @@ function Get-FabProductLocalRepositoryInfo {
 
     $remote = Invoke-FabProductGitCommand -PluginRoot $PluginRoot -Arguments @('remote', 'get-url', 'origin')
     $branch = Invoke-FabProductGitCommand -PluginRoot $PluginRoot -Arguments @('branch', '--show-current')
-    $head = Invoke-FabProductGitCommand -PluginRoot $PluginRoot -Arguments @('rev-parse', 'HEAD')
+    $head = (Invoke-FabProductGitCommand -PluginRoot $PluginRoot -Arguments @('rev-parse', 'HEAD')).Trim()
+    if ($head -notmatch '^[0-9a-fA-F]{40}$') {
+        throw 'The local product Git repository HEAD must be a full 40-character commit SHA.'
+    }
     $status = Invoke-FabProductGitCommand -PluginRoot $PluginRoot -Arguments @('status', '--porcelain', '--untracked-files=all')
     if (-not [string]::IsNullOrWhiteSpace($status)) {
         throw 'The local product Git repository must be clean before publishing project files.'
@@ -760,7 +763,7 @@ function Get-FabProductReleaseInfo {
     try {
         $json = Invoke-FabProductGhCommand -Arguments @(
             'release', 'view', $Tag, '--repo', $RepositoryKey,
-            '--json', 'tagName,isDraft,body,assets')
+            '--json', 'tagName,isDraft,body,assets,targetCommitish')
         return ($json | ConvertFrom-Json -Depth 50)
     }
     catch {
@@ -769,6 +772,181 @@ function Get-FabProductReleaseInfo {
         }
         throw
     }
+}
+
+function Get-FabProductGitHubObjectCommit {
+    param(
+        [Parameter(Mandatory)]
+        [string]$RepositoryKey,
+
+        [Parameter(Mandatory)]
+        [object]$GitObject
+    )
+
+    $current = $GitObject
+    $visited = @{}
+    for ($depth = 0; $depth -lt 8; $depth++) {
+        $objectProperty = $current.PSObject.Properties['object']
+        $object = if ($null -eq $objectProperty) { $current } else { $objectProperty.Value }
+        $sha = [string]$object.sha
+        $type = [string]$object.type
+        if ($sha -notmatch '^[0-9a-fA-F]{40}$') {
+            throw "GitHub returned an invalid Git object SHA for $RepositoryKey."
+        }
+        if ($type -ceq 'commit') {
+            return $sha
+        }
+        if ($type -cne 'tag') {
+            throw "GitHub release target for $RepositoryKey resolved to unsupported Git object type '$type'."
+        }
+        if ($visited.ContainsKey($sha.ToLowerInvariant())) {
+            throw "GitHub release target for $RepositoryKey contains a cyclic annotated tag."
+        }
+        $visited[$sha.ToLowerInvariant()] = $true
+        $tagJson = Invoke-FabProductGhCommand -Arguments @(
+            'api', "repos/$RepositoryKey/git/tags/$sha")
+        try {
+            $current = $tagJson | ConvertFrom-Json -Depth 20
+        }
+        catch {
+            throw "GitHub returned invalid Git tag metadata for $RepositoryKey. $($_.Exception.Message)"
+        }
+    }
+    throw "GitHub release target for $RepositoryKey has too many annotated tag layers."
+}
+
+function Get-FabProductGitHubRefCommit {
+    param(
+        [Parameter(Mandatory)]
+        [string]$RepositoryKey,
+
+        [Parameter(Mandatory)]
+        [ValidateSet('heads', 'tags')]
+        [string]$RefKind,
+
+        [Parameter(Mandatory)]
+        [string]$RefName
+    )
+
+    if ([string]::IsNullOrWhiteSpace($RefName)) {
+        throw "GitHub $RefKind ref name must not be blank."
+    }
+    $encodedRefName = [System.Uri]::EscapeDataString($RefName)
+    $json = Invoke-FabProductGhCommand -Arguments @(
+        'api', "repos/$RepositoryKey/git/ref/$RefKind/$encodedRefName")
+    try {
+        $ref = $json | ConvertFrom-Json -Depth 20
+    }
+    catch {
+        throw "GitHub returned invalid $RefKind ref metadata for $RepositoryKey. $($_.Exception.Message)"
+    }
+    return Get-FabProductGitHubObjectCommit -RepositoryKey $RepositoryKey -GitObject $ref
+}
+
+function Get-FabProductReleaseTargetCommit {
+    param(
+        [Parameter(Mandatory)]
+        [string]$RepositoryKey,
+
+        [Parameter(Mandatory)]
+        [string]$TargetCommitish
+    )
+
+    $target = $TargetCommitish.Trim()
+    if ([string]::IsNullOrWhiteSpace($target)) {
+        throw "GitHub release targetCommitish is missing for $RepositoryKey."
+    }
+    if ($target -match '^[0-9a-fA-F]{40}$') {
+        return $target
+    }
+    if ($target -match '^refs/(?<kind>heads|tags)/(?<name>.+)$') {
+        return Get-FabProductGitHubRefCommit -RepositoryKey $RepositoryKey `
+            -RefKind $Matches.kind -RefName $Matches.name
+    }
+    if ($target -match '^(?<kind>heads|tags)/(?<name>.+)$') {
+        return Get-FabProductGitHubRefCommit -RepositoryKey $RepositoryKey `
+            -RefKind $Matches.kind -RefName $Matches.name
+    }
+    try {
+        return Get-FabProductGitHubRefCommit -RepositoryKey $RepositoryKey `
+            -RefKind 'heads' -RefName $target
+    }
+    catch {
+        if ($_.Exception.Message -notmatch '(?i)(not found|HTTP 404)') {
+            throw
+        }
+    }
+    return Get-FabProductGitHubRefCommit -RepositoryKey $RepositoryKey `
+        -RefKind 'tags' -RefName $target
+}
+
+function Get-FabProductReleaseTagCommit {
+    param(
+        [Parameter(Mandatory)]
+        [string]$RepositoryKey,
+
+        [Parameter(Mandatory)]
+        [string]$Tag
+    )
+
+    return Get-FabProductGitHubRefCommit -RepositoryKey $RepositoryKey `
+        -RefKind 'tags' -RefName $Tag
+}
+
+function Assert-FabProductReleaseSourceCommit {
+    param(
+        [Parameter(Mandatory)]
+        [string]$RepositoryKey,
+
+        [Parameter(Mandatory)]
+        [string]$Tag,
+
+        [Parameter(Mandatory)]
+        [string]$TargetCommitish,
+
+        [Parameter(Mandatory)]
+        [string]$ExpectedSourceCommit
+    )
+
+    if ($ExpectedSourceCommit -notmatch '^[0-9a-fA-F]{40}$') {
+        throw 'The validated local source HEAD must be a full 40-character commit SHA.'
+    }
+    $targetCommit = Get-FabProductReleaseTargetCommit -RepositoryKey $RepositoryKey `
+        -TargetCommitish $TargetCommitish
+    if ([string]::Compare($targetCommit, $ExpectedSourceCommit, [System.StringComparison]::OrdinalIgnoreCase) -ne 0) {
+        throw "Existing GitHub Release $Tag targetCommitish '$TargetCommitish' resolves to source commit '$targetCommit', not validated local HEAD '$ExpectedSourceCommit'."
+    }
+    $tagCommit = Get-FabProductReleaseTagCommit -RepositoryKey $RepositoryKey -Tag $Tag
+    if ([string]::Compare($tagCommit, $ExpectedSourceCommit, [System.StringComparison]::OrdinalIgnoreCase) -ne 0) {
+        throw "Existing GitHub Release $Tag tag resolves to source commit '$tagCommit', not validated local HEAD '$ExpectedSourceCommit'."
+    }
+}
+
+function Assert-FabProductReleaseOwnership {
+    param(
+        [Parameter(Mandatory)]
+        [string]$RepositoryKey,
+
+        [Parameter(Mandatory)]
+        [string]$Tag,
+
+        [Parameter(Mandatory)]
+        [object]$ReleaseInfo,
+
+        [Parameter(Mandatory)]
+        [string]$Marker,
+
+        [Parameter(Mandatory)]
+        [string]$ExpectedSourceCommit
+    )
+
+    if ([string]$ReleaseInfo.tagName -cne $Tag -or
+        -not ([string]$ReleaseInfo.body).Contains($Marker)) {
+        throw "Existing GitHub Release $Tag has conflicting target or source metadata (ownership marker mismatch)."
+    }
+    Assert-FabProductReleaseSourceCommit -RepositoryKey $RepositoryKey -Tag $Tag `
+        -TargetCommitish ([string]$ReleaseInfo.targetCommitish) `
+        -ExpectedSourceCommit $ExpectedSourceCommit
 }
 
 function Get-FabProductReleaseMarker {
@@ -783,10 +961,16 @@ function Get-FabProductReleaseMarker {
         [string]$ProductVersion,
 
         [Parameter(Mandatory)]
-        [string[]]$EngineVersions
+        [string[]]$EngineVersions,
+
+        [Parameter(Mandatory)]
+        [string]$SourceCommit
     )
 
-    return "fab-plugin-release-tools`nrepository=$RepositoryKey`npluginName=$PluginName`nproductVersion=$ProductVersion`nengineVersions=$([string]::Join(',', $EngineVersions))"
+    if ($SourceCommit -notmatch '^[0-9a-fA-F]{40}$') {
+        throw 'sourceCommit must be a full 40-character commit SHA.'
+    }
+    return "fab-plugin-release-tools`nrepository=$RepositoryKey`npluginName=$PluginName`nproductVersion=$ProductVersion`nengineVersions=$([string]::Join(',', $EngineVersions))`nsourceCommit=$SourceCommit"
 }
 
 function Test-FabProductPublicUrl {
@@ -840,19 +1024,28 @@ function Publish-FabProductProjectFile {
     $prerequisites = Assert-FabProductGitHubPublicationPrerequisite `
         -PluginRoot $PluginRoot -SourceRepositoryUrl $Listing.SourceRepositoryUrl
     $tag = Assert-FabProductReleaseTag -VersionName $ProductVersion
+    $sourceCommit = [string]$prerequisites.Local.Head
+    if ($sourceCommit -notmatch '^[0-9a-fA-F]{40}$') {
+        throw 'The validated local source HEAD must be a full 40-character commit SHA.'
+    }
     $marker = Get-FabProductReleaseMarker -RepositoryKey $prerequisites.RepositoryKey `
         -PluginName ([string]$Configuration.pluginName) -ProductVersion $ProductVersion `
-        -EngineVersions $EngineVersions
+        -EngineVersions $EngineVersions -SourceCommit $sourceCommit
     $releaseInfo = Get-FabProductReleaseInfo -RepositoryKey $prerequisites.RepositoryKey -Tag $tag
     if ($null -eq $releaseInfo) {
         [void](Invoke-FabProductGhCommand -Arguments @(
                 'release', 'create', $tag, '--repo', $prerequisites.RepositoryKey,
-                '--draft', '--title', $tag, '--notes', $marker))
+                '--target', $sourceCommit, '--draft', '--title', $tag, '--notes', $marker))
         $releaseInfo = Get-FabProductReleaseInfo -RepositoryKey $prerequisites.RepositoryKey -Tag $tag
+        if ($null -eq $releaseInfo) {
+            throw "GitHub Release $tag could not be read after creation."
+        }
+        Assert-FabProductReleaseOwnership -RepositoryKey $prerequisites.RepositoryKey -Tag $tag `
+            -ReleaseInfo $releaseInfo -Marker $marker -ExpectedSourceCommit $sourceCommit
     }
-    elseif ([string]$releaseInfo.tagName -cne $tag -or
-        -not ([string]$releaseInfo.body).Contains($marker)) {
-        throw "Existing GitHub Release $tag has conflicting target or source metadata."
+    else {
+        Assert-FabProductReleaseOwnership -RepositoryKey $prerequisites.RepositoryKey -Tag $tag `
+            -ReleaseInfo $releaseInfo -Marker $marker -ExpectedSourceCommit $sourceCommit
     }
 
     foreach ($release in $Releases) {
