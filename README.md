@@ -66,7 +66,37 @@ also omit user information, query, and fragment from absolute HTTP(S) Git
 remote URLs; SCP-style remotes such as `git@github.com:owner/repo.git` are kept
 unchanged.
 
-## Release a plugin
+## Release a product
+
+The preferred product-level command reads every version in
+`FabPluginRelease.json.engineVersions`, builds them in numeric Unreal minor
+version order, runs submission preflight for every generated ZIP, and creates
+one atomic `FabSubmission` bundle:
+
+```powershell
+pwsh .\Invoke-FabProductRelease.ps1 `
+  -PluginPath ..\ServerManageToolPlugin
+```
+
+The product repository must also contain `FabListingFields.json` unless
+`-ListingFieldsPath` is supplied. It must provide `title`, `short_description`,
+`long_description`, `engine_versions`, `platforms`, `documentation_url`,
+`support_url`, and the ordered `media_order` array. The listing values are
+cross-checked against `FabPluginRelease.json`; media files must be regular
+files below the plugin root.
+
+Optional parameters are `-EngineRoot`, `-ListingFieldsPath`,
+`-OutputDirectory`, and `-KeepWorkingDirectory`. `-OutputDirectory` is the
+artifact root; the default is this repository's `artifacts` directory. The
+bundle is written to `artifacts/<pluginName>/FabSubmission/` and contains
+`FabPortalSubmission.json`, `SubmissionChecklist.txt`, ordered media copies,
+the technical information text, and each version's ZIP plus checksum, report,
+and log. The manifest contains only bundle-relative paths and is intended as
+the input contract for future Fab Portal browser automation.
+
+## Release one engine version
+
+`Invoke-FabPluginRelease.ps1` remains the lower-level single-engine command:
 
 ```powershell
 pwsh .\Invoke-FabPluginRelease.ps1 `
