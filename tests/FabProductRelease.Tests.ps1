@@ -66,15 +66,36 @@ Describe 'Fab product release orchestration' {
             }
             Write-ProductFixtureJson -Value $configuration `
                 -Path (Join-Path $Root 'FabPluginRelease.json')
+            Write-ProductFixtureJson -Value ([ordered]@{
+                    VersionName = '1.0.0'
+                }) -Path (Join-Path $Root 'TestPlugin.uplugin')
             $listing = [ordered]@{
-                title             = 'Test Plugin'
-                short_description = 'Short description.'
-                long_description  = 'Long description.'
-                engine_versions   = @($EngineVersions)
-                platforms         = @($Platforms)
-                documentation_url = $configuration.documentationUrl
-                support_url       = $configuration.supportUrl
-                media_order       = @($MediaOrder)
+                schema_version          = '1.0'
+                product                 = 'Test Plugin'
+                version                 = '1.0.0'
+                title                   = 'Test Plugin'
+                short_description       = 'Short description.'
+                long_description        = 'Long description.'
+                product_type            = 'Tools & Plugins'
+                category                = 'Tools & Plugins'
+                subcategory             = @('Testing')
+                tags_ordered            = @('Plugin', 'Testing')
+                included_format         = 'Unreal Engine'
+                engine_versions         = @($EngineVersions)
+                platforms               = @($Platforms)
+                license                 = 'Fab Standard License'
+                personal_price_usd      = 0
+                professional_price_usd  = 0
+                mature_content          = $false
+                generated_with_ai       = $false
+                allows_usage_with_ai   = $false
+                promotional_content    = $false
+                forum_post              = $false
+                activation              = 'Manual activation'
+                documentation_url      = $configuration.documentationUrl
+                support_url             = $configuration.supportUrl
+                source_repository_url  = 'https://github.com/metyatech/TestPlugin'
+                media_order             = @($MediaOrder)
             }
             Write-ProductFixtureJson -Value $listing `
                 -Path (Join-Path $Root 'FabListingFields.json')
@@ -121,6 +142,7 @@ Describe 'Fab product release orchestration' {
 
     BeforeEach {
         $script:ProductReleaseInvocations = [System.Collections.Generic.List[string]]::new()
+        $script:ProductReleaseOutputPaths = [System.Collections.Generic.List[string]]::new()
         $script:ProductSubmissionInvocations = [System.Collections.Generic.List[string]]::new()
         $script:ProductReleaseFailureVersion = $null
         $script:ProductSubmissionFailureVersion = $null
@@ -130,6 +152,7 @@ Describe 'Fab product release orchestration' {
                 [string]$OutputPath
             )
             $script:ProductReleaseInvocations.Add($EngineVersion)
+            $script:ProductReleaseOutputPaths.Add($OutputPath)
             if ($EngineVersion -ceq $script:ProductReleaseFailureVersion) {
                 throw "intentional release failure for UE$EngineVersion"
             }
@@ -153,6 +176,13 @@ Describe 'Fab product release orchestration' {
         }
     }
 
+    It 'loads Invoke-FabPluginRelease from this repository module after dot-sourcing' {
+        $command = Get-Command Invoke-FabPluginRelease -ErrorAction Stop
+        $command.Source | Should -Be 'FabPluginReleaseTools'
+        (Get-Module FabPluginReleaseTools).ModuleBase | Should -Be (
+            (Join-Path $PSScriptRoot '..' | Resolve-Path).Path)
+    }
+
     It 'invokes every configured engine version exactly once' {
         $root = Join-Path $TestDrive 'EveryVersion'
         $outputRoot = Join-Path $TestDrive 'EveryVersionArtifacts'
@@ -168,6 +198,50 @@ Describe 'Fab product release orchestration' {
         Initialize-ProductFixture -Root $root -EngineVersions @('5.10', '5.9') | Out-Null
         Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot | Out-Null
         @($script:ProductReleaseInvocations) | Should -BeExactly @('5.9', '5.10')
+    }
+
+    It 'uses a same-volume private session for every lower-level release' {
+        $root = Join-Path $TestDrive 'SameVolume'
+        $outputRoot = Join-Path $TestDrive 'SameVolumeArtifacts'
+        Initialize-ProductFixture -Root $root -EngineVersions @('5.8', '5.9') | Out-Null
+        Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot | Out-Null
+        foreach ($path in @($script:ProductReleaseOutputPaths)) {
+            $path | Should -Match ([regex]::Escape((Join-Path $outputRoot 'TestPlugin\.sessions\')))
+            $path | Should -Match '\.sessions\\[^\\]+\\releases\\UE5\.[0-9]+$'
+        }
+        (Join-Path $outputRoot 'TestPlugin\product') | Should -Not -Exist
+        ([System.IO.Path]::GetPathRoot($outputRoot)) | Should -Be ([System.IO.Path]::GetPathRoot(
+                (Join-Path $outputRoot 'TestPlugin\FabSubmission')))
+    }
+
+    It 'safely replaces the previous bundle on a repeated successful run' {
+        $root = Join-Path $TestDrive 'Repeated'
+        $outputRoot = Join-Path $TestDrive 'RepeatedArtifacts'
+        Initialize-ProductFixture -Root $root -EngineVersions @('5.8', '5.9') | Out-Null
+        Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot | Out-Null
+        $bundleRoot = Join-Path $outputRoot 'TestPlugin\FabSubmission'
+        [System.IO.File]::WriteAllText((Join-Path $bundleRoot 'stale.txt'), 'stale')
+        Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot | Out-Null
+        (Join-Path $bundleRoot 'stale.txt') | Should -Not -Exist
+        @(Get-ChildItem -LiteralPath (Join-Path $bundleRoot 'packages') -Recurse -File -Filter '*.zip') |
+            Should -HaveCount 2
+        (Join-Path $outputRoot 'TestPlugin\product') | Should -Not -Exist
+    }
+
+    It 'preserves the previous known-good bundle and writes failure diagnostics' {
+        $root = Join-Path $TestDrive 'RepeatedFailure'
+        $outputRoot = Join-Path $TestDrive 'RepeatedFailureArtifacts'
+        Initialize-ProductFixture -Root $root -EngineVersions @('5.8', '5.9') | Out-Null
+        Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot | Out-Null
+        $bundleRoot = Join-Path $outputRoot 'TestPlugin\FabSubmission'
+        $before = Get-Content -Raw -LiteralPath (Join-Path $bundleRoot 'FabPortalSubmission.json')
+        $script:ProductReleaseFailureVersion = '5.9'
+        { Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot } |
+            Should -Throw '*Failure diagnostics:*'
+        Get-Content -Raw -LiteralPath (Join-Path $bundleRoot 'FabPortalSubmission.json') | Should -BeExactly $before
+        $failureDirectories = @(Get-ChildItem -LiteralPath (Join-Path $outputRoot 'TestPlugin\failures') -Directory)
+        $failureDirectories | Should -HaveCount 1
+        (Join-Path $failureDirectories[0].FullName 'failure.txt') | Should -Exist
     }
 
     It 'stops immediately when the first engine version fails' {
@@ -208,14 +282,14 @@ Describe 'Fab product release orchestration' {
     It 'rejects missing media' {
         $root = Join-Path $TestDrive 'MissingMedia'
         $outputRoot = Join-Path $TestDrive 'MissingMediaArtifacts'
-        Initialize-ProductFixture -Root $root -MediaOrder @('Media\Missing.png') | Out-Null
+        Initialize-ProductFixture -Root $root -MediaOrder @('Media\Missing.png', 'Media\Second.png') | Out-Null
         { Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot } | Should -Throw '*Media file is missing*'
     }
 
     It 'rejects media path traversal' {
         $root = Join-Path $TestDrive 'MediaTraversal'
         $outputRoot = Join-Path $TestDrive 'MediaTraversalArtifacts'
-        Initialize-ProductFixture -Root $root -MediaOrder @('..\outside.png') | Out-Null
+        Initialize-ProductFixture -Root $root -MediaOrder @('..\outside.png', 'Media\Second.png') | Out-Null
         { Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot } |
             Should -Throw '*relative path without*'
     }
@@ -240,12 +314,130 @@ Describe 'Fab product release orchestration' {
         @($manifest.engineVersions) | Should -BeExactly @('5.9', '5.10')
         @($manifest.packages.engineVersion) | Should -BeExactly @('5.9', '5.10')
         @($manifest.media.order) | Should -BeExactly @(1, 2)
+        @($manifest.media.role) | Should -BeExactly @('thumbnail', 'gallery')
         @($manifest.media.sourceRelativePath) | Should -BeExactly @('Media/First.png', 'Media/Second.png')
         @($manifest.media.bundleRelativePath) | Should -BeExactly @('media/001_First.png', 'media/002_Second.png')
+        @($manifest.media.fileName) | Should -BeExactly @('First.png', 'Second.png')
         @($manifest.packages.bundleRelativePath) | Should -BeExactly @(
             'packages/UE5.9/TestPlugin_1.0.0_UE5.9_Win64.zip',
             'packages/UE5.10/TestPlugin_1.0.0_UE5.10_Win64.zip')
         $manifest.technicalInformationFile | Should -BeExactly 'submission/FabTechnicalInformation.txt'
+        $manifest.schemaVersion | Should -Be 2
+        $manifest.productVersion | Should -BeExactly '1.0.0'
+        $manifest.portalReady | Should -BeFalse
+        @($manifest.packages | Where-Object { $null -ne $_.projectFileLink }) | Should -HaveCount 0
+    }
+
+    It 'accepts the existing extended listing metadata without discarding it' {
+        $root = Join-Path $TestDrive 'ExtendedListing'
+        $outputRoot = Join-Path $TestDrive 'ExtendedListingArtifacts'
+        Initialize-ProductFixture -Root $root -EngineVersions @('5.8') | Out-Null
+        $listingPath = Join-Path $root 'FabListingFields.json'
+        $listing = Get-Content -Raw -LiteralPath $listingPath | ConvertFrom-Json
+        $listing | Add-Member -NotePropertyName ai_metadata_note -NotePropertyValue 'Verification metadata.'
+        $listing | Add-Member -NotePropertyName character_counts -NotePropertyValue ([ordered]@{ title = 12 })
+        Write-ProductFixtureJson -Value $listing -Path $listingPath
+        Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot | Out-Null
+        $manifest = Get-Content -Raw -LiteralPath (
+            Join-Path $outputRoot 'TestPlugin\FabSubmission\FabPortalSubmission.json') | ConvertFrom-Json
+        $manifest.productType | Should -BeExactly 'Tools & Plugins'
+        @($manifest.tags) | Should -BeExactly @('Plugin', 'Testing')
+    }
+
+    It 'sets portalReady and maps a configured project_file_link exactly' {
+        $root = Join-Path $TestDrive 'ConfiguredLink'
+        $outputRoot = Join-Path $TestDrive 'ConfiguredLinkArtifacts'
+        Initialize-ProductFixture -Root $root -EngineVersions @('5.8') | Out-Null
+        $listingPath = Join-Path $root 'FabListingFields.json'
+        $listing = Get-Content -Raw -LiteralPath $listingPath | ConvertFrom-Json
+        $listing | Add-Member -NotePropertyName project_file_link `
+            -NotePropertyValue 'https://downloads.example.invalid/TestPlugin_1.0.0_UE5.8_Win64.zip'
+        Write-ProductFixtureJson -Value $listing -Path $listingPath
+        Mock -CommandName Test-FabProductPublicUrl -MockWith { return $true }
+        Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot | Out-Null
+        $manifest = Get-Content -Raw -LiteralPath (
+            Join-Path $outputRoot 'TestPlugin\FabSubmission\FabPortalSubmission.json') | ConvertFrom-Json
+        $manifest.portalReady | Should -BeTrue
+        $manifest.packages[0].projectFileLink | Should -BeExactly $listing.project_file_link
+        (Get-Content -Raw -LiteralPath (Join-Path $outputRoot 'TestPlugin\FabSubmission\SubmissionChecklist.txt')) |
+            Should -Match 'PASS - portal automation input ready'
+    }
+
+    It 'keeps portalReady false for multi-version listings without per-engine links' {
+        $root = Join-Path $TestDrive 'PendingLinks'
+        $outputRoot = Join-Path $TestDrive 'PendingLinksArtifacts'
+        Initialize-ProductFixture -Root $root -EngineVersions @('5.8', '5.9') | Out-Null
+        Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot | Out-Null
+        $manifest = Get-Content -Raw -LiteralPath (
+            Join-Path $outputRoot 'TestPlugin\FabSubmission\FabPortalSubmission.json') | ConvertFrom-Json
+        $manifest.portalReady | Should -BeFalse
+        $checklist = Get-Content -Raw -LiteralPath (Join-Path $outputRoot 'TestPlugin\FabSubmission\SubmissionChecklist.txt')
+        $checklist | Should -Match 'PENDING - Project File Link for UE5.8'
+        $checklist | Should -Not -Match 'PASS - portal automation input ready'
+    }
+
+    It 'maps project_file_links by engine version without reordering' {
+        $root = Join-Path $TestDrive 'ConfiguredLinks'
+        $outputRoot = Join-Path $TestDrive 'ConfiguredLinksArtifacts'
+        Initialize-ProductFixture -Root $root -EngineVersions @('5.10', '5.9') | Out-Null
+        $listingPath = Join-Path $root 'FabListingFields.json'
+        $listing = Get-Content -Raw -LiteralPath $listingPath | ConvertFrom-Json
+        $listing | Add-Member -NotePropertyName project_file_links -NotePropertyValue ([ordered]@{
+            '5.10' = 'https://downloads.example.invalid/TestPlugin_1.0.0_UE5.10_Win64.zip'
+            '5.9'  = 'https://downloads.example.invalid/TestPlugin_1.0.0_UE5.9_Win64.zip'
+        })
+        Write-ProductFixtureJson -Value $listing -Path $listingPath
+        Mock -CommandName Test-FabProductPublicUrl -MockWith { return $true }
+        Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot | Out-Null
+        $manifest = Get-Content -Raw -LiteralPath (
+            Join-Path $outputRoot 'TestPlugin\FabSubmission\FabPortalSubmission.json') | ConvertFrom-Json
+        @($manifest.packages.projectFileLink) | Should -BeExactly @(
+            'https://downloads.example.invalid/TestPlugin_1.0.0_UE5.9_Win64.zip',
+            'https://downloads.example.invalid/TestPlugin_1.0.0_UE5.10_Win64.zip')
+    }
+
+    It 'rejects unsupported media formats' {
+        $root = Join-Path $TestDrive 'UnsupportedMedia'
+        $outputRoot = Join-Path $TestDrive 'UnsupportedMediaArtifacts'
+        Initialize-ProductFixture -Root $root -MediaOrder @('Media\First.gif', 'Media\Second.png') | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $root 'Media\First.gif'), 'gif')
+        { Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot } |
+            Should -Throw '*Unsupported media format*'
+    }
+
+    It 'rejects blank text, negative prices, non-boolean flags, and duplicate tags' -ForEach @(
+        @{ Name = 'blank title'; Mutate = { param($listing) $listing.title = '   ' }; Pattern = '*non-blank text*' },
+        @{ Name = 'negative price'; Mutate = { param($listing) $listing.personal_price_usd = -1 }; Pattern = '*schema.json*' },
+        @{ Name = 'string boolean'; Mutate = { param($listing) $listing.mature_content = 'false' }; Pattern = '*schema.json*' },
+        @{ Name = 'duplicate tag'; Mutate = { param($listing) $listing.tags_ordered = @('Plugin', 'plugin') }; Pattern = '*unique*' }) {
+        $root = Join-Path $TestDrive "InvalidListing-$Name"
+        $outputRoot = Join-Path $TestDrive "InvalidListingArtifacts-$Name"
+        Initialize-ProductFixture -Root $root | Out-Null
+        $listingPath = Join-Path $root 'FabListingFields.json'
+        $listing = Get-Content -Raw -LiteralPath $listingPath | ConvertFrom-Json
+        & $Mutate $listing
+        Write-ProductFixtureJson -Value $listing -Path $listingPath
+        { Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot } | Should -Throw $Pattern
+    }
+
+    It 'sets portalReady only after the mocked GitHub publication boundary verifies every link' {
+        $root = Join-Path $TestDrive 'PublishedLinks'
+        $outputRoot = Join-Path $TestDrive 'PublishedLinksArtifacts'
+        Initialize-ProductFixture -Root $root -EngineVersions @('5.8', '5.9') | Out-Null
+        Mock -CommandName Publish-FabProductProjectFile -MockWith {
+            return [ordered]@{
+                '5.8' = 'https://github.com/metyatech/TestPlugin/releases/download/fab-v1.0.0/TestPlugin_1.0.0_UE5.8_Win64.zip'
+                '5.9' = 'https://github.com/metyatech/TestPlugin/releases/download/fab-v1.0.0/TestPlugin_1.0.0_UE5.9_Win64.zip'
+            }
+        }
+        Invoke-FabProductReleaseCore -PluginPath $root -OutputDirectory $outputRoot `
+            -PublishProjectFiles | Out-Null
+        $manifest = Get-Content -Raw -LiteralPath (
+            Join-Path $outputRoot 'TestPlugin\FabSubmission\FabPortalSubmission.json') | ConvertFrom-Json
+        $manifest.portalReady | Should -BeTrue
+        @($manifest.packages.projectFileLink) | Should -BeExactly @(
+            'https://github.com/metyatech/TestPlugin/releases/download/fab-v1.0.0/TestPlugin_1.0.0_UE5.8_Win64.zip',
+            'https://github.com/metyatech/TestPlugin/releases/download/fab-v1.0.0/TestPlugin_1.0.0_UE5.9_Win64.zip')
     }
 
     It 'publishes all expected package, media, and submission outputs after every gate passes' {
@@ -271,7 +463,7 @@ Describe 'Fab product release orchestration' {
         $checklist = Get-Content -Raw -LiteralPath (Join-Path $bundleRoot 'SubmissionChecklist.txt')
         $checklist | Should -Match 'PASS - UE5.8 built'
         $checklist | Should -Match 'PASS - UE5.9 package validated'
-        $checklist | Should -Match 'PASS - bundle manifest generation'
+        $checklist | Should -Match 'PASS - manifest integrity'
         $checklist | Should -Match 'Future browser automation / Fab human review:'
     }
 }
