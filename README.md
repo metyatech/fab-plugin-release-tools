@@ -286,6 +286,25 @@ git config core.hooksPath .githooks
 PSScriptAnalyzer 1.25.0 without mutating tracked files. The repository hook
 formats only staged PowerShell files and restages them before a commit.
 
+## Fab Portal automation
+
+`FabPortalSubmission.json` is the sole production input to the guarded portal
+automation. Install its pinned Node dependency with `npm ci` from
+`FabPortalAutomation`, then connect to an already authenticated dedicated
+Chrome CDP endpoint:
+
+```powershell
+pwsh .\Invoke-FabPortalSubmission.ps1 `
+  -ManifestPath <FabPortalSubmission.json> `
+  -CdpEndpoint <http://127.0.0.1:port>
+```
+
+The default is read-only verification. Explicit `-SaveDraft` enables a guarded
+draft save, and `-SaveDraft -SubmitForReview` additionally enables submission.
+Pending approval listings cannot be modified; Cancel submission is never
+invoked automatically. The automation never handles Cloudflare, credentials,
+MFA, or browser storage.
+
 ## Migration note
 
 Moving an existing plugin from a repository-specific `PackageForFab.ps1` to

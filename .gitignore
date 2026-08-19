@@ -9,3 +9,4 @@ coverage/
 *.zip
 *.sha256
 *.report.json
+FabPortalAutomation/node_modules/
