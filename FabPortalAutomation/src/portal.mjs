@@ -209,6 +209,7 @@ function createNavigationDiagnostics(context, result) {
 }
 
 async function hardNavigate(page, url, options, diagnostics, initial = false) {
+  await detectManualBlock(page);
   if (diagnostics) {
     diagnostics.hardNavigationCount += 1;
     diagnostics.automationHardNavigationCount += 1;
@@ -216,17 +217,22 @@ async function hardNavigate(page, url, options, diagnostics, initial = false) {
     diagnostics.navigationDiagnostics?.markAutomationNavigation(page);
   }
   try {
-    return await page.goto(url, options);
+    const response = await page.goto(url, options);
+    await detectManualBlock(page);
+    return response;
   } finally {
     diagnostics?.navigationDiagnostics?.clearAutomationNavigation(page);
   }
 }
 
 async function reloadWithDiagnostics(page, options, diagnostics) {
+  await detectManualBlock(page);
   diagnostics.reloadCount += 1;
   diagnostics.navigationDiagnostics?.markAutomationNavigation(page);
   try {
-    return await page.reload(options);
+    const response = await page.reload(options);
+    await detectManualBlock(page);
+    return response;
   } finally {
     diagnostics.navigationDiagnostics?.clearAutomationNavigation(page);
   }
@@ -237,7 +243,7 @@ async function ensureTarget(page, manifest, origin, { passive = false, diagnosti
   const expected = listingEditUrl(manifest.listingId, origin);
   const formatView = page.getByRole('heading', { name: 'Project Versions*', exact: true });
   const formatViewVisible = await formatView.count() > 0 && await formatView.first().isVisible().catch(() => false);
-  if (page.url() !== expected || formatViewVisible) await hardNavigate(page, expected, { waitUntil: 'domcontentloaded' }, diagnostics, initial);
+  if (!pageMatchesTargetListing(page, manifest, origin) || formatViewVisible) await hardNavigate(page, expected, { waitUntil: 'domcontentloaded' }, diagnostics, initial);
   await detectManualBlock(page);
   await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => undefined);
   await detectManualBlock(page);
@@ -315,6 +321,7 @@ async function ensureListingView(page, manifest, origin, guard = null, { passive
       await detectManualBlock(page);
       const beforeMutations = guard?.summary().networkMutationRequestsObserved ?? 0;
       await back.click();
+      await detectManualBlock(page);
       const afterMutations = guard?.summary().networkMutationRequestsObserved ?? beforeMutations;
       if (afterMutations > beforeMutations) throw new Error('Read-only listing navigation caused a network mutation; discovery was aborted safely.');
       await ensureTarget(page, manifest, origin, { passive: true, diagnostics });
@@ -329,8 +336,10 @@ async function ensureListingView(page, manifest, origin, guard = null, { passive
   if (await isVisibleUnique(formatHeading)) {
     const back = page.getByRole('button', { name: 'Back to listing', exact: true });
     if (await isVisibleUnique(back)) {
+      await detectManualBlock(page);
       const beforeMutations = guard?.summary().networkMutationRequestsObserved ?? 0;
       await back.click();
+      await detectManualBlock(page);
       const afterMutations = guard?.summary().networkMutationRequestsObserved ?? beforeMutations;
       if (afterMutations > beforeMutations) throw new Error('Read-only listing navigation caused a network mutation; discovery was aborted safely.');
     }
@@ -351,6 +360,7 @@ async function ensureFormatView(page, manifest, origin, guard, options = {}) {
   await detectManualBlock(page);
   const beforeMutations = guard?.summary().networkMutationRequestsObserved ?? 0;
   await format.click();
+  await detectManualBlock(page);
   await page.waitForTimeout(100);
   const afterMutations = guard?.summary().networkMutationRequestsObserved ?? beforeMutations;
   if (afterMutations > beforeMutations) throw new Error('Read-only format navigation caused a network mutation; discovery was aborted safely.');
@@ -563,6 +573,7 @@ async function waitForSubmitOutcomeSignal(page, beforeDialogs) {
   const knownDialogSignatures = new Set(beforeDialogs.map((dialog) => dialog.signature));
   const deadline = Date.now() + SUBMIT_OUTCOME_TIMEOUT_MS;
   while (Date.now() < deadline) {
+    await detectManualBlock(page);
     const status = await tryReadStatus(page);
     if (SUBMIT_ACCEPTED_STATUSES.has(normalized(status).toLowerCase())) return { kind: 'status', status };
     const newlyVisibleDialogs = (await visibleDialogRecords(page)).filter((dialog) => !knownDialogSignatures.has(dialog.signature));
@@ -575,6 +586,7 @@ async function waitForSubmitOutcomeSignal(page, beforeDialogs) {
 async function waitForAcceptedStatus(page) {
   const deadline = Date.now() + SUBMIT_OUTCOME_TIMEOUT_MS;
   while (Date.now() < deadline) {
+    await detectManualBlock(page);
     const status = await tryReadStatus(page);
     if (SUBMIT_ACCEPTED_STATUSES.has(normalized(status).toLowerCase())) return status;
     await page.waitForTimeout(50);
@@ -595,6 +607,7 @@ async function executeSubmitFlow(page, guard, result) {
   try {
     const beforeDialogs = await visibleDialogRecords(page);
     const submit = await uniqueAction(page, submitCandidates(), 'Submit for review');
+    await detectManualBlock(page);
     await submit.locator.click();
     result.writeInteractionsPerformed += 1;
     const signal = await waitForSubmitOutcomeSignal(page, beforeDialogs);
@@ -610,6 +623,7 @@ async function executeSubmitFlow(page, guard, result) {
         result.postSubmitStatus = await readStatus(page).catch(() => null);
         throw new Error(`Submit confirmation requires exactly one approved confirmation action; found ${confirmationCount}.`);
       }
+      await detectManualBlock(page);
       await confirmation.click();
       result.submitInvoked = true;
       result.writeInteractionsPerformed += 1;
@@ -645,14 +659,8 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
       context = browser.contexts()[0];
     }
     if (!context) throw new Error('The CDP browser has no default context.');
-    if (passiveAttach) {
-      page = selectExistingTargetPage(context, manifestInfo.manifest, origin);
-      targetPageSelectionReason = 'Selected the only existing page with the exact Fab hostname and listing pathname; query/hash ignored.';
-    } else {
-      const fabPages = context.pages().filter((candidate) => { try { return new URL(candidate.url()).hostname === 'www.fab.com'; } catch { return false; } });
-      page = fabPages[0] ?? await context.newPage();
-      targetPageSelectionReason = fabPages.length > 0 ? 'Selected the first existing Fab page for an explicit write-mode operation.' : 'Created a new page for an explicit write-mode operation.';
-    }
+    page = selectExistingTargetPage(context, manifestInfo.manifest, origin);
+    targetPageSelectionReason = 'Selected the only existing page with the exact Fab hostname and listing pathname; query/hash ignored.';
   }
   const guard = installNetworkGuard(context, { mode });
   const result = {
@@ -705,7 +713,7 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
       manualInteraction: interaction,
       maxCycles: maxManualChallengeCycles,
       diagnostics: result,
-      action: (candidatePage) => ensureTarget(candidatePage, manifestInfo.manifest, origin, { passive: passiveAttach, diagnostics: result, initial: true }),
+      action: (candidatePage) => ensureTarget(candidatePage, manifestInfo.manifest, origin, { passive: true, diagnostics: result, initial: true }),
     });
     page = initialTarget.page;
     const initialRead = await withManualChallengeHandoff({
@@ -807,11 +815,13 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
       await detectManualBlock(page);
       guard.setPhase('save');
       const save = await uniqueAction(page, saveCandidates(), 'Save Draft');
+      await detectManualBlock(page);
       await save.locator.click();
       result.saveInvoked = true;
       result.writeInteractionsPerformed += 1;
       await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => undefined);
       guard.setPhase('stage');
+      await detectManualBlock(page);
       await reloadWithDiagnostics(page, { waitUntil: 'domcontentloaded' }, result);
       const postSaveTarget = await withManualChallengeHandoff({
         context,
@@ -867,7 +877,12 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     result.result = 'PASS';
     return result;
   } catch (error) {
-    result.blockers.push(error instanceof Error ? error.message : String(error));
+    let reportedError = error;
+    if (isManualChallengeError(error)) {
+      result.manualChallengeDetected = true;
+      if (result.writeInteractionsPerformed > 0) reportedError = manualChallengeRestartError(result);
+    }
+    result.blockers.push(reportedError instanceof Error ? reportedError.message : String(reportedError));
     if (error?.code === 'MANUAL_CHALLENGE_CANCELLED') result.result = 'MANUAL_CHALLENGE_CANCELLED';
     return result;
   } finally {

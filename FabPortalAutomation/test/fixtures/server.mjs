@@ -19,7 +19,6 @@ function pageMarkup(state, listingId) {
     ? `<div data-status-value>${html(state.status)}</div>`
     : `<div data-testid="listing-status" data-status-value>${html(state.status)}</div>`;
   const listingControls = `
-    ${challengeMarkup}
     <h1>${html(state.title)}</h1>
     ${statusMarkup}
     <label>Title *<input aria-label="Title *" value="${html(state.title)}" ${state.disableFields?.includes('title') ? 'disabled' : ''}></label>
@@ -61,6 +60,7 @@ function pageMarkup(state, listingId) {
   return `<!doctype html><html><head><title>Fab fixture</title></head><body>
   <main id="listing-view">${listingControls}</main>
   <main id="format-view" hidden>${formatControls}</main>
+  ${challengeMarkup}
   <script>
     const listingView = document.querySelector('#listing-view');
     const formatView = document.querySelector('#format-view');
@@ -105,7 +105,7 @@ function pageMarkup(state, listingId) {
     });
     document.querySelector('[data-testid="included-format"]').addEventListener('click', () => setView('format'));
     document.querySelector('[aria-label="Back to listing"]').addEventListener('click', () => setView('listing'));
-    document.querySelector('[data-testid="save"]').addEventListener('click', () => { syncFormatState(); fetch('/api/save', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload()) }); });
+    document.querySelector('[data-testid="save"]').addEventListener('click', () => { syncFormatState(); if (${JSON.stringify(Boolean(state.challengeAfterSave))}) revealChallenge(); fetch('/api/save', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload()) }); });
     const submitRequest = async () => {
       const response = await fetch(${JSON.stringify(state.submitRequestPath ?? '/api/submit')}, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) });
       if (response.ok && ${JSON.stringify((state.submitRequestPath ?? '/api/submit') === '/api/submit' && !state.submitStaysDraft && !state.submitRequestFailure)}) document.querySelector('[data-status-value]').textContent = 'Pending approval';

@@ -38,6 +38,15 @@ async function scenario({ manifest = makeManifest(), state = {}, fixtureOptions 
   }
 }
 
+async function attachedRunSetup({ manifest = makeManifest(), state = {}, mode = 'verify', saveDraftAuthorized = false, manualInteraction = null, query = '' } = {}) {
+  const fixture = await startFixture(fixtureState(manifest, state));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const info = await makeManifestInfo(manifest);
+  await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit${query}`);
+  return { fixture, context, page, info, mode, saveDraftAuthorized, manualInteraction };
+}
+
 test('verify-only performs zero writes', async () => {
   const { result, fixture } = await scenario();
   assert.equal(result.result, 'PASS');
@@ -125,6 +134,134 @@ test('verify-only passively attaches to a ready target without navigation or rel
     assert.equal(result.selectedPageUrl, page.url());
     assert.equal(navigationsAfterAttach, 0);
     assert.equal(networkIdleWaitsAfterAttach, 0);
+    assert.equal(context.pages().length, 1);
+  } finally {
+    await context.close();
+    await fixture.close();
+  }
+});
+
+test('Save mode passively attaches the exact target before startup handoff', async () => {
+  const manifest = makeManifest({ shortDescription: 'Changed after Save handoff' });
+  const setup = await attachedRunSetup({ manifest, state: { shortDescription: 'Old before Save handoff', challengeVisible: true }, mode: 'save', saveDraftAuthorized: true, query: '?foo=bar#section' });
+  const { fixture, context, page, info } = setup;
+  let gotoCount = 0;
+  let reloadCount = 0;
+  const originalGoto = page.goto.bind(page);
+  const originalReload = page.reload.bind(page);
+  page.goto = async (...args) => { gotoCount += 1; return originalGoto(...args); };
+  page.reload = async (...args) => { reloadCount += 1; return originalReload(...args); };
+  const promptState = { entered: false };
+  let releasePrompt;
+  const resultPromise = runPortalAutomation({
+    manifestInfo: info,
+    mode: setup.mode,
+    saveDraftAuthorized: setup.saveDraftAuthorized,
+    origin: fixture.origin,
+    context,
+    manualInteraction: {
+      waitForConfirmation: () => {
+        promptState.entered = true;
+        return new Promise((resolve) => { releasePrompt = resolve; });
+      },
+    },
+  });
+  try {
+    await waitForPrompt(promptState);
+    assert.equal(gotoCount, 0);
+    assert.equal(reloadCount, 0);
+    assert.equal(context.pages().length, 1);
+    fixture.state.challengeVisible = false;
+    await page.evaluate(() => { document.querySelector('[data-testid="fixture-challenge"]').hidden = true; });
+    releasePrompt('confirmed');
+    const result = await resultPromise;
+    assert.equal(result.result, 'PASS');
+    assert.equal(result.saveInvoked, true);
+    assert.equal(gotoCount, 0);
+    assert.equal(reloadCount, 1);
+  } finally {
+    await context.close();
+    await fixture.close();
+  }
+});
+
+test('Submit mode passively attaches the exact target before startup handoff', async () => {
+  const manifest = makeManifest({ shortDescription: 'Changed after Submit handoff' });
+  const setup = await attachedRunSetup({ manifest, state: { shortDescription: 'Old before Submit handoff', challengeVisible: true }, mode: 'submit', saveDraftAuthorized: true, query: '?foo=bar#section' });
+  const { fixture, context, page, info } = setup;
+  let gotoCount = 0;
+  let reloadCount = 0;
+  const originalGoto = page.goto.bind(page);
+  const originalReload = page.reload.bind(page);
+  page.goto = async (...args) => { gotoCount += 1; return originalGoto(...args); };
+  page.reload = async (...args) => { reloadCount += 1; return originalReload(...args); };
+  const promptState = { entered: false };
+  let releasePrompt;
+  const resultPromise = runPortalAutomation({
+    manifestInfo: info,
+    mode: setup.mode,
+    saveDraftAuthorized: setup.saveDraftAuthorized,
+    origin: fixture.origin,
+    context,
+    manualInteraction: {
+      waitForConfirmation: () => {
+        promptState.entered = true;
+        return new Promise((resolve) => { releasePrompt = resolve; });
+      },
+    },
+  });
+  try {
+    await waitForPrompt(promptState);
+    assert.equal(gotoCount, 0);
+    assert.equal(reloadCount, 0);
+    assert.equal(context.pages().length, 1);
+    fixture.state.challengeVisible = false;
+    await page.evaluate(() => { document.querySelector('[data-testid="fixture-challenge"]').hidden = true; });
+    releasePrompt('confirmed');
+    const result = await resultPromise;
+    assert.equal(result.result, 'PASS');
+    assert.equal(result.submitInvoked, true);
+    assert.equal(result.submitAccepted, true);
+    assert.equal(gotoCount, 0);
+    assert.equal(reloadCount, 1);
+  } finally {
+    await context.close();
+    await fixture.close();
+  }
+});
+
+test('write mode chooses the exact target instead of the first Fab tab', async () => {
+  const manifest = makeManifest();
+  const fixture = await startFixture(fixtureState(manifest));
+  const context = await browser.newContext();
+  const unrelated = await context.newPage();
+  const target = await context.newPage();
+  const info = await makeManifestInfo(manifest);
+  try {
+    await unrelated.goto(`${fixture.origin}/portal/listings/22222222-2222-4222-8222-222222222222/edit`);
+    await target.goto(`${fixture.origin}/portal/listings/${listingId}/edit?foo=bar#section`);
+    const result = await runPortalAutomation({ manifestInfo: info, mode: 'save', saveDraftAuthorized: true, origin: fixture.origin, context });
+    assert.equal(result.result, 'PASS');
+    assert.match(result.targetPageSelectionReason, /only existing page with the exact Fab hostname and listing pathname/i);
+    assert.equal(context.pages().length, 2);
+  } finally {
+    await context.close();
+    await fixture.close();
+  }
+});
+
+test('write mode fails without an exact existing target and does not create a page', async () => {
+  const manifest = makeManifest();
+  const fixture = await startFixture(fixtureState(manifest));
+  const context = await browser.newContext();
+  const unrelated = await context.newPage();
+  const info = await makeManifestInfo(manifest);
+  try {
+    await unrelated.goto(`${fixture.origin}/portal/listings/22222222-2222-4222-8222-222222222222/edit`);
+    await assert.rejects(
+      () => runPortalAutomation({ manifestInfo: info, mode: 'save', saveDraftAuthorized: true, origin: fixture.origin, context }),
+      /MANUAL ACTION REQUIRED.*exactly one already-open Fab listing page/i,
+    );
     assert.equal(context.pages().length, 1);
   } finally {
     await context.close();
@@ -379,6 +516,9 @@ test('challenge after Save fails safely and is reported without repeating Save',
   const page = await context.newPage();
   const info = await makeManifestInfo(manifest);
   await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+  let reloadCount = 0;
+  const originalReload = page.reload.bind(page);
+  page.reload = async (...args) => { reloadCount += 1; return originalReload(...args); };
   try {
     const result = await runPortalAutomation({ manifestInfo: info, mode: 'save', saveDraftAuthorized: true, origin: fixture.origin, page, context, manualInteraction: { waitForConfirmation: async () => 'confirmed' } });
     assert.equal(result.result, 'FAIL');
@@ -386,8 +526,38 @@ test('challenge after Save fails safely and is reported without repeating Save',
     assert.equal(result.saveInvoked, true);
     assert.equal(result.submitInvoked, false);
     assert.equal(result.manualChallengeHandoffCount, 0);
+    assert.equal(reloadCount, 0);
     assert.match(result.blockers.join(' '), /after Save|clean listing state/i);
     assert.equal(fixture.mutations.filter((item) => item.pathname === '/api/save').length, 1);
+  } finally {
+    await context.close();
+    await fixture.close();
+  }
+});
+
+test('challenge after a format mutation fails before Back navigation', async () => {
+  const manifest = makeManifest({ packages: [{ engineVersion: '5.8', bundleRelativePath: 'packages/UE5.8/package.zip', sha256: 'b'.repeat(64), projectFileLink: 'https://example.com/new-package.zip' }] });
+  const fixture = await startFixture(fixtureState(manifest, { projectFileLink: 'https://example.com/old-package.zip', challengeAfterFirstMutation: true }));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const info = await makeManifestInfo(manifest);
+  await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+  let gotoCount = 0;
+  const originalGoto = page.goto.bind(page);
+  page.goto = async (...args) => { gotoCount += 1; return originalGoto(...args); };
+  try {
+    const result = await runPortalAutomation({ manifestInfo: info, mode: 'save', saveDraftAuthorized: true, origin: fixture.origin, page, context, manualInteraction: { waitForConfirmation: async () => 'confirmed' } });
+    assert.equal(result.result, 'FAIL');
+    assert.equal(result.manualChallengeDetected, true);
+    assert.equal(result.manualChallengeHandoffCount, 0);
+    assert.equal(result.writeInteractionsPerformed, 1);
+    assert.equal(result.saveInvoked, false);
+    assert.equal(result.submitInvoked, false);
+    assert.equal(gotoCount, 0);
+    assert.equal(await page.locator('#format-view').isVisible(), true);
+    assert.equal(fixture.mutations.some((item) => item.pathname === '/api/save'), false);
+    assert.equal(fixture.mutations.some((item) => item.pathname === '/api/submit'), false);
+    assert.match(result.blockers.join(' '), /staged|clean listing state/i);
   } finally {
     await context.close();
     await fixture.close();
@@ -422,7 +592,7 @@ test('wrong listing UUID blocks after a redirect before mutation', async () => {
   const manifest = makeManifest({ listingId: '22222222-2222-4222-8222-222222222222' });
   const { result, fixture } = await scenario({ manifest, mode: 'save', saveDraftAuthorized: true, fixtureOptions: { redirectListingId: listingId } });
   assert.equal(result.result, 'FAIL');
-  assert.match(result.blockers.join(' '), /UUID mismatch/);
+  assert.match(result.blockers.join(' '), /MANUAL ACTION REQUIRED.*expected listing path/i);
   assert.equal(result.writeInteractionsPerformed, 0);
   assert.equal(fixture.mutations.length, 0);
 });

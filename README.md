@@ -308,7 +308,9 @@ the automation enters a manual handoff: browser operations stop, you complete
 the challenge in the dedicated Chrome, then press Enter here to resume. Use
 `q` followed by Enter to cancel the run. A bounded number of handoff cycles is
 allowed; a challenge after staged mutations fails safely and requires a clean
-restart.
+restart. Verify, Save Draft, and Submit modes all require exactly one already-
+open target listing page; the automation does not create a tab or navigate to
+repair the initial target before the handoff.
 
 A verify-only `PASS` reports that observation completed without a proven
 mismatch; it does not imply write readiness. The run report records
