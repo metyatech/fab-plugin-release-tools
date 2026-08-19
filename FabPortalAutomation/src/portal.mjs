@@ -8,6 +8,16 @@ const REVIEW_LOCKED = new Set(['pending approval', 'pending publication', 'appro
 const KNOWN_STATUSES = ['Pending approval', 'Pending Publication', 'Changes needed', 'Draft', 'Approved', 'Live'];
 const SUBMIT_ACCEPTED_STATUSES = new Set(['pending approval']);
 const SUBMIT_OUTCOME_TIMEOUT_MS = 5000;
+const MANUAL_CHALLENGE_TEXT = [
+  /verify you are human/i,
+  /cloudflare/i,
+  /just a moment/i,
+  /attention required/i,
+  /security check/i,
+  /セキュリティチェック/i,
+  /あともう1ステップ/i,
+  /継続するには/i,
+];
 
 // These fields are owned by the manifest and must be readable or safely writable
 // before a Save Draft or Submit for review operation can begin. Subcategory=[] is
@@ -53,10 +63,20 @@ async function requireExactTitle(page, title) {
   if (textCount !== 1) throw new Error(`Fab listing title is not uniquely visible as ${title}.`);
 }
 
+async function hasVisibleChallengeText(page, pattern) {
+  const locator = page.getByText(pattern);
+  const count = await locator.count().catch(() => 0);
+  for (let index = 0; index < count; index += 1) {
+    if (await locator.nth(index).isVisible().catch(() => false)) return true;
+  }
+  return false;
+}
+
 async function detectManualBlock(page) {
-  const body = normalized(await page.locator('body').textContent().catch(() => ''));
-  if (/verify you are human|cloudflare|just a moment|attention required|security check|セキュリティチェック|あともう1ステップ|継続するには/i.test(body)) {
-    throw new Error('MANUAL ACTION REQUIRED: Cloudflare or a browser security challenge is blocking Fab. Complete it manually and rerun.');
+  for (const pattern of MANUAL_CHALLENGE_TEXT) {
+    if (await hasVisibleChallengeText(page, pattern)) {
+      throw new Error('MANUAL ACTION REQUIRED: Cloudflare or a browser security challenge is blocking Fab. Complete it manually and rerun.');
+    }
   }
   const currentUrl = new URL(page.url());
   if (/(?:\/login|\/signin|\/sign-in|\/authenticate)(?:\/|$)/i.test(currentUrl.pathname) || /^(?:auth|accounts?)\./i.test(currentUrl.hostname)) {

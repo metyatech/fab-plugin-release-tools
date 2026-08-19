@@ -425,6 +425,26 @@ test('manual-block detection is generic and does not depend on a product title',
   await context.close();
 });
 
+test('manual-block detection ignores hidden challenge text on normal listing pages', async () => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  for (const hiddenText of ['Cloudflare', 'security check', 'セキュリティチェック']) {
+    await page.setContent(`<main><h1>Other Product</h1><section aria-label="Product information">Normal Fab listing</section><div hidden>${hiddenText}</div></main>`);
+    await assert.doesNotReject(() => detectManualBlock(page));
+  }
+  await context.close();
+});
+
+test('manual-block detection blocks visible challenge evidence', async () => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  for (const visibleText of ['Verify you are human', 'Just a moment...', 'Attention Required', 'Cloudflare security check']) {
+    await page.setContent(`<main><h1>${visibleText}</h1></main>`);
+    await assert.rejects(() => detectManualBlock(page), /MANUAL ACTION REQUIRED: Cloudflare/);
+  }
+  await context.close();
+});
+
 test('verify PASS reports unresolved write readiness separately', async () => {
   const ready = await scenario();
   assert.equal(ready.result.result, 'PASS');
