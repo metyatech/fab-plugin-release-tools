@@ -57,10 +57,18 @@ async function readStatus(page) {
 async function requireExactTitle(page, title) {
   const heading = page.getByRole('heading', { name: title, exact: true });
   const headingCount = await heading.count();
-  if (headingCount === 1) return;
+  let visibleHeadingCount = 0;
+  for (let index = 0; index < headingCount; index += 1) {
+    if (await heading.nth(index).isVisible().catch(() => false)) visibleHeadingCount += 1;
+  }
+  if (visibleHeadingCount === 1) return;
   const text = page.getByText(title, { exact: true });
   const textCount = await text.count();
-  if (textCount !== 1) throw new Error(`Fab listing title is not uniquely visible as ${title}.`);
+  let visibleTextCount = 0;
+  for (let index = 0; index < textCount; index += 1) {
+    if (await text.nth(index).isVisible().catch(() => false)) visibleTextCount += 1;
+  }
+  if (visibleTextCount !== 1) throw new Error(`Fab listing title is not uniquely visible as ${title}.`);
 }
 
 async function hasVisibleChallengeText(page, pattern) {
@@ -100,11 +108,65 @@ async function detectManualBlock(page) {
   }
 }
 
-async function ensureTarget(page, manifest, origin) {
+function targetListingPath(listingId) {
+  return `/portal/listings/${listingId}/edit`;
+}
+
+function pageMatchesTargetListing(page, manifest, origin) {
+  try {
+    const current = new URL(page.url());
+    const expectedOrigin = new URL(origin);
+    const pathname = current.pathname.replace(/\/$/, '');
+    return current.hostname === expectedOrigin.hostname && pathname === targetListingPath(manifest.listingId);
+  } catch {
+    return false;
+  }
+}
+
+export function selectExistingTargetPage(context, manifest, origin = 'https://www.fab.com') {
+  const pages = context.pages();
+  const matches = pages.filter((candidate) => pageMatchesTargetListing(candidate, manifest, origin));
+  if (matches.length !== 1) {
+    throw new Error(`MANUAL ACTION REQUIRED: exactly one already-open Fab listing page is required for ${targetListingPath(manifest.listingId)}; found ${matches.length}. Do not navigate automatically.`);
+  }
+  return matches[0];
+}
+
+async function ensurePassiveTarget(page, manifest, origin) {
+  if (!pageMatchesTargetListing(page, manifest, origin)) {
+    let current = 'unknown';
+    try { current = new URL(page.url()).pathname; } catch { /* retain sanitized placeholder */ }
+    throw new Error(`MANUAL ACTION REQUIRED: the already-open Fab page is not the expected listing path. Expected ${targetListingPath(manifest.listingId)}; received ${current}. Do not navigate automatically.`);
+  }
+  const deadline = Date.now() + 3000;
+  let lastTitleError = null;
+  while (Date.now() < deadline) {
+    await detectManualBlock(page);
+    try {
+      await requireExactTitle(page, manifest.title);
+      return { finalUrl: page.url() };
+    } catch (error) {
+      lastTitleError = error;
+    }
+    await page.waitForTimeout(50);
+  }
+  throw lastTitleError ?? new Error('Fab listing title was not readable during passive attach.');
+}
+
+async function hardNavigate(page, url, options, diagnostics, initial = false) {
+  if (diagnostics) {
+    diagnostics.hardNavigationCount += 1;
+    if (initial) diagnostics.initialNavigationPerformed = true;
+  }
+  return page.goto(url, options);
+}
+
+async function ensureTarget(page, manifest, origin, { passive = false, diagnostics = null, initial = false } = {}) {
+  if (passive) return ensurePassiveTarget(page, manifest, origin);
   const expected = listingEditUrl(manifest.listingId, origin);
   const formatView = page.getByRole('heading', { name: 'Project Versions*', exact: true });
   const formatViewVisible = await formatView.count() > 0 && await formatView.first().isVisible().catch(() => false);
-  if (page.url() !== expected || formatViewVisible) await page.goto(expected, { waitUntil: 'domcontentloaded' });
+  if (page.url() !== expected || formatViewVisible) await hardNavigate(page, expected, { waitUntil: 'domcontentloaded' }, diagnostics, initial);
   await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => undefined);
   await detectManualBlock(page);
   const parsed = new URL(page.url());
@@ -119,7 +181,25 @@ async function isVisibleUnique(locator) {
   return await locator.isVisible().catch(() => false);
 }
 
-async function ensureListingView(page, manifest, origin, guard = null) {
+async function ensureListingView(page, manifest, origin, guard = null, { passive = false, diagnostics = null } = {}) {
+  if (passive) {
+    await ensureTarget(page, manifest, origin, { passive: true, diagnostics });
+    const formatHeading = page.getByRole('heading', { name: 'Project Versions*', exact: true });
+    if (await isVisibleUnique(formatHeading)) {
+      const back = page.getByRole('button', { name: 'Back to listing', exact: true });
+      if (!await isVisibleUnique(back)) throw new Error('MANUAL ACTION REQUIRED: Fab format view is open but no unique Back to listing control is available. Do not navigate automatically.');
+      await detectManualBlock(page);
+      const beforeMutations = guard?.summary().networkMutationRequestsObserved ?? 0;
+      await back.click();
+      const afterMutations = guard?.summary().networkMutationRequestsObserved ?? beforeMutations;
+      if (afterMutations > beforeMutations) throw new Error('Read-only listing navigation caused a network mutation; discovery was aborted safely.');
+      await ensureTarget(page, manifest, origin, { passive: true, diagnostics });
+    }
+    if (!await isVisibleUnique(page.getByRole('button', { name: manifest.includedFormat, exact: true }))) {
+      throw new Error('MANUAL ACTION REQUIRED: the expected Fab listing main view could not be proven without navigation.');
+    }
+    return;
+  }
   const formatHeading = page.getByRole('heading', { name: 'Project Versions*', exact: true });
   const listingControl = page.getByRole('button', { name: manifest.includedFormat, exact: true });
   if (await isVisibleUnique(formatHeading)) {
@@ -130,26 +210,28 @@ async function ensureListingView(page, manifest, origin, guard = null) {
       const afterMutations = guard?.summary().networkMutationRequestsObserved ?? beforeMutations;
       if (afterMutations > beforeMutations) throw new Error('Read-only listing navigation caused a network mutation; discovery was aborted safely.');
     }
-    else await page.goto(listingEditUrl(manifest.listingId, origin), { waitUntil: 'domcontentloaded' });
+    else await hardNavigate(page, listingEditUrl(manifest.listingId, origin), { waitUntil: 'domcontentloaded' }, diagnostics);
   } else if (!await isVisibleUnique(listingControl)) {
-    await page.goto(listingEditUrl(manifest.listingId, origin), { waitUntil: 'domcontentloaded' });
+    await hardNavigate(page, listingEditUrl(manifest.listingId, origin), { waitUntil: 'domcontentloaded' }, diagnostics);
   }
-  await ensureTarget(page, manifest, origin);
+  await ensureTarget(page, manifest, origin, { diagnostics });
   if (!await isVisibleUnique(page.getByRole('button', { name: manifest.includedFormat, exact: true }))) {
     throw new Error('Fab listing main view could not be proven after navigation.');
   }
 }
 
-async function ensureFormatView(page, manifest, origin, guard) {
-  await ensureListingView(page, manifest, origin, guard);
+async function ensureFormatView(page, manifest, origin, guard, options = {}) {
+  await ensureListingView(page, manifest, origin, guard, options);
   const format = page.getByRole('button', { name: manifest.includedFormat, exact: true });
   if (!await isVisibleUnique(format)) throw new Error('Unreal Engine format navigation control is not uniquely visible.');
+  await detectManualBlock(page);
   const beforeMutations = guard?.summary().networkMutationRequestsObserved ?? 0;
   await format.click();
   await page.waitForTimeout(100);
   const afterMutations = guard?.summary().networkMutationRequestsObserved ?? beforeMutations;
   if (afterMutations > beforeMutations) throw new Error('Read-only format navigation caused a network mutation; discovery was aborted safely.');
   await waitForFormatView(page, manifest);
+  await detectManualBlock(page);
   const formatHeading = page.getByRole('heading', { name: 'Project Versions*', exact: true });
   if (!await isVisibleUnique(formatHeading)) throw new Error('Fab Unreal Engine format view could not be proven after navigation.');
 }
@@ -204,13 +286,13 @@ export function mergeListingAndFormatComparisons(listingComparison, formatCompar
   return summarizeComparison(fields);
 }
 
-export async function collectPortalComparison(page, manifestInfo, { guard, origin = 'https://www.fab.com' } = {}) {
+export async function collectPortalComparison(page, manifestInfo, { guard, origin = 'https://www.fab.com', passive = false, diagnostics = null } = {}) {
   const actions = [];
   const manifest = manifestInfo.manifest;
-  await ensureListingView(page, manifest, origin, guard);
+  await ensureListingView(page, manifest, origin, guard, { passive, diagnostics });
   actions.push(...await prepareReadOnlySections(page, guard));
   const listingComparison = await compareManifest(page, manifestInfo, { view: 'listing' });
-  await ensureFormatView(page, manifest, origin, guard);
+  await ensureFormatView(page, manifest, origin, guard, { passive, diagnostics });
   actions.push('opened Unreal Engine format section');
   actions.push(...await prepareReadOnlySections(page, guard));
   const formatComparison = await compareManifest(page, manifestInfo, { view: 'format' });
@@ -233,9 +315,11 @@ async function prepareReadOnlySections(page, guard) {
     const expanded = await locator.getAttribute('aria-expanded');
     if (expanded !== 'false') continue;
     if (!await locator.getAttribute('aria-controls')) continue;
+    await detectManualBlock(page);
     const before = guard.summary().networkMutationRequestsObserved;
     await locator.click();
     await page.waitForTimeout(100);
+    await detectManualBlock(page);
     const after = guard.summary().networkMutationRequestsObserved;
     if (after > before) throw new Error(`Read-only section expansion ${name} caused a network mutation; discovery was aborted safely.`);
     if (await locator.getAttribute('aria-expanded') !== 'true') throw new Error(`Read-only section expansion ${name} did not reach an expanded state.`);
@@ -426,13 +510,23 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
   let browser = null;
   let context = injectedContext;
   let page = injectedPage;
+  const passiveAttach = mode === 'verify';
+  let targetPageSelectionReason = injectedPage ? 'Caller-supplied page was used for controlled fixture verification.' : null;
   if (!page) {
-    if (!cdpEndpoint) throw new Error('A CDP endpoint is required for the production browser connection.');
-    browser = await chromium.connectOverCDP(cdpEndpoint);
-    context = browser.contexts()[0];
+    if (!context && !cdpEndpoint) throw new Error('A CDP endpoint is required for the production browser connection.');
+    if (!context) {
+      browser = await chromium.connectOverCDP(cdpEndpoint);
+      context = browser.contexts()[0];
+    }
     if (!context) throw new Error('The CDP browser has no default context.');
-    const fabPages = context.pages().filter((candidate) => { try { return new URL(candidate.url()).hostname === 'www.fab.com'; } catch { return false; } });
-    page = fabPages[0] ?? await context.newPage();
+    if (passiveAttach) {
+      page = selectExistingTargetPage(context, manifestInfo.manifest, origin);
+      targetPageSelectionReason = 'Selected the only existing page with the exact Fab hostname and listing pathname; query/hash ignored.';
+    } else {
+      const fabPages = context.pages().filter((candidate) => { try { return new URL(candidate.url()).hostname === 'www.fab.com'; } catch { return false; } });
+      page = fabPages[0] ?? await context.newPage();
+      targetPageSelectionReason = fabPages.length > 0 ? 'Selected the first existing Fab page for an explicit write-mode operation.' : 'Created a new page for an explicit write-mode operation.';
+    }
   }
   const guard = installNetworkGuard(context, { mode });
   const result = {
@@ -458,14 +552,20 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     readOnlyUiActions: [],
     writeReady: false,
     writeBlockers: [],
+    selectedPageUrl: page?.url() ?? null,
+    targetPageSelectionReason,
+    initialNavigationPerformed: false,
+    hardNavigationCount: 0,
+    reloadCount: 0,
+    passiveAttach,
   };
   Object.defineProperty(result, 'page', { value: page, enumerable: false, configurable: true });
   Object.defineProperty(result, 'browser', { value: browser, enumerable: false, configurable: true });
   try {
-    await ensureTarget(page, manifestInfo.manifest, origin);
+    await ensureTarget(page, manifestInfo.manifest, origin, { passive: passiveAttach, diagnostics: result, initial: true });
     result.listingStatus = await readStatus(page);
     result.dangerousActionsFound = await readDangerousActions(page);
-    const collected = await collectPortalComparison(page, manifestInfo, { guard, origin });
+    const collected = await collectPortalComparison(page, manifestInfo, { guard, origin, passive: passiveAttach, diagnostics: result });
     result.readOnlyUiActions.push(...collected.readOnlyUiActions);
     result.comparison = collected.comparison;
     ({ writeReady: result.writeReady, writeBlockers: result.writeBlockers } = writeReadiness(result.listingStatus, result.comparison, manifestInfo.manifest));
@@ -510,8 +610,9 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
       result.writeInteractionsPerformed += 1;
       await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => undefined);
       guard.setPhase('stage');
+      result.reloadCount += 1;
       await page.reload({ waitUntil: 'domcontentloaded' });
-      await ensureTarget(page, manifestInfo.manifest, origin);
+      await ensureTarget(page, manifestInfo.manifest, origin, { diagnostics: result });
       result.listingStatus = await readStatus(page);
       const postSave = await collectPortalComparison(page, manifestInfo, { guard, origin });
       result.readOnlyUiActions.push(...postSave.readOnlyUiActions);
@@ -531,6 +632,7 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     result.blockers.push(error instanceof Error ? error.message : String(error));
     return result;
   } finally {
+    result.selectedPageUrl = page?.url() ?? result.selectedPageUrl;
     result.network = guard.summary();
     await guard.dispose().catch(() => undefined);
     // The CLI disconnects after reports are written. This keeps screenshots and

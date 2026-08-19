@@ -31,6 +31,12 @@ function markdown(result, comparison, after, network) {
 - Post-submit status: ${result.postSubmitStatus ?? 'null'}
 - Write ready: ${result.writeReady}
 - Write interactions: ${result.writeInteractionsPerformed}
+- Passive attach: ${result.passiveAttach}
+- Selected page URL: ${result.selectedPageUrl ?? 'unknown'}
+- Target page selection: ${result.targetPageSelectionReason ?? 'unknown'}
+- Initial navigation performed: ${result.initialNavigationPerformed}
+- Hard navigation count: ${result.hardNavigationCount}
+- Reload count: ${result.reloadCount}
 - Network mutations observed/blocked: ${network?.networkMutationRequestsObserved ?? 0}/${network?.networkMutationRequestsBlocked ?? 0}
 - Read-only UI actions: ${result.readOnlyUiActions?.length ? result.readOnlyUiActions.join(', ') : 'none'}
 
@@ -74,6 +80,12 @@ export async function writeRunReport({ directory, result, comparison, comparison
     postSubmitStatus: result.postSubmitStatus,
     writeReady: result.writeReady,
     writeBlockers: result.writeBlockers,
+    selectedPageUrl: result.selectedPageUrl,
+    targetPageSelectionReason: result.targetPageSelectionReason,
+    initialNavigationPerformed: result.initialNavigationPerformed,
+    hardNavigationCount: result.hardNavigationCount,
+    reloadCount: result.reloadCount,
+    passiveAttach: result.passiveAttach,
     readOnlyUiActions: result.readOnlyUiActions,
     writeInteractionsPerformed: result.writeInteractionsPerformed,
     networkMutationRequestsObserved: network?.networkMutationRequestsObserved ?? 0,

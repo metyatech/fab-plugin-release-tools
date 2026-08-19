@@ -7,7 +7,7 @@ import { chromium } from 'playwright-core';
 import { buildMutationPlan, executeMutationPlan, preflightMutationPlan } from '../src/mutation-plan.mjs';
 import { installNetworkGuard } from '../src/network-guard.mjs';
 import { compareManifest, comparePlatformClassification, comparePriceClassification } from '../src/comparison.mjs';
-import { detectManualBlock, mergeListingAndFormatComparisons, runPortalAutomation } from '../src/portal.mjs';
+import { detectManualBlock, mergeListingAndFormatComparisons, runPortalAutomation, selectExistingTargetPage } from '../src/portal.mjs';
 import { parseArgs } from '../src/cli.mjs';
 import { startFixture } from './fixtures/server.mjs';
 import { fixtureState, makeManifest, makeManifestInfo, listingId } from './helpers.mjs';
@@ -47,6 +47,89 @@ test('verify-only performs zero writes', async () => {
   assert.equal(result.submitAccepted, false);
   assert.equal(result.postSubmitStatus, null);
   assert.equal(fixture.mutations.length, 0);
+});
+
+test('passive target selection chooses the exact listing page among Fab tabs', async () => {
+  const manifest = makeManifest();
+  const fixture = await startFixture(fixtureState(manifest));
+  const context = await browser.newContext();
+  const unrelated = await context.newPage();
+  const target = await context.newPage();
+  try {
+    await unrelated.goto(`${fixture.origin}/portal/listings/22222222-2222-4222-8222-222222222222/edit`);
+    await target.goto(`${fixture.origin}/portal/listings/${listingId}/edit?foo=bar#section`);
+    assert.equal(selectExistingTargetPage(context, manifest, fixture.origin), target);
+  } finally {
+    await context.close();
+    await fixture.close();
+  }
+});
+
+test('passive target selection rejects ambiguous duplicate listing tabs', async () => {
+  const manifest = makeManifest();
+  const fixture = await startFixture(fixtureState(manifest));
+  const context = await browser.newContext();
+  const first = await context.newPage();
+  const second = await context.newPage();
+  try {
+    await first.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+    await second.goto(`${fixture.origin}/portal/listings/${listingId}/edit?duplicate=true`);
+    assert.throws(() => selectExistingTargetPage(context, manifest, fixture.origin), /exactly one.*found 2/i);
+    assert.equal(context.pages().length, 2);
+  } finally {
+    await context.close();
+    await fixture.close();
+  }
+});
+
+test('passive target selection rejects unrelated Fab pages without creating or navigating', async () => {
+  const manifest = makeManifest();
+  const fixture = await startFixture(fixtureState(manifest));
+  const context = await browser.newContext();
+  const unrelated = await context.newPage();
+  try {
+    await unrelated.goto(`${fixture.origin}/portal/listings/22222222-2222-4222-8222-222222222222/edit`);
+    const pageCount = context.pages().length;
+    const url = unrelated.url();
+    assert.throws(() => selectExistingTargetPage(context, manifest, fixture.origin), /MANUAL ACTION REQUIRED.*already-open/i);
+    assert.equal(context.pages().length, pageCount);
+    assert.equal(unrelated.url(), url);
+  } finally {
+    await context.close();
+    await fixture.close();
+  }
+});
+
+test('verify-only passively attaches to a ready target without navigation or reload', async () => {
+  const manifest = makeManifest();
+  const fixture = await startFixture(fixtureState(manifest));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const info = await makeManifestInfo(manifest);
+  let navigationsAfterAttach = 0;
+  let networkIdleWaitsAfterAttach = 0;
+  try {
+    await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit?foo=bar#section`);
+    page.on('framenavigated', (frame) => { if (frame === page.mainFrame()) navigationsAfterAttach += 1; });
+    const originalWaitForLoadState = page.waitForLoadState.bind(page);
+    page.waitForLoadState = async (...args) => {
+      if (args[0] === 'networkidle') networkIdleWaitsAfterAttach += 1;
+      return originalWaitForLoadState(...args);
+    };
+    const result = await runPortalAutomation({ manifestInfo: info, mode: 'verify', origin: fixture.origin, page, context });
+    assert.equal(result.result, 'PASS');
+    assert.equal(result.passiveAttach, true);
+    assert.equal(result.initialNavigationPerformed, false);
+    assert.equal(result.hardNavigationCount, 0);
+    assert.equal(result.reloadCount, 0);
+    assert.equal(result.selectedPageUrl, page.url());
+    assert.equal(navigationsAfterAttach, 0);
+    assert.equal(networkIdleWaitsAfterAttach, 0);
+    assert.equal(context.pages().length, 1);
+  } finally {
+    await context.close();
+    await fixture.close();
+  }
 });
 
 test('wrong listing UUID blocks after a redirect before mutation', async () => {
