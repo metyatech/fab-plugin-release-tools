@@ -1,5 +1,5 @@
 import { chromium } from 'playwright-core';
-import { compareManifest } from './comparison.mjs';
+import { compareManifest, summarizeComparison } from './comparison.mjs';
 import { buildMutationPlan, executeMutationPlan, preflightMutationPlan } from './mutation-plan.mjs';
 import { installNetworkGuard } from './network-guard.mjs';
 import { dangerousActionCandidates, listingEditUrl, resolveCandidate, saveCandidates, submitCandidates } from './locators.mjs';
@@ -64,10 +64,20 @@ async function requireExactTitle(page, title) {
 }
 
 async function hasVisibleChallengeText(page, pattern) {
-  const locator = page.getByText(pattern);
+  // getByText() may return a visible ancestor whose textContent includes a
+  // hidden challenge fragment. Restrict the search to element descendants and
+  // require the element's rendered innerText and viewport intersection to
+  // contain the evidence.
+  const locator = page.locator('body *').filter({ hasText: pattern });
   const count = await locator.count().catch(() => 0);
+  const viewport = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight })).catch(() => null);
   for (let index = 0; index < count; index += 1) {
-    if (await locator.nth(index).isVisible().catch(() => false)) return true;
+    const candidate = locator.nth(index);
+    if (!await candidate.isVisible().catch(() => false)) continue;
+    const box = await candidate.boundingBox().catch(() => null);
+    if (viewport && (!box || box.width <= 0 || box.height <= 0 || box.x + box.width <= 0 || box.y + box.height <= 0 || box.x >= viewport.width || box.y >= viewport.height)) continue;
+    const renderedText = await candidate.innerText().catch(() => '');
+    if (pattern.test(renderedText)) return true;
   }
   return false;
 }
@@ -92,7 +102,9 @@ async function detectManualBlock(page) {
 
 async function ensureTarget(page, manifest, origin) {
   const expected = listingEditUrl(manifest.listingId, origin);
-  if (page.url() !== expected) await page.goto(expected, { waitUntil: 'domcontentloaded' });
+  const formatView = page.getByRole('heading', { name: 'Project Versions*', exact: true });
+  const formatViewVisible = await formatView.count() > 0 && await formatView.first().isVisible().catch(() => false);
+  if (page.url() !== expected || formatViewVisible) await page.goto(expected, { waitUntil: 'domcontentloaded' });
   await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => undefined);
   await detectManualBlock(page);
   const parsed = new URL(page.url());
@@ -104,7 +116,9 @@ async function ensureTarget(page, manifest, origin) {
 
 async function openFormatIfNeeded(page, manifest, guard) {
   const link = page.getByText(manifest.packages[0].projectFileLink, { exact: true });
-  if (await link.count() === 1) return false;
+  for (let index = 0; index < await link.count(); index += 1) {
+    if (await link.nth(index).isVisible().catch(() => false)) return false;
+  }
   const format = page.getByRole('button', { name: manifest.includedFormat, exact: true });
   if (await format.count() === 1) {
     await format.click();
@@ -113,6 +127,42 @@ async function openFormatIfNeeded(page, manifest, guard) {
     return true;
   }
   return false;
+}
+
+async function waitForFormatView(page, manifest) {
+  const isFixture = (() => { try { return ['localhost', '127.0.0.1'].includes(new URL(page.url()).hostname); } catch { return false; } })();
+  if (isFixture) return;
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    const projectLink = page.getByText(manifest.packages[0].projectFileLink, { exact: true });
+    const engineVersion = page.getByText(/^UE_[0-9]+(?:\.[0-9]+)+$/, { exact: false });
+    const formatHeading = page.getByRole('heading', { name: 'Project Versions*', exact: true });
+    const platformChip = page.getByRole('button', { name: /^Remove (?:Windows|Win64|Linux|Mac(?: OS)?|macOS)$/ });
+    for (const locator of [projectLink, engineVersion, formatHeading, platformChip]) {
+      if (await locator.count() === 0) continue;
+      for (let index = 0; index < await locator.count(); index += 1) {
+        if (await locator.nth(index).isVisible().catch(() => false)) return;
+      }
+    }
+    await page.waitForTimeout(50);
+  }
+}
+
+const FORMAT_COMPARISON_FIELDS = new Set(['engineVersions', 'platforms', 'technicalInformationFile', 'media']);
+
+function mergeListingAndFormatComparisons(listingComparison, formatComparison, manifest) {
+  const formatFields = new Map(formatComparison.fields.map((field) => [field.manifestJsonPath, field]));
+  const fields = listingComparison.fields.map((field) => {
+    if (FORMAT_COMPARISON_FIELDS.has(field.manifestJsonPath) && formatFields.has(field.manifestJsonPath)) return formatFields.get(field.manifestJsonPath);
+    return field;
+  });
+  for (const [index] of manifest.packages.entries()) {
+    const field = `packages[${index}].projectFileLink`;
+    const replacement = formatFields.get(field);
+    const position = fields.findIndex((item) => item.manifestJsonPath === field);
+    if (replacement && position >= 0) fields[position] = replacement;
+  }
+  return summarizeComparison(fields);
 }
 
 const READ_ONLY_SECTION_TOGGLES = [
@@ -339,9 +389,17 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     result.listingStatus = await readStatus(page);
     result.dangerousActionsFound = await readDangerousActions(page);
     result.readOnlyUiActions.push(...await prepareReadOnlySections(page, guard));
+    const listingComparison = await compareManifest(page, manifestInfo);
     const formatOpened = await openFormatIfNeeded(page, manifestInfo.manifest, guard);
-    if (formatOpened) result.readOnlyUiActions.push('opened Unreal Engine format section');
-    result.comparison = await compareManifest(page, manifestInfo);
+    if (formatOpened) {
+      result.readOnlyUiActions.push('opened Unreal Engine format section');
+      await waitForFormatView(page, manifestInfo.manifest);
+      result.readOnlyUiActions.push(...await prepareReadOnlySections(page, guard));
+      const formatComparison = await compareManifest(page, manifestInfo);
+      result.comparison = mergeListingAndFormatComparisons(listingComparison, formatComparison, manifestInfo.manifest);
+    } else {
+      result.comparison = listingComparison;
+    }
     ({ writeReady: result.writeReady, writeBlockers: result.writeBlockers } = writeReadiness(result.listingStatus, result.comparison, manifestInfo.manifest));
     if (mode === 'verify') {
       if (result.comparison.mismatchCount > 0) result.blockers.push(`${result.comparison.mismatchCount} manifest mismatch(es).`);

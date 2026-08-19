@@ -6,6 +6,33 @@ function normalizeText(value) {
   return String(value ?? '').replace(/\s+/g, ' ').trim();
 }
 
+function decimalCents(value) {
+  const text = typeof value === 'number' ? String(value) : normalizeText(value);
+  if (!/^\d+(?:\.\d{1,2})?$/.test(text)) return null;
+  const [whole, fraction = ''] = text.split('.');
+  return BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0'));
+}
+
+function parseUsdCents(value) {
+  if (value === null || value === undefined) return null;
+  const text = normalizeText(value);
+  if (text === '') return null;
+  let amount = null;
+  if (/^\$\d+(?:\.\d{1,2})?$/.test(text)) amount = text.slice(1);
+  else if (/^USD\s+\d+(?:\.\d{1,2})?$/i.test(text)) amount = text.replace(/^USD\s+/i, '');
+  else if (/^\d+(?:\.\d{1,2})?\s+(?:USD|\(USD\))$/i.test(text)) amount = text.replace(/\s+(?:USD|\(USD\))$/i, '');
+  else if (/^\d+(?:\.\d{1,2})?$/.test(text)) amount = text;
+  return amount === null ? null : decimalCents(amount);
+}
+
+export function comparePriceClassification(portalValue, manifestValue) {
+  if (portalValue === null || portalValue === undefined || normalizeText(portalValue) === '') return 'NOT_VISIBLE';
+  const portalCents = parseUsdCents(portalValue);
+  const manifestCents = decimalCents(manifestValue);
+  if (portalCents === null || manifestCents === null) return 'MISMATCH';
+  return portalCents === manifestCents ? 'MATCH' : 'MISMATCH';
+}
+
 function normalizeRichText(value) {
   return normalizeText(value).replace(/\s*([*_`#>-])\s*/g, '$1');
 }
@@ -13,8 +40,9 @@ function normalizeRichText(value) {
 async function readLocator(locator) {
   const count = await locator.count();
   if (count !== 1) return { count, value: null, rawValue: null, checked: null, editable: false, disabled: false, placeholder: null };
+  const visible = await locator.isVisible().catch(() => false);
   let value = '';
-  try { value = await locator.inputValue(); } catch { value = await locator.textContent() ?? ''; }
+  try { value = await locator.inputValue(); } catch { value = await locator.innerText().catch(async () => await locator.textContent() ?? ''); }
   const text = normalizeText(value);
   let checked = null;
   try { checked = await locator.isChecked(); } catch { /* not a checkable control */ }
@@ -23,7 +51,7 @@ async function readLocator(locator) {
   let editable = false;
   try { editable = await locator.isEditable(); } catch { /* static element */ }
   const placeholder = await locator.getAttribute('placeholder').catch(() => null);
-  return { count, value: text || normalizeText(await locator.textContent() ?? ''), rawValue: value, checked, editable, disabled, placeholder };
+  return { count, visible, value: visible ? text || normalizeText(await locator.textContent() ?? '') : null, rawValue: visible ? value : null, checked: visible ? checked : null, editable: visible && editable, disabled, placeholder: visible ? placeholder : null };
 }
 
 function fieldResult({ manifestJsonPath, portalLabel, desired, current, state, resolved, editableControlAvailable, notes = '', writeTarget = null }) {
@@ -63,16 +91,16 @@ async function compareTextField(page, manifest, field, labelName = field, option
   const desired = options.desiredOverride ?? manifest[field];
   const current = value.value || value.placeholder;
   const state = semanticState(current, desired, options);
-  const target = value.editable && !value.disabled && resolved.metadata?.unique ? { strategy: resolved.candidate.strategy, expression: resolved.candidate.expression, field } : null;
+  const target = value.visible && value.editable && !value.disabled && resolved.metadata?.unique ? { strategy: resolved.candidate.strategy, expression: resolved.candidate.expression, field } : null;
   return fieldResult({ manifestJsonPath: field, portalLabel: labelName, desired, current, state, resolved, editableControlAvailable: value.editable && !value.disabled, notes: value.count === 1 ? '' : 'No unique readable portal control was found.', writeTarget: target });
 }
 
 async function compareCategory(page, manifest) {
   const { resolved, value } = await locateField(page, 'category', manifest);
-  const current = value.value || value.placeholder || '';
+  const current = value.visible ? value.value || value.placeholder || '' : '';
   const state = semanticState(current, manifest.category);
-  const target = value.editable && !value.disabled ? { strategy: resolved.candidate.strategy, expression: resolved.candidate.expression, field: 'category', mutationType: 'combobox' } : null;
-  return fieldResult({ manifestJsonPath: 'category', portalLabel: 'Category *', desired: manifest.category, current, state, resolved, editableControlAvailable: value.editable && !value.disabled, notes: value.value ? '' : 'Category is exposed through the read-only combobox placeholder.', writeTarget: target });
+  const target = value.visible && value.editable && !value.disabled ? { strategy: resolved.candidate.strategy, expression: resolved.candidate.expression, field: 'category', mutationType: 'combobox' } : null;
+  return fieldResult({ manifestJsonPath: 'category', portalLabel: 'Category *', desired: manifest.category, current, state, resolved, editableControlAvailable: value.visible && value.editable && !value.disabled, notes: value.value ? '' : 'Category is exposed through the read-only combobox placeholder.', writeTarget: target });
 }
 
 async function compareSubcategory(page, manifest) {
@@ -92,11 +120,22 @@ async function compareSubcategory(page, manifest) {
 
 async function compareBoolean(page, manifest, field, labelName, desired, options = {}) {
   const { resolved, value } = await locateField(page, field, manifest);
-  let current = value.checked === null ? null : (value.checked ? options.checkedValue : !options.checkedValue);
+  let current = !value.visible || value.checked === null ? null : (value.checked ? options.checkedValue : !options.checkedValue);
   if (current === null && value.value) current = options.readText?.(value.value);
   const state = current === null ? 'NOT_VISIBLE' : current === desired ? 'MATCH' : 'MISMATCH';
-  const target = value.editable && !value.disabled ? { strategy: resolved.candidate.strategy, expression: resolved.candidate.expression, field, mutationType: 'boolean', checkedValue: options.checkedValue } : null;
-  return fieldResult({ manifestJsonPath: field, portalLabel: labelName, desired, current, state, resolved, editableControlAvailable: value.editable && !value.disabled, notes: current === null ? 'Boolean state was not safely readable.' : '', writeTarget: target });
+  const target = value.visible && value.editable && !value.disabled ? { strategy: resolved.candidate.strategy, expression: resolved.candidate.expression, field, mutationType: 'boolean', checkedValue: options.checkedValue } : null;
+  return fieldResult({ manifestJsonPath: field, portalLabel: labelName, desired, current, state, resolved, editableControlAvailable: value.visible && value.editable && !value.disabled, notes: current === null ? 'Boolean state was not safely readable.' : '', writeTarget: target });
+}
+
+async function comparePriceField(page, manifest, field, labelName) {
+  const { resolved, value } = await locateField(page, field, manifest);
+  const desired = manifest[field];
+  const current = value.visible ? value.value || value.placeholder : null;
+  const state = comparePriceClassification(current, desired);
+  const target = value.visible && value.editable && !value.disabled && resolved.metadata?.unique
+    ? { strategy: resolved.candidate.strategy, expression: resolved.candidate.expression, field }
+    : null;
+  return fieldResult({ manifestJsonPath: field, portalLabel: labelName, desired, current, state, resolved, editableControlAvailable: value.visible && value.editable && !value.disabled, notes: state === 'MISMATCH' && current ? 'Portal price was readable but did not normalize to the manifest USD cents value.' : '', writeTarget: target });
 }
 
 function desiredMedia(manifest) {
@@ -136,9 +175,54 @@ async function compareMedia(page, manifest) {
 
 async function compareLicense(page, manifest) {
   const { resolved, value } = await locateField(page, 'license', manifest);
-  const selected = value.checked === true ? 'Standard License (Free or Paid)' : value.value;
+  const selected = !value.visible ? null : value.checked === true ? 'Standard License (Free or Paid)' : value.value;
   const state = selected && /standard license/i.test(selected) && /standard license/i.test(manifest.license) ? 'MATCH' : semanticState(selected, manifest.license);
-  return fieldResult({ manifestJsonPath: 'license', portalLabel: 'Standard License (Free or Paid)', desired: manifest.license, current: selected, state, resolved, editableControlAvailable: value.editable && !value.disabled, notes: selected ? '' : 'License selection was not safely readable.', writeTarget: null });
+  return fieldResult({ manifestJsonPath: 'license', portalLabel: 'Standard License (Free or Paid)', desired: manifest.license, current: selected, state, resolved, editableControlAvailable: value.visible && value.editable && !value.disabled, notes: selected ? '' : 'License selection was not safely readable.', writeTarget: null });
+}
+
+async function visibleContentEditor(page) {
+  const locator = page.locator('[contenteditable="true"]');
+  if (await locator.count() !== 1 || !await locator.isVisible().catch(() => false)) return null;
+  return { locator, text: await locator.innerText().catch(() => '') };
+}
+
+async function isFormatView(page) {
+  const heading = page.getByRole('heading', { name: 'Project Versions*', exact: true });
+  return await heading.count() === 1 && await heading.isVisible().catch(() => false);
+}
+
+function contentEditorResolution() {
+  return {
+    metadata: {
+      strategy: 'contenteditable',
+      expression: 'page.locator(\'[contenteditable="true"]\')',
+      matchCount: 1,
+      unique: true,
+      confidence: 'high',
+      reason: 'Stable semantic contenteditable editor uniquely matched the visible format section.',
+    },
+  };
+}
+
+async function compareLabeledTechnicalUrl(page, manifest, field, labelName) {
+  const desired = manifest[field];
+  if (!await isFormatView(page)) return null;
+  const editor = await visibleContentEditor(page);
+  if (!editor) return null;
+  const escaped = desired.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (!new RegExp(`${labelName}\\s*:\\s*${escaped}`, 'i').test(normalizeText(editor.text))) return null;
+  return fieldResult({ manifestJsonPath: field, portalLabel: labelName, desired, current: desired, state: 'MATCH', resolved: contentEditorResolution(), editableControlAvailable: false, notes: `Exact ${labelName} URL was readable in the visible Technical details editor.` });
+}
+
+async function compareTechnicalInformation(page, manifestInfo) {
+  const base = await compareTextField(page, manifestInfo.manifest, 'technicalInformationFile', 'Technical Information', { desiredOverride: manifestInfo.technicalInformationText, rich: true });
+  if (!await isFormatView(page)) return base;
+  const editor = await visibleContentEditor(page);
+  if (!editor) return base;
+  const desired = manifestInfo.technicalInformationText;
+  const current = editor.text;
+  const state = semanticState(current, desired, { rich: true });
+  return fieldResult({ manifestJsonPath: 'technicalInformationFile', portalLabel: 'Technical Information', desired, current, state, resolved: contentEditorResolution(), editableControlAvailable: false, notes: 'Read from the visible Technical details contenteditable editor; the manifest file path remains provenance only.' });
 }
 
 export async function compareManifest(page, manifestInfo) {
@@ -161,9 +245,13 @@ export async function compareManifest(page, manifestInfo) {
   fields.push(await compareTextField(page, manifest, 'includedFormat', 'Unreal Engine'));
   const engineLocator = page.getByText(/^UE_[0-9]+(?:\.[0-9]+)+$/, { exact: false });
   const engineCount = await engineLocator.count();
-  const engineValues = engineCount > 0
-    ? [...new Set((await engineLocator.allTextContents()).map((value) => normalizeText(value)).filter((value) => /^UE_[0-9]+(?:\.[0-9]+)+$/.test(value)))]
-    : [];
+  const engineValues = [];
+  for (let index = 0; index < engineCount; index += 1) {
+    const item = engineLocator.nth(index);
+    if (!await item.isVisible().catch(() => false)) continue;
+    const value = normalizeText(await item.textContent().catch(() => ''));
+    if (/^UE_[0-9]+(?:\.[0-9]+)+$/.test(value) && !engineValues.includes(value)) engineValues.push(value);
+  }
   const portalEngines = engineValues.map((value) => value.slice(3));
   const engineDesired = [...manifest.engineVersions].sort();
   const engineState = engineValues.length === 0
@@ -181,9 +269,15 @@ export async function compareManifest(page, manifestInfo) {
   }));
   const platform = await compareTextField(page, manifest, 'platforms', 'Supported development platforms *');
   const platformChips = page.getByRole('button', { name: /^Remove (?:Windows|Win64|Linux|Mac(?: OS)?|macOS)$/ });
-  const platformChipCount = await platformChips.count();
+  const visiblePlatformChips = [];
+  for (let index = 0; index < await platformChips.count(); index += 1) {
+    const item = platformChips.nth(index);
+    if (await item.isVisible().catch(() => false)) visiblePlatformChips.push(item);
+  }
+  const platformChipCount = visiblePlatformChips.length;
   if (platformChipCount > 0) {
-    const chipValues = await platformChips.evaluateAll((nodes) => nodes.map((node) => node.getAttribute('aria-label') ?? node.textContent ?? '').map((value) => value.replace(/^Remove\s+/i, '').trim()).filter(Boolean));
+    const chipValues = [];
+    for (const chip of visiblePlatformChips) chipValues.push((await chip.getAttribute('aria-label') ?? await chip.textContent() ?? '').replace(/^Remove\s+/i, '').trim());
     platform.currentVisibleValue = chipValues.join(' ');
     platform.currentNormalizedValue = platform.currentVisibleValue;
     platform.candidateLocator = {
@@ -200,8 +294,8 @@ export async function compareManifest(page, manifestInfo) {
   if (comparePlatformClassification(platform.currentVisibleValue, manifest.platforms) === 'NOT_DISCOVERED') {
     const windowsText = page.getByText('Windows', { exact: true });
     const removeWindows = page.getByRole('button', { name: 'Remove Windows', exact: true });
-    const windowsTextCount = await windowsText.count();
-    const removeWindowsCount = await removeWindows.count();
+    const windowsTextCount = (await windowsText.count() === 1 && await windowsText.first().isVisible().catch(() => false)) ? 1 : 0;
+    const removeWindowsCount = (await removeWindows.count() === 1 && await removeWindows.first().isVisible().catch(() => false)) ? 1 : 0;
     if (windowsTextCount === 1 || removeWindowsCount === 1) {
       platform.currentVisibleValue = 'Windows';
       platform.currentNormalizedValue = 'Windows';
@@ -222,17 +316,19 @@ export async function compareManifest(page, manifestInfo) {
   platform.classification = comparePlatformClassification(platform.currentVisibleValue, manifest.platforms);
   fields.push(platform);
   fields.push(await compareLicense(page, manifest));
-  fields.push(await compareTextField(page, manifest, 'personalPriceUsd', 'Personal price *'));
-  fields.push(await compareTextField(page, manifest, 'professionalPriceUsd', 'Professional price *'));
+  fields.push(await comparePriceField(page, manifest, 'personalPriceUsd', 'Personal price *'));
+  fields.push(await comparePriceField(page, manifest, 'professionalPriceUsd', 'Professional price *'));
   fields.push(await compareBoolean(page, manifest, 'matureContent', 'No, this listing does not contain mature content.', manifest.matureContent, { checkedValue: false, readText: (value) => /yes|mature/i.test(value) }));
   fields.push(await compareBoolean(page, manifest, 'generatedWithAi', 'Yes, it was partly or fully created with generative AI', manifest.generatedWithAi, { checkedValue: true, readText: (value) => /yes|partly|fully/i.test(value) }));
   fields.push(await compareBoolean(page, manifest, 'allowsUsageWithAi', 'Do not allow this product to be used by Generative AI Programs.', manifest.allowsUsageWithAi, { checkedValue: false, readText: (value) => /do not allow/i.test(value) ? false : /allow|true/i.test(value) ? true : null }));
   fields.push(await compareBoolean(page, manifest, 'promotionalContent', 'Includes promotional content', manifest.promotionalContent, { checkedValue: true, readText: (value) => /true|includes/i.test(value) }));
   fields.push(await compareBoolean(page, manifest, 'forumPost', 'No, do not create a forum post', manifest.forumPost, { checkedValue: false, readText: (value) => /yes|create/i.test(value) }));
   fields.push(await compareTextField(page, manifest, 'activation', 'Activation'));
-  fields.push(await compareTextField(page, manifest, 'documentationUrl', 'Documentation'));
-  fields.push(await compareTextField(page, manifest, 'supportUrl', 'Support'));
-  fields.push(await compareTextField(page, manifest, 'technicalInformationFile', 'Technical Information', { desiredOverride: manifestInfo.technicalInformationText, rich: true }));
+  const documentation = await compareTextField(page, manifest, 'documentationUrl', 'Documentation');
+  fields.push(documentation.classification === 'NOT_VISIBLE' ? await compareLabeledTechnicalUrl(page, manifest, 'documentationUrl', 'Documentation') ?? documentation : documentation);
+  const support = await compareTextField(page, manifest, 'supportUrl', 'Support');
+  fields.push(support.classification === 'NOT_VISIBLE' ? await compareLabeledTechnicalUrl(page, manifest, 'supportUrl', 'Support') ?? support : support);
+  fields.push(await compareTechnicalInformation(page, manifestInfo));
   fields.push(await compareMedia(page, manifest));
   for (const [index, pkg] of manifest.packages.entries()) {
     const field = `packages[${index}].projectFileLink`;
@@ -243,10 +339,17 @@ export async function compareManifest(page, manifestInfo) {
       const value = await readLocator(resolved.locator);
       current = value.value || value.placeholder;
     }
-    if (!current) current = await page.getByText(pkg.projectFileLink, { exact: true }).count() === 1 ? pkg.projectFileLink : null;
+    if (!current) {
+      const link = page.getByText(pkg.projectFileLink, { exact: true });
+      current = await link.count() === 1 && await link.isVisible().catch(() => false) ? pkg.projectFileLink : null;
+    }
     const editable = resolved.metadata?.unique ? await readLocator(resolved.locator) : null;
     fields.push(fieldResult({ manifestJsonPath: field, portalLabel: 'Project file', desired: pkg.projectFileLink, current, state: semanticState(current, pkg.projectFileLink), resolved, editableControlAvailable: Boolean(editable?.editable && !editable.disabled), notes: current ? '' : 'Project File Link is not visible in the current format section.', writeTarget: editable?.editable && !editable.disabled ? { strategy: resolved.candidate.strategy, expression: resolved.candidate.expression, field } : null }));
   }
+  return summarizeComparison(fields);
+}
+
+export function summarizeComparison(fields) {
   const counts = Object.fromEntries(COMPARISON_STATES.map((state) => [state, fields.filter((field) => field.classification === state).length]));
   return { fields, counts, mismatchCount: counts.MISMATCH, unresolvedCritical: fields.filter((field) => ['NOT_VISIBLE', 'NOT_DISCOVERED'].includes(field.classification)).map((field) => field.manifestJsonPath) };
 }

@@ -6,7 +6,7 @@ import test from 'node:test';
 import { chromium } from 'playwright-core';
 import { buildMutationPlan, preflightMutationPlan } from '../src/mutation-plan.mjs';
 import { installNetworkGuard } from '../src/network-guard.mjs';
-import { comparePlatformClassification } from '../src/comparison.mjs';
+import { comparePlatformClassification, comparePriceClassification } from '../src/comparison.mjs';
 import { detectManualBlock, runPortalAutomation } from '../src/portal.mjs';
 import { parseArgs } from '../src/cli.mjs';
 import { startFixture } from './fixtures/server.mjs';
@@ -403,6 +403,19 @@ test('platform comparison requires the complete normalized set', () => {
   assert.equal(comparePlatformClassification('Windows', ['Win64', 'Linux']), 'MISMATCH');
   assert.equal(comparePlatformClassification('Windows Linux macOS', ['Win64', 'Linux']), 'MISMATCH');
   assert.equal(comparePlatformClassification('mac os', ['macOS']), 'MATCH');
+});
+
+test('USD price comparison normalizes exact cents without accepting other currencies', () => {
+  assert.equal(comparePriceClassification('$9.99', 9.99), 'MATCH');
+  assert.equal(comparePriceClassification('USD 9.99', 9.99), 'MATCH');
+  assert.equal(comparePriceClassification('9.99 USD', 9.99), 'MATCH');
+  assert.equal(comparePriceClassification('9.99 (USD)', 9.99), 'MATCH');
+  assert.equal(comparePriceClassification(9.99, 9.99), 'MATCH');
+  assert.equal(comparePriceClassification('$10.99', 9.99), 'MISMATCH');
+  assert.equal(comparePriceClassification('€9.99', 9.99), 'MISMATCH');
+  assert.equal(comparePriceClassification('about $9.99', 9.99), 'MISMATCH');
+  assert.equal(comparePriceClassification('$29.99', 29.99), 'MATCH');
+  assert.equal(comparePriceClassification(null, 9.99), 'NOT_VISIBLE');
 });
 
 test('engine comparison requires an exact visible engine set', async () => {
