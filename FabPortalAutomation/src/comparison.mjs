@@ -159,9 +159,44 @@ export async function compareManifest(page, manifestInfo) {
   tags.desiredValue = manifest.tags;
   fields.push(tags);
   fields.push(await compareTextField(page, manifest, 'includedFormat', 'Unreal Engine'));
-  const engine = await page.getByText(`UE_${manifest.engineVersions[0]}`, { exact: true }).count();
-  fields.push(fieldResult({ manifestJsonPath: 'engineVersions', portalLabel: 'Engine Versions', desired: manifest.engineVersions, current: engine ? `UE_${manifest.engineVersions[0]}` : null, state: engine ? 'MATCH' : 'NOT_VISIBLE', resolved: engine ? { metadata: { strategy: 'getByText', expression: `page.getByText("UE_${manifest.engineVersions[0]}", { exact: true })`, matchCount: engine, unique: engine === 1, confidence: 'medium' } } : null, editableControlAvailable: false, notes: engine ? '' : 'Engine version is not visible.' }));
+  const engineLocator = page.getByText(/^UE_[0-9]+(?:\.[0-9]+)+$/, { exact: false });
+  const engineCount = await engineLocator.count();
+  const engineValues = engineCount > 0
+    ? [...new Set((await engineLocator.allTextContents()).map((value) => normalizeText(value)).filter((value) => /^UE_[0-9]+(?:\.[0-9]+)+$/.test(value)))]
+    : [];
+  const portalEngines = engineValues.map((value) => value.slice(3));
+  const engineDesired = [...manifest.engineVersions].sort();
+  const engineState = engineValues.length === 0
+    ? 'NOT_VISIBLE'
+    : JSON.stringify([...portalEngines].sort()) === JSON.stringify(engineDesired) ? 'MATCH' : 'MISMATCH';
+  fields.push(fieldResult({
+    manifestJsonPath: 'engineVersions',
+    portalLabel: 'Engine Versions',
+    desired: manifest.engineVersions,
+    current: engineValues.length ? portalEngines : null,
+    state: engineState,
+    resolved: engineCount > 0 ? { metadata: { strategy: 'getByText', expression: 'page.getByText(/^UE_[0-9]+(?:\\.[0-9]+)+$/, { exact: false })', matchCount: engineCount, unique: engineCount === engineValues.length, confidence: 'medium' } } : null,
+    editableControlAvailable: false,
+    notes: engineValues.length ? '' : 'Engine version section is not visible.'
+  }));
   const platform = await compareTextField(page, manifest, 'platforms', 'Supported development platforms *');
+  const platformChips = page.getByRole('button', { name: /^Remove (?:Windows|Win64|Linux|Mac(?: OS)?|macOS)$/ });
+  const platformChipCount = await platformChips.count();
+  if (platformChipCount > 0) {
+    const chipValues = await platformChips.evaluateAll((nodes) => nodes.map((node) => node.getAttribute('aria-label') ?? node.textContent ?? '').map((value) => value.replace(/^Remove\s+/i, '').trim()).filter(Boolean));
+    platform.currentVisibleValue = chipValues.join(' ');
+    platform.currentNormalizedValue = platform.currentVisibleValue;
+    platform.candidateLocator = {
+      strategy: 'getByRole',
+      expression: 'page.getByRole("button", { name: /^Remove (?:Windows|Win64|Linux|Mac(?: OS)?|macOS)$/ })',
+      matchCount: platformChipCount,
+      unique: true,
+      confidence: 'high',
+      reason: 'Stable static platform chip values proven by the read-only Fab discovery.',
+    };
+    platform.locatorMatchCount = platformChipCount;
+    platform.confidence = 'high';
+  }
   if (comparePlatformClassification(platform.currentVisibleValue, manifest.platforms) === 'NOT_DISCOVERED') {
     const windowsText = page.getByText('Windows', { exact: true });
     const removeWindows = page.getByRole('button', { name: 'Remove Windows', exact: true });
@@ -218,10 +253,12 @@ export async function compareManifest(page, manifestInfo) {
 
 export function normalizePortalPlatforms(value) {
   const normalized = normalizeText(value).toLowerCase();
-  if (/\bwindows?\b|win64/.test(normalized)) return ['Win64'];
-  if (/\blinux\b/.test(normalized)) return ['Linux'];
-  if (/macos|mac\s*os|\bmac\b/.test(normalized)) return ['macOS'];
-  return [];
+  const platforms = [];
+  const add = (platform) => { if (!platforms.includes(platform)) platforms.push(platform); };
+  if (/\bwindows?\b|\bwin64\b/.test(normalized)) add('Win64');
+  if (/\blinux\b/.test(normalized)) add('Linux');
+  if (/\bmacos\b|\bmac\s*os\b|\bmac\b/.test(normalized)) add('macOS');
+  return platforms;
 }
 
 export function comparePlatformClassification(portalValue, manifestPlatforms) {

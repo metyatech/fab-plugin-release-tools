@@ -70,28 +70,33 @@ async function selectExactOption(page, desired) {
   await options.click();
 }
 
-export async function executeMutationPlan(page, preflight, manifestInfo) {
+export async function executeMutationPlan(page, preflight, manifestInfo, { setPhase = null } = {}) {
   const executed = [];
   for (const { item, locator } of preflight.targets) {
+    setPhase?.(item.mutationType === 'upload' ? 'media-upload' : 'field-update');
     const packageMatch = item.fieldName.match(/^packages\[(\d+)\]\.projectFileLink$/);
     const desired = packageMatch
       ? manifestInfo.manifest.packages[Number(packageMatch[1])].projectFileLink
       : item.fieldName === 'technicalInformationFile' ? manifestInfo.technicalInformationText : manifestInfo.manifest[item.fieldName];
-    if (item.mutationType === 'text' || item.mutationType === 'richText') await locator.fill(String(desired));
-    else if (item.mutationType === 'combobox') {
-      await locator.click();
-      await selectExactOption(page, desired);
-    } else if (item.mutationType === 'boolean') {
-      const checked = await locator.isChecked();
-      const checkedValue = item.checkedValue ?? true;
-      const currentValue = checked ? checkedValue : !checkedValue;
-      if (currentValue !== Boolean(desired)) {
-        if (Boolean(desired) === checkedValue) await locator.check();
-        else await locator.uncheck();
+    try {
+      if (item.mutationType === 'text' || item.mutationType === 'richText') await locator.fill(String(desired));
+      else if (item.mutationType === 'combobox') {
+        await locator.click();
+        await selectExactOption(page, desired);
+      } else if (item.mutationType === 'boolean') {
+        const checked = await locator.isChecked();
+        const checkedValue = item.checkedValue ?? true;
+        const currentValue = checked ? checkedValue : !checkedValue;
+        if (currentValue !== Boolean(desired)) {
+          if (Boolean(desired) === checkedValue) await locator.check();
+          else await locator.uncheck();
+        }
+      } else if (item.mutationType === 'upload') {
+        const files = manifestInfo.mediaFiles.map((file) => file.path);
+        await page.getByTestId('media-upload').setInputFiles(files);
       }
-    } else if (item.mutationType === 'upload') {
-      const files = manifestInfo.mediaFiles.map((file) => file.path);
-      await page.getByTestId('media-upload').setInputFiles(files);
+    } finally {
+      setPhase?.('stage');
     }
     executed.push(item.fieldName);
   }

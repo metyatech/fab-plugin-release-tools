@@ -18,7 +18,7 @@ function pageMarkup(state, listingId) {
     <label>Category *<input role="combobox" aria-label="Category selection" value="${html(state.category)}"></label>
     <label>Tags *<input aria-label="Tags *" value="${html(state.tags[0] ?? '')}" readonly></label>
     <button type="button">Unreal Engine</button>
-    <div>UE_${html(state.engineVersions[0])}</div>
+    ${state.engineVersions.map((version) => `<div>UE_${html(version)}</div>`).join('')}
     <label>Supported development platforms *<input aria-label="Supported development platforms *" value="${html(state.platformDisplay ?? 'Windows')}" readonly></label>
     ${radio('Standard License (Free or Paid)', true)}
     <label>Personal price *<input aria-label="Personal price *" value="${html(state.personalPriceUsd)}"></label>
@@ -35,6 +35,7 @@ function pageMarkup(state, listingId) {
     <section data-testid="media-gallery" data-existing="${html(state.mediaExisting)}" data-order="${html(state.mediaOrder ?? '')}" data-upload-order="${html(initialStateMediaOrder(state))}">${html(state.mediaExisting === 'existing' ? 'Existing media' : state.mediaExisting === 'known' || state.mediaExisting === 'uploaded' ? '001 thumbnail 002 gallery' : '')}</section>
     <input type="file" data-testid="media-upload" multiple>
     <label>Project file<input aria-label="Project file" value="${html(state.projectFileLink)}"></label>
+    ${(state.readOnlySections ?? []).map((label, index) => `<button type="button" aria-label="toggle ${html(label)}" aria-expanded="false" aria-controls="fixture-section-${index}">toggle ${html(label)}</button><section id="fixture-section-${index}" hidden>${html(label)} content</section>`).join('')}
     <button type="button" data-testid="save" ${state.disableSave ? 'disabled' : ''}>Save</button>
     <button type="button" data-testid="submit">Submit for review</button>
     <button type="button" data-testid="cancel">Cancel submission</button>
@@ -65,6 +66,11 @@ function pageMarkup(state, listingId) {
     document.querySelector('[data-testid="save"]').addEventListener('click', () => fetch('/api/save', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload()) }));
     document.querySelector('[data-testid="submit"]').addEventListener('click', () => fetch('/api/submit', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) }));
     document.querySelector('[data-testid="cancel"]').addEventListener('click', () => fetch('/api/cancel', { method: 'POST' }));
+    document.querySelectorAll('[aria-expanded="false"][aria-controls^="fixture-section-"]').forEach((toggle) => toggle.addEventListener('click', () => {
+      if (${state.readOnlySectionMutation ? 'true' : 'false'}) fetch('/api/read-only-expansion', { method: 'POST' }).catch(() => undefined);
+      toggle.setAttribute('aria-expanded', 'true');
+      document.getElementById(toggle.getAttribute('aria-controls')).hidden = false;
+    }));
     document.querySelector('[data-testid="media-upload"]').addEventListener('change', () => { const gallery = document.querySelector('[data-testid="media-gallery"]'); gallery.dataset.existing = 'uploaded'; gallery.dataset.order = gallery.dataset.uploadOrder; gallery.textContent = '001 thumbnail 002 gallery'; });
   </script>
   </body></html>`;

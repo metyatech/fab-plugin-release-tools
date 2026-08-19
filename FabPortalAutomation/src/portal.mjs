@@ -49,10 +49,17 @@ async function requireExactTitle(page, title) {
 
 async function detectManualBlock(page) {
   const body = normalized(await page.locator('body').textContent().catch(() => ''));
-  if (/verify you are human|cloudflare|just a moment|attention required/i.test(body)) {
+  if (/verify you are human|cloudflare|just a moment|attention required|security check|セキュリティチェック|あともう1ステップ|継続するには/i.test(body)) {
     throw new Error('MANUAL ACTION REQUIRED: Cloudflare or a browser security challenge is blocking Fab. Complete it manually and rerun.');
   }
-  if (/sign in|log in|authenticate/i.test(body) && !/Server Manage Tool/.test(body)) {
+  const currentUrl = new URL(page.url());
+  if (/(?:\/login|\/signin|\/sign-in|\/authenticate)(?:\/|$)/i.test(currentUrl.pathname) || /^(?:auth|accounts?)\./i.test(currentUrl.hostname)) {
+    throw new Error('MANUAL ACTION REQUIRED: Fab authentication is required. Complete login/MFA manually and rerun.');
+  }
+  const passwordCount = await page.locator('input[type="password"]').count().catch(() => 0);
+  const formCount = await page.locator('form').count().catch(() => 0);
+  const signInButtonCount = await page.getByRole('button', { name: /^(?:sign in|log in)$/i }).count().catch(() => 0);
+  if (passwordCount > 0 && formCount > 0 && signInButtonCount > 0) {
     throw new Error('MANUAL ACTION REQUIRED: Fab authentication is required. Complete login/MFA manually and rerun.');
   }
 }
@@ -69,16 +76,44 @@ async function ensureTarget(page, manifest, origin) {
   return { expectedUrl: expected, finalUrl: page.url() };
 }
 
-async function openFormatIfNeeded(page, manifest) {
+async function openFormatIfNeeded(page, manifest, guard) {
   const link = page.getByText(manifest.packages[0].projectFileLink, { exact: true });
   if (await link.count() === 1) return false;
   const format = page.getByRole('button', { name: manifest.includedFormat, exact: true });
   if (await format.count() === 1) {
     await format.click();
     await page.waitForTimeout(100);
+    if ((guard?.summary().networkMutationRequestsObserved ?? 0) > 0) throw new Error('Read-only format expansion caused a network mutation; discovery was aborted safely.');
     return true;
   }
   return false;
+}
+
+const READ_ONLY_SECTION_TOGGLES = [
+  'toggle Compatibility and file information',
+  'toggle Third party software usage',
+  'toggle Tools and plugins',
+  'toggle Additional information',
+];
+
+async function prepareReadOnlySections(page, guard) {
+  const actions = [];
+  for (const name of READ_ONLY_SECTION_TOGGLES) {
+    const locator = page.getByRole('button', { name, exact: true });
+    if (await locator.count() !== 1) continue;
+    if (await locator.isDisabled().catch(() => true)) continue;
+    const expanded = await locator.getAttribute('aria-expanded');
+    if (expanded !== 'false') continue;
+    if (!await locator.getAttribute('aria-controls')) continue;
+    const before = guard.summary().networkMutationRequestsObserved;
+    await locator.click();
+    await page.waitForTimeout(100);
+    const after = guard.summary().networkMutationRequestsObserved;
+    if (after > before) throw new Error(`Read-only section expansion ${name} caused a network mutation; discovery was aborted safely.`);
+    if (await locator.getAttribute('aria-expanded') !== 'true') throw new Error(`Read-only section expansion ${name} did not reach an expanded state.`);
+    actions.push(name);
+  }
+  return actions;
 }
 
 async function readDangerousActions(page) {
@@ -112,6 +147,13 @@ function criticalBlockers(comparison, manifest = null) {
     .filter((field) => CRITICAL_OWNED_FIELDS.has(field.manifestJsonPath) || /^packages\[\d+\]\.projectFileLink$/.test(field.manifestJsonPath))
     .filter((field) => ['NOT_VISIBLE', 'NOT_DISCOVERED'].includes(field.classification) || (field.classification === 'MISMATCH' && !field.writeTarget))
     .map((field) => `${field.manifestJsonPath} is ${field.classification}${field.classification === 'MISMATCH' ? ' and has no approved writable locator' : ''}.`)];
+}
+
+function writeReadiness(listingStatus, comparison, manifest) {
+  const blockers = [];
+  if (REVIEW_LOCKED.has(normalized(listingStatus).toLowerCase())) blockers.push(`Listing status ${listingStatus} is review-locked.`);
+  blockers.push(...criticalBlockers(comparison, manifest));
+  return { writeReady: blockers.length === 0, writeBlockers: [...new Set(blockers)] };
 }
 
 async function verifyAfterStaging(page, manifestInfo) {
@@ -155,6 +197,8 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     blockers: [],
     result: 'FAIL',
     readOnlyUiActions: [],
+    writeReady: false,
+    writeBlockers: [],
   };
   Object.defineProperty(result, 'page', { value: page, enumerable: false, configurable: true });
   Object.defineProperty(result, 'browser', { value: browser, enumerable: false, configurable: true });
@@ -162,17 +206,17 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     await ensureTarget(page, manifestInfo.manifest, origin);
     result.listingStatus = await readStatus(page);
     result.dangerousActionsFound = await readDangerousActions(page);
-    const formatOpened = await openFormatIfNeeded(page, manifestInfo.manifest);
+    result.readOnlyUiActions.push(...await prepareReadOnlySections(page, guard));
+    const formatOpened = await openFormatIfNeeded(page, manifestInfo.manifest, guard);
     if (formatOpened) result.readOnlyUiActions.push('opened Unreal Engine format section');
     result.comparison = await compareManifest(page, manifestInfo);
+    ({ writeReady: result.writeReady, writeBlockers: result.writeBlockers } = writeReadiness(result.listingStatus, result.comparison, manifestInfo.manifest));
     if (mode === 'verify') {
       if (result.comparison.mismatchCount > 0) result.blockers.push(`${result.comparison.mismatchCount} manifest mismatch(es).`);
       result.result = result.blockers.length === 0 ? 'PASS' : 'FAIL';
       return result;
     }
-    if (REVIEW_LOCKED.has(result.listingStatus.toLowerCase())) throw new Error(`Listing status ${result.listingStatus} is review-locked; no write interaction is allowed.`);
-    const unresolved = criticalBlockers(result.comparison, manifestInfo.manifest);
-    if (unresolved.length > 0) throw new Error(`Write blocked by unresolved critical portal fields: ${unresolved.join(' ')}`);
+    if (result.writeBlockers.length > 0) throw new Error(`Write blocked by readiness gates: ${result.writeBlockers.join(' ')}`);
     const mutation = buildMutationPlan(result.comparison, manifestInfo);
     result.plannedMutations = mutation.plan;
     result.blockers.push(...mutation.blockers);
@@ -182,21 +226,24 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     } else {
       const preflight = await preflightMutationPlan(page, mutation.plan, manifestInfo.manifest);
       if (!preflight.ok) throw new Error(`Mutation preflight failed: ${preflight.failures.join(' ')}`);
-      guard.setPhase(mutation.plan.some((item) => item.mutationType === 'upload') ? 'media-upload' : 'save');
-      result.executedMutations = await executeMutationPlan(page, preflight, manifestInfo);
+      guard.setPhase('stage');
+      result.executedMutations = await executeMutationPlan(page, preflight, manifestInfo, { setPhase: (phase) => guard.setPhase(phase) });
       result.writeInteractionsPerformed += result.executedMutations.length;
       guard.setPhase('stage');
       result.comparisonAfter = await verifyAfterStaging(page, manifestInfo);
+      ({ writeReady: result.writeReady, writeBlockers: result.writeBlockers } = writeReadiness(result.listingStatus, result.comparisonAfter, manifestInfo.manifest));
       guard.setPhase('save');
       const save = await uniqueAction(page, saveCandidates(), 'Save Draft');
       await save.locator.click();
       result.saveInvoked = true;
       result.writeInteractionsPerformed += 1;
       await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => undefined);
+      guard.setPhase('stage');
       await page.reload({ waitUntil: 'domcontentloaded' });
       await ensureTarget(page, manifestInfo.manifest, origin);
       result.listingStatus = await readStatus(page);
       result.comparisonAfter = await verifyAfterStaging(page, manifestInfo);
+      ({ writeReady: result.writeReady, writeBlockers: result.writeBlockers } = writeReadiness(result.listingStatus, result.comparisonAfter, manifestInfo.manifest));
     }
     if (mode === 'submit') {
       if (!result.saveInvoked && result.plannedMutations.length > 0) throw new Error('Submit for review requires a completed Save Draft operation.');
@@ -206,6 +253,8 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
       await submit.locator.click();
       result.submitInvoked = true;
       result.writeInteractionsPerformed += 1;
+      await page.waitForTimeout(100);
+      guard.setPhase('stage');
       const confirmation = page.getByRole('button', { name: /^(Submit for review|Submit for Review|Confirm)$/ });
       if (await confirmation.count() === 1) {
         await confirmation.click();
@@ -225,4 +274,4 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
   }
 }
 
-export { CRITICAL_OWNED_FIELDS, criticalBlockers, readStatus, requireExactTitle };
+export { CRITICAL_OWNED_FIELDS, criticalBlockers, detectManualBlock, prepareReadOnlySections, readStatus, requireExactTitle, writeReadiness };

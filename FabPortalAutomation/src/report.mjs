@@ -27,8 +27,10 @@ function markdown(result, comparison, after, network) {
 - Status: ${result.listingStatus ?? 'unknown'}
 - Save invoked: ${result.saveInvoked}
 - Submit invoked: ${result.submitInvoked}
+- Write ready: ${result.writeReady}
 - Write interactions: ${result.writeInteractionsPerformed}
 - Network mutations observed/blocked: ${network?.networkMutationRequestsObserved ?? 0}/${network?.networkMutationRequestsBlocked ?? 0}
+- Read-only UI actions: ${result.readOnlyUiActions?.length ? result.readOnlyUiActions.join(', ') : 'none'}
 
 ## Comparison before
 
@@ -45,6 +47,10 @@ ${result.plannedMutations.length ? result.plannedMutations.map((item) => `- ${it
 ## Blockers
 
 ${result.blockers.length ? result.blockers.map((item) => `- ${item}`).join('\n') : '- none'}
+
+## Write blockers
+
+${result.writeBlockers?.length ? result.writeBlockers.map((item) => `- ${item}`).join('\n') : '- none'}
 `;
 }
 
@@ -62,6 +68,9 @@ export async function writeRunReport({ directory, result, comparison, comparison
     executedMutations: result.executedMutations,
     saveInvoked: result.saveInvoked,
     submitInvoked: result.submitInvoked,
+    writeReady: result.writeReady,
+    writeBlockers: result.writeBlockers,
+    readOnlyUiActions: result.readOnlyUiActions,
     writeInteractionsPerformed: result.writeInteractionsPerformed,
     networkMutationRequestsObserved: network?.networkMutationRequestsObserved ?? 0,
     networkMutationRequestsBlocked: network?.networkMutationRequestsBlocked ?? 0,

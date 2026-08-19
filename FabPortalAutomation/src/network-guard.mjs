@@ -47,7 +47,8 @@ function isMutation(method, graph, intent) {
 function phaseAllows(mode, phase, intent) {
   if (mode === 'verify') return false;
   if (intent === 'cancel' || intent === 'delete' || intent === 'unlist' || intent === 'publish') return false;
-  if (phase === 'media-upload') return mode === 'save' && intent === 'media-upload';
+  if (phase === 'media-upload') return (mode === 'save' || mode === 'submit') && intent === 'media-upload';
+  if (phase === 'field-update') return (mode === 'save' || mode === 'submit') && intent === 'save';
   if (mode === 'save') return phase === 'save' && intent === 'save';
   if (mode === 'submit') return (phase === 'save' && intent === 'save') || (phase === 'submit' && intent === 'submit');
   return false;
@@ -55,7 +56,7 @@ function phaseAllows(mode, phase, intent) {
 
 export function installNetworkGuard(context, { mode = 'verify' } = {}) {
   const effectiveMode = mode === 'write' ? 'save' : mode;
-  const state = { mode: effectiveMode, phase: null, requests: [], observed: 0, blocked: 0 };
+  const state = { mode: effectiveMode, phase: 'stage', phaseHistory: ['stage'], requests: [], observed: 0, blocked: 0 };
   const handler = async (route) => {
     const request = route.request();
     const method = request.method().toUpperCase();
@@ -87,11 +88,15 @@ export function installNetworkGuard(context, { mode = 'verify' } = {}) {
   };
   context.route('**/*', handler);
   return {
-    setPhase(phase) { state.phase = phase; },
+    setPhase(phase) {
+      state.phase = phase;
+      if (state.phaseHistory[state.phaseHistory.length - 1] !== phase) state.phaseHistory.push(phase);
+    },
     summary() {
       return {
         mode: state.mode,
         phase: state.phase,
+        phaseHistory: [...state.phaseHistory],
         networkMutationRequestsObserved: state.observed,
         networkMutationRequestsBlocked: state.blocked,
         requests: state.requests,

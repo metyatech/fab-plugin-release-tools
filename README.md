@@ -305,6 +305,11 @@ Pending approval listings cannot be modified; Cancel submission is never
 invoked automatically. The automation never handles Cloudflare, credentials,
 MFA, or browser storage.
 
+A verify-only `PASS` reports that observation completed without a proven
+mismatch; it does not imply write readiness. The run report records
+`writeReady` and `writeBlockers` when review-locked status or unresolved
+critical fields would block a future write.
+
 Save and submit safety requires every manifest-owned critical field to be
 readable and either already matching or backed by an approved writable locator,
 including descriptions, taxonomy, tags, format/engine/platform, license,

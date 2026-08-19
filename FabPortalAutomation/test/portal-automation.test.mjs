@@ -7,7 +7,7 @@ import { chromium } from 'playwright-core';
 import { buildMutationPlan, preflightMutationPlan } from '../src/mutation-plan.mjs';
 import { installNetworkGuard } from '../src/network-guard.mjs';
 import { comparePlatformClassification } from '../src/comparison.mjs';
-import { runPortalAutomation } from '../src/portal.mjs';
+import { detectManualBlock, runPortalAutomation } from '../src/portal.mjs';
 import { parseArgs } from '../src/cli.mjs';
 import { startFixture } from './fixtures/server.mjs';
 import { fixtureState, makeManifest, makeManifestInfo, listingId } from './helpers.mjs';
@@ -278,11 +278,117 @@ test('media upload network intent requires the explicit media-upload phase', asy
   assert.equal(summary.requests.filter((item) => item.intent === 'media-upload' && !item.blocked).length, 1);
 });
 
+test('submit mode permits media upload only in its explicit pre-save phase', async () => {
+  const fixture = await startFixture(fixtureState(makeManifest()));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+  const guard = installNetworkGuard(context, { mode: 'submit' });
+  guard.setPhase('save');
+  await page.evaluate(() => fetch('/api/media-upload', { method: 'POST', body: 'blocked-in-save' }).catch(() => undefined));
+  guard.setPhase('media-upload');
+  await page.evaluate(() => fetch('/api/media-upload', { method: 'POST', body: 'allowed-before-save' }));
+  guard.setPhase('stage');
+  await page.evaluate(() => fetch('/api/media-upload', { method: 'POST', body: 'blocked-after-stage' }).catch(() => undefined));
+  const summary = guard.summary();
+  await guard.dispose();
+  await context.close();
+  await fixture.close();
+  assert.equal(summary.networkMutationRequestsObserved, 3);
+  assert.equal(summary.networkMutationRequestsBlocked, 2);
+  assert.equal(summary.requests.filter((item) => item.intent === 'media-upload' && !item.blocked).length, 1);
+});
+
 test('platform normalization only maps Windows to Win64', () => {
   assert.equal(comparePlatformClassification('Windows', ['Win64']), 'MATCH');
   assert.equal(comparePlatformClassification('Linux', ['Win64']), 'MISMATCH');
   assert.equal(comparePlatformClassification('macOS', ['Win64']), 'MISMATCH');
   assert.equal(comparePlatformClassification(null, ['Win64']), 'NOT_VISIBLE');
+});
+
+test('platform comparison requires the complete normalized set', () => {
+  assert.equal(comparePlatformClassification('Windows Linux', ['Win64', 'Linux']), 'MATCH');
+  assert.equal(comparePlatformClassification('Windows', ['Win64', 'Linux']), 'MISMATCH');
+  assert.equal(comparePlatformClassification('Windows Linux macOS', ['Win64', 'Linux']), 'MISMATCH');
+  assert.equal(comparePlatformClassification('mac os', ['macOS']), 'MATCH');
+});
+
+test('engine comparison requires an exact visible engine set', async () => {
+  const manifest = makeManifest({ engineVersions: ['5.7', '5.8'] });
+  const matching = await scenario({ manifest, state: { engineVersions: ['5.7', '5.8'] } });
+  assert.equal(matching.result.comparison.fields.find((item) => item.manifestJsonPath === 'engineVersions').classification, 'MATCH');
+  const missing = await scenario({ manifest, state: { engineVersions: ['5.8'] } });
+  assert.equal(missing.result.comparison.fields.find((item) => item.manifestJsonPath === 'engineVersions').classification, 'MISMATCH');
+  const extra = await scenario({ manifest, state: { engineVersions: ['5.7', '5.8', '5.9'] } });
+  assert.equal(extra.result.comparison.fields.find((item) => item.manifestJsonPath === 'engineVersions').classification, 'MISMATCH');
+});
+
+test('manual-block detection is generic and does not depend on a product title', async () => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.setContent('<main><h1>Server Manage Tool</h1><footer>Sign in to continue shopping</footer></main>');
+  await assert.doesNotReject(() => detectManualBlock(page));
+  await page.setContent('<main><h1>Other Product</h1><footer>Sign in to continue shopping</footer></main>');
+  await assert.doesNotReject(() => detectManualBlock(page));
+  await context.close();
+});
+
+test('verify PASS reports unresolved write readiness separately', async () => {
+  const ready = await scenario();
+  assert.equal(ready.result.result, 'PASS');
+  assert.equal(ready.result.writeReady, true);
+  assert.deepEqual(ready.result.writeBlockers, []);
+  const locked = await scenario({ state: { status: 'Pending approval' } });
+  assert.equal(locked.result.result, 'PASS');
+  assert.equal(locked.result.writeReady, false);
+  assert.match(locked.result.writeBlockers.join(' '), /review-locked/);
+  const unresolved = await scenario({ state: { mediaExisting: 'existing' } });
+  assert.equal(unresolved.result.result, 'PASS');
+  assert.equal(unresolved.result.writeReady, false);
+  assert.match(unresolved.result.writeBlockers.join(' '), /media/);
+});
+
+test('read-only section expansion is recorded without mutation', async () => {
+  const { result, fixture } = await scenario({ state: { readOnlySections: ['Additional information'] } });
+  assert.deepEqual(result.readOnlyUiActions, ['toggle Additional information', 'opened Unreal Engine format section']);
+  assert.equal(result.writeInteractionsPerformed, 0);
+  assert.equal(fixture.mutations.length, 0);
+});
+
+test('a mutation caused by a supposed read-only expansion is blocked safely', async () => {
+  const { result, fixture } = await scenario({ state: { readOnlySections: ['Additional information'], readOnlySectionMutation: true } });
+  assert.equal(result.result, 'FAIL');
+  assert.equal(result.writeInteractionsPerformed, 0);
+  assert.equal(result.network.networkMutationRequestsObserved, 1);
+  assert.equal(result.network.networkMutationRequestsBlocked, 1);
+  assert.equal(fixture.mutations.length, 0);
+});
+
+test('mixed mutation plans switch phases narrowly and submit permits pre-save media upload', async () => {
+  const manifest = makeManifest({
+    shortDescription: 'Changed short description',
+    media: [
+      { order: 1, role: 'thumbnail', bundleRelativePath: 'media/001.jpg', sha256: 'a'.repeat(64) },
+      { order: 2, role: 'gallery', bundleRelativePath: 'media/002.jpg', sha256: 'c'.repeat(64) },
+    ],
+  });
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'fab-media-submit-'));
+  const first = path.join(directory, '001.jpg');
+  const second = path.join(directory, '002.jpg');
+  await writeFile(first, 'thumbnail');
+  await writeFile(second, 'gallery');
+  const { result, fixture } = await scenario({
+    manifest,
+    state: { shortDescription: 'Old short description', mediaExisting: 'empty' },
+    mediaFiles: [{ path: first }, { path: second }],
+    mode: 'submit',
+    saveDraftAuthorized: true,
+  });
+  assert.equal(result.result, 'PASS');
+  assert.deepEqual(result.executedMutations, ['shortDescription', 'media']);
+  assert.deepEqual(result.network.phaseHistory, ['stage', 'field-update', 'stage', 'media-upload', 'stage', 'save', 'stage', 'submit', 'stage']);
+  assert.equal(fixture.mutations.some((item) => item.pathname === '/api/save'), true);
+  assert.equal(fixture.mutations.some((item) => item.pathname === '/api/submit'), true);
 });
 
 test('allowsUsageWithAi uses Fab negative-control polarity', async () => {
