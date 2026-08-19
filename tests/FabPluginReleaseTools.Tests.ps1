@@ -1841,6 +1841,65 @@ const char* Text = "UPROPERTY(EditAnywhere)";
     }
 
     Describe 'Session deletion safety' {
+        It 'creates compact unique absolute session roots under system temp' {
+            $first = $null
+            $second = $null
+            try {
+                $first = New-FabPluginReleaseSessionRoot
+                $second = New-FabPluginReleaseSessionRoot
+                $systemTempRoot = [System.IO.Path]::GetFullPath(
+                    [System.IO.Path]::GetTempPath()).TrimEnd('\', '/')
+                foreach ($sessionRoot in @($first, $second)) {
+                    [System.IO.Path]::IsPathFullyQualified($sessionRoot) | Should -BeTrue
+                    $sessionRoot.StartsWith(
+                        $systemTempRoot + [System.IO.Path]::DirectorySeparatorChar,
+                        [System.StringComparison]::OrdinalIgnoreCase) | Should -BeTrue
+                    [System.IO.Path]::GetFileName([System.IO.Path]::GetDirectoryName($sessionRoot)) |
+                        Should -BeExactly 'fpr'
+                    $sessionRoot | Should -Not -Match 'fab-plugin-release-tools'
+                    [System.IO.Path]::GetFileName($sessionRoot) | Should -Match '^[0-9a-f]{16}$'
+                    $sessionRoot | Should -Exist
+                }
+                $first | Should -Not -BeExactly $second
+            }
+            finally {
+                foreach ($sessionRoot in @($first, $second)) {
+                    if (-not [string]::IsNullOrWhiteSpace($sessionRoot) -and
+                        [System.IO.Directory]::Exists($sessionRoot)) {
+                        Remove-SessionDirectory -SessionRoot $sessionRoot -Confirm:$false
+                    }
+                }
+            }
+        }
+
+        It 'removes only a generated session directory' {
+            $sessionRoot = New-FabPluginReleaseSessionRoot
+            $siblingRoot = Join-Path (Split-Path -Parent $sessionRoot) 'sibling'
+            $outsideRoot = Join-Path $TestDrive 'OutsideSession'
+            [System.IO.Directory]::CreateDirectory((Join-Path $sessionRoot 'child')) | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $sessionRoot 'release.log'), 'log')
+            [System.IO.Directory]::CreateDirectory($siblingRoot) | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $siblingRoot 'sentinel.txt'), 'sibling')
+            [System.IO.Directory]::CreateDirectory($outsideRoot) | Out-Null
+            try {
+                Remove-SessionDirectory -SessionRoot $sessionRoot -Confirm:$false
+                $sessionRoot | Should -Not -Exist
+                $siblingRoot | Should -Exist
+                $outsideRoot | Should -Exist
+            }
+            finally {
+                if ([System.IO.Directory]::Exists($sessionRoot)) {
+                    Remove-SessionDirectory -SessionRoot $sessionRoot -Confirm:$false
+                }
+                if ([System.IO.Directory]::Exists($siblingRoot)) {
+                    Remove-SessionDirectory -SessionRoot $siblingRoot -Confirm:$false
+                }
+                if ([System.IO.Directory]::Exists($outsideRoot)) {
+                    [System.IO.Directory]::Delete($outsideRoot, $true)
+                }
+            }
+        }
+
         It 'removes a session child and rejects outside or root deletion' {
             $session = Join-Path $TestDrive 'Session'
             $child = Join-Path $session 'child'
@@ -2090,7 +2149,9 @@ const char* Text = "UPROPERTY(EditAnywhere)";
 
                     [string]$ScriptPath,
 
-                    [string]$ModulePath
+                    [string]$ModulePath,
+
+                    [switch]$KeepWorkingDirectory
                 )
 
                 $entryPoint = if ([string]::IsNullOrWhiteSpace($ScriptPath)) {
@@ -2114,6 +2175,9 @@ const char* Text = "UPROPERTY(EditAnywhere)";
                         '-EngineRoot', $EngineRoot,
                         '-OutputDirectory', $OutputRoot)) {
                     [void]$startInfo.ArgumentList.Add($argument)
+                }
+                if ($KeepWorkingDirectory) {
+                    [void]$startInfo.ArgumentList.Add('-KeepWorkingDirectory')
                 }
                 if (-not [string]::IsNullOrWhiteSpace($ModulePath)) {
                     [void]$startInfo.ArgumentList.Add('-ModulePath')
@@ -2150,6 +2214,34 @@ const char* Text = "UPROPERTY(EditAnywhere)";
             @(Get-ChildItem -LiteralPath $outputRoot -File -Filter '*.sha256').Count | Should -Be 1
             @(Get-ChildItem -LiteralPath $outputRoot -File -Filter '*.report.json').Count | Should -Be 1
             @(Get-ChildItem -LiteralPath $outputRoot -File -Filter '*.log').Count | Should -Be 1
+        }
+
+        It 'retains and reports the compact session root with KeepWorkingDirectory' {
+            $pluginRoot = Join-Path $TestDrive 'KeepSessionPlugin'
+            $engineRoot = Join-Path $TestDrive 'KeepSessionEngine'
+            $outputRoot = Join-Path $TestDrive 'KeepSessionOutput'
+            Invoke-TestPluginSetup -Root $pluginRoot -InitializeGit
+            Invoke-FakeEngineSetup -Root $engineRoot -Behavior Success
+            $result = Invoke-TestEntryPoint -PluginRoot $pluginRoot -EngineRoot $engineRoot `
+                -OutputRoot $outputRoot -KeepWorkingDirectory
+            $result.ExitCode | Should -Be 0 -Because $result.StdErr
+            $report = Get-Content -Raw -LiteralPath (
+                (Get-ChildItem -LiteralPath $outputRoot -File -Filter '*.report.json')[0].FullName) |
+                ConvertFrom-Json
+            $sessionRoot = $null
+            try {
+                $sessionRoot = [System.IO.Path]::GetFullPath([string]$report.workingDirectory)
+                $sessionRoot | Should -Exist
+                [System.IO.Path]::GetFileName([System.IO.Path]::GetDirectoryName($sessionRoot)) |
+                    Should -BeExactly 'fpr'
+                [System.IO.Path]::GetFileName($sessionRoot) | Should -Match '^[0-9a-f]{16}$'
+            }
+            finally {
+                if (-not [string]::IsNullOrWhiteSpace($sessionRoot) -and
+                    [System.IO.Directory]::Exists($sessionRoot)) {
+                    Remove-SessionDirectory -SessionRoot $sessionRoot -Confirm:$false
+                }
+            }
         }
 
         It 'does not expose a fixed test credential from the Git origin in report or log' {

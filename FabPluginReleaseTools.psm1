@@ -190,6 +190,33 @@ function Remove-SessionDirectory {
     }
 }
 
+function New-FabPluginReleaseSessionRoot {
+    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Low')]
+    param()
+
+    $systemTempRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
+    $toolTempRoot = Join-Path $systemTempRoot 'fpr'
+    if (-not $PSCmdlet.ShouldProcess($toolTempRoot, 'Create tool session directory')) {
+        return
+    }
+    [System.IO.Directory]::CreateDirectory($toolTempRoot) | Out-Null
+    for ($attempt = 0; $attempt -lt 10; $attempt++) {
+        $runId = [guid]::NewGuid().ToString('N').Substring(0, 16)
+        $sessionRoot = [System.IO.Path]::GetFullPath((Join-Path $toolTempRoot $runId))
+        if ([System.IO.Directory]::Exists($sessionRoot)) {
+            continue
+        }
+        if (-not $PSCmdlet.ShouldProcess($sessionRoot, 'Create release session directory')) {
+            return
+        }
+        [System.IO.Directory]::CreateDirectory($sessionRoot) | Out-Null
+        if ([System.IO.Directory]::Exists($sessionRoot)) {
+            return $sessionRoot
+        }
+    }
+    throw 'Could not create a unique Fab plugin release session root.'
+}
+
 function ConvertTo-NormalizedRelativePath {
     param(
         [Parameter(Mandatory)]
@@ -2676,9 +2703,7 @@ function Invoke-FabPluginReleaseCore {
         $ConfigPath = Join-Path $resolvedPluginPath 'FabPluginRelease.json'
     }
     $resolvedConfigPath = [System.IO.Path]::GetFullPath($ConfigPath)
-    $sessionRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
-        "fab-plugin-release-tools\$([guid]::NewGuid().ToString('D'))")
-    [System.IO.Directory]::CreateDirectory($sessionRoot) | Out-Null
+    $sessionRoot = New-FabPluginReleaseSessionRoot
     $sessionLogPath = Join-Path $sessionRoot 'release.log'
     [System.IO.File]::WriteAllText($sessionLogPath, '', [System.Text.UTF8Encoding]::new($false))
 
