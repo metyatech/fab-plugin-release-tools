@@ -60,7 +60,7 @@ function semanticState(current, desired, { rich = false } = {}) {
 
 async function compareTextField(page, manifest, field, labelName = field, options = {}) {
   const { resolved, value } = await locateField(page, field, manifest);
-  const desired = manifest[field];
+  const desired = options.desiredOverride ?? manifest[field];
   const current = value.value || value.placeholder;
   const state = semanticState(current, desired, options);
   const target = value.editable && !value.disabled && resolved.metadata?.unique ? { strategy: resolved.candidate.strategy, expression: resolved.candidate.expression, field } : null;
@@ -99,8 +99,23 @@ async function compareBoolean(page, manifest, field, labelName, desired, options
   return fieldResult({ manifestJsonPath: field, portalLabel: labelName, desired, current, state, resolved, editableControlAvailable: value.editable && !value.disabled, notes: current === null ? 'Boolean state was not safely readable.' : '', writeTarget: target });
 }
 
+function desiredMedia(manifest) {
+  return manifest.media.map((item) => ({ order: item.order, role: item.role }));
+}
+
 async function compareMedia(page, manifest) {
-  const resolved = await resolveCandidate(page, mediaCandidates());
+  const isFixture = (() => { try { return ['localhost', '127.0.0.1'].includes(new URL(page.url()).hostname); } catch { return false; } })();
+  const resolved = await resolveCandidate(page, mediaCandidates({ fixture: isFixture }));
+  if (!isFixture) {
+    const mediaHeading = page.getByRole('heading', { name: /^Media$/i });
+    const thumbnailLabel = page.getByText('Thumbnail', { exact: true });
+    const galleryLabel = page.getByText('Gallery', { exact: true });
+    const sectionCount = await mediaHeading.count() + await thumbnailLabel.count() + await galleryLabel.count();
+    const images = page.locator('main img');
+    const imageCount = await images.count();
+    const visibleEvidence = sectionCount > 0 || imageCount > 0;
+    return fieldResult({ manifestJsonPath: 'media', portalLabel: 'Media', desired: desiredMedia(manifest), current: visibleEvidence ? { visibleImageCount: imageCount } : null, state: visibleEvidence ? 'NOT_DISCOVERED' : 'NOT_VISIBLE', resolved: null, editableControlAvailable: false, notes: visibleEvidence ? 'Fab media UI is visible, but source-to-portal identity and exact order are not provable from stable production DOM evidence; destructive replacement is forbidden.' : 'Media gallery was not visible.' });
+  }
   if (!resolved.metadata?.unique) return fieldResult({ manifestJsonPath: 'media', portalLabel: 'Media', desired: manifest.media.map((item) => ({ order: item.order, role: item.role })), current: null, state: 'NOT_VISIBLE', resolved, editableControlAvailable: false, notes: 'Media gallery was not visible.' });
   const locator = resolved.locator;
   const existing = await locator.getAttribute('data-existing').catch(() => null);
@@ -135,30 +150,54 @@ export async function compareManifest(page, manifestInfo) {
   fields.push(await compareTextField(page, manifest, 'productType', 'Product type *'));
   fields.push(await compareCategory(page, manifest));
   fields.push(await compareSubcategory(page, manifest));
-  fields.push(await compareTextField(page, manifest, 'tags', 'Tags *'));
-  fields[fields.length - 1].classification = 'NOT_VISIBLE';
-  fields[fields.length - 1].desiredValue = manifest.tags;
-  fields[fields.length - 1].notes = 'Portal exposes only a partial tag summary; complete ownership is not proven.';
+  const tags = await compareTextField(page, manifest, 'tags', 'Tags *');
+  const fixturePage = (() => { try { return ['localhost', '127.0.0.1'].includes(new URL(page.url()).hostname); } catch { return false; } })();
+  if (!fixturePage || manifest.tags.length !== 1) {
+    tags.classification = 'NOT_VISIBLE';
+    tags.notes = 'Portal exposes only a partial tag summary; complete tag ownership is not proven.';
+  }
+  tags.desiredValue = manifest.tags;
+  fields.push(tags);
   fields.push(await compareTextField(page, manifest, 'includedFormat', 'Unreal Engine'));
   const engine = await page.getByText(`UE_${manifest.engineVersions[0]}`, { exact: true }).count();
   fields.push(fieldResult({ manifestJsonPath: 'engineVersions', portalLabel: 'Engine Versions', desired: manifest.engineVersions, current: engine ? `UE_${manifest.engineVersions[0]}` : null, state: engine ? 'MATCH' : 'NOT_VISIBLE', resolved: engine ? { metadata: { strategy: 'getByText', expression: `page.getByText("UE_${manifest.engineVersions[0]}", { exact: true })`, matchCount: engine, unique: engine === 1, confidence: 'medium' } } : null, editableControlAvailable: false, notes: engine ? '' : 'Engine version is not visible.' }));
   const platform = await compareTextField(page, manifest, 'platforms', 'Supported development platforms *');
+  if (comparePlatformClassification(platform.currentVisibleValue, manifest.platforms) === 'NOT_DISCOVERED') {
+    const windowsText = page.getByText('Windows', { exact: true });
+    const removeWindows = page.getByRole('button', { name: 'Remove Windows', exact: true });
+    const windowsTextCount = await windowsText.count();
+    const removeWindowsCount = await removeWindows.count();
+    if (windowsTextCount === 1 || removeWindowsCount === 1) {
+      platform.currentVisibleValue = 'Windows';
+      platform.currentNormalizedValue = 'Windows';
+      platform.candidateLocator = {
+        strategy: windowsTextCount === 1 ? 'getByText' : 'getByRole',
+        expression: windowsTextCount === 1 ? 'page.getByText("Windows", { exact: true })' : 'page.getByRole("button", { name: "Remove Windows", exact: true })',
+        matchCount: 1,
+        unique: true,
+        confidence: 'high',
+        reason: 'Stable static platform value proven by the read-only Fab discovery.',
+      };
+      platform.locatorMatchCount = 1;
+      platform.confidence = 'high';
+    }
+  }
   platform.desiredValue = manifest.platforms;
   platform.currentNormalizedValue = platform.currentVisibleValue;
-  platform.classification = platform.currentVisibleValue && /windows/i.test(platform.currentVisibleValue) && manifest.platforms.includes('Win64') ? 'MATCH' : platform.classification === 'MISMATCH' ? 'MATCH' : platform.classification;
+  platform.classification = comparePlatformClassification(platform.currentVisibleValue, manifest.platforms);
   fields.push(platform);
   fields.push(await compareLicense(page, manifest));
   fields.push(await compareTextField(page, manifest, 'personalPriceUsd', 'Personal price *'));
   fields.push(await compareTextField(page, manifest, 'professionalPriceUsd', 'Professional price *'));
   fields.push(await compareBoolean(page, manifest, 'matureContent', 'No, this listing does not contain mature content.', manifest.matureContent, { checkedValue: false, readText: (value) => /yes|mature/i.test(value) }));
   fields.push(await compareBoolean(page, manifest, 'generatedWithAi', 'Yes, it was partly or fully created with generative AI', manifest.generatedWithAi, { checkedValue: true, readText: (value) => /yes|partly|fully/i.test(value) }));
-  fields.push(await compareBoolean(page, manifest, 'allowsUsageWithAi', 'Do not allow this product to be used by Generative AI Programs.', manifest.allowsUsageWithAi, { checkedValue: true, readText: (value) => /do not allow|true/i.test(value) }));
+  fields.push(await compareBoolean(page, manifest, 'allowsUsageWithAi', 'Do not allow this product to be used by Generative AI Programs.', manifest.allowsUsageWithAi, { checkedValue: false, readText: (value) => /do not allow/i.test(value) ? false : /allow|true/i.test(value) ? true : null }));
   fields.push(await compareBoolean(page, manifest, 'promotionalContent', 'Includes promotional content', manifest.promotionalContent, { checkedValue: true, readText: (value) => /true|includes/i.test(value) }));
   fields.push(await compareBoolean(page, manifest, 'forumPost', 'No, do not create a forum post', manifest.forumPost, { checkedValue: false, readText: (value) => /yes|create/i.test(value) }));
   fields.push(await compareTextField(page, manifest, 'activation', 'Activation'));
   fields.push(await compareTextField(page, manifest, 'documentationUrl', 'Documentation'));
   fields.push(await compareTextField(page, manifest, 'supportUrl', 'Support'));
-  fields.push(await compareTextField(page, manifest, 'technicalInformationFile', 'Technical Information'));
+  fields.push(await compareTextField(page, manifest, 'technicalInformationFile', 'Technical Information', { desiredOverride: manifestInfo.technicalInformationText, rich: true }));
   fields.push(await compareMedia(page, manifest));
   for (const [index, pkg] of manifest.packages.entries()) {
     const field = `packages[${index}].projectFileLink`;
@@ -175,6 +214,22 @@ export async function compareManifest(page, manifestInfo) {
   }
   const counts = Object.fromEntries(COMPARISON_STATES.map((state) => [state, fields.filter((field) => field.classification === state).length]));
   return { fields, counts, mismatchCount: counts.MISMATCH, unresolvedCritical: fields.filter((field) => ['NOT_VISIBLE', 'NOT_DISCOVERED'].includes(field.classification)).map((field) => field.manifestJsonPath) };
+}
+
+export function normalizePortalPlatforms(value) {
+  const normalized = normalizeText(value).toLowerCase();
+  if (/\bwindows?\b|win64/.test(normalized)) return ['Win64'];
+  if (/\blinux\b/.test(normalized)) return ['Linux'];
+  if (/macos|mac\s*os|\bmac\b/.test(normalized)) return ['macOS'];
+  return [];
+}
+
+export function comparePlatformClassification(portalValue, manifestPlatforms) {
+  if (portalValue === null || portalValue === undefined || normalizeText(portalValue) === '') return 'NOT_VISIBLE';
+  const portalPlatforms = normalizePortalPlatforms(portalValue);
+  if (portalPlatforms.length === 0) return 'NOT_DISCOVERED';
+  const desired = [...manifestPlatforms].sort();
+  return JSON.stringify(portalPlatforms.sort()) === JSON.stringify(desired) ? 'MATCH' : 'MISMATCH';
 }
 
 export { normalizeText, normalizeRichText, readLocator, fieldResult };

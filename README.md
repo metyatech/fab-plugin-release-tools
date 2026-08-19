@@ -305,6 +305,14 @@ Pending approval listings cannot be modified; Cancel submission is never
 invoked automatically. The automation never handles Cloudflare, credentials,
 MFA, or browser storage.
 
+Save and submit safety requires every manifest-owned critical field to be
+readable and either already matching or backed by an approved writable locator,
+including descriptions, taxonomy, tags, format/engine/platform, license,
+prices, AI/content flags, activation, URLs, Technical Information text, media,
+and every package Project File Link. An empty `subcategory` is legitimately
+`NOT_APPLICABLE` when Fab exposes no distinct subcategory. Existing media whose
+identity cannot be proven remains a write blocker.
+
 ## Migration note
 
 Moving an existing plugin from a repository-specific `PackageForFab.ps1` to

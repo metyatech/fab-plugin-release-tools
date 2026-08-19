@@ -19,19 +19,19 @@ function pageMarkup(state, listingId) {
     <label>Tags *<input aria-label="Tags *" value="${html(state.tags[0] ?? '')}" readonly></label>
     <button type="button">Unreal Engine</button>
     <div>UE_${html(state.engineVersions[0])}</div>
-    <label>Supported development platforms *<input aria-label="Supported development platforms *" value="Windows" readonly></label>
+    <label>Supported development platforms *<input aria-label="Supported development platforms *" value="${html(state.platformDisplay ?? 'Windows')}" readonly></label>
     ${radio('Standard License (Free or Paid)', true)}
     <label>Personal price *<input aria-label="Personal price *" value="${html(state.personalPriceUsd)}"></label>
     <label>Professional price *<input aria-label="Professional price *" value="${html(state.professionalPriceUsd)}"></label>
     ${radio('No, this listing does not contain mature content.', !state.matureContent)}
     ${radio('Yes, it was partly or fully created with generative AI', state.generatedWithAi)}
-    ${radio('Do not allow this product to be used by Generative AI Programs.', state.allowsUsageWithAi)}
+    <label>${html('Do not allow this product to be used by Generative AI Programs.')}<input type="checkbox" aria-label="Do not allow this product to be used by Generative AI Programs."${checked(!state.allowsUsageWithAi)}></label>
     <label>${html('Includes promotional content')}<input type="checkbox" aria-label="Includes promotional content"${checked(state.promotionalContent)}></label>
     ${radio('No, do not create a forum post', !state.forumPost)}
     <label>Activation<input aria-label="Activation" value="${html(state.activation)}"></label>
     <label>Documentation<input aria-label="Documentation" value="${html(state.documentationUrl)}"></label>
     <label>Support<input aria-label="Support" value="${html(state.supportUrl)}"></label>
-    <label>Technical Information<textarea aria-label="Technical Information">${html(state.technicalInformationFile)}</textarea></label>
+    <label>Technical Information<textarea aria-label="Technical Information">${html(state.technicalInformationText)}</textarea></label>
     <section data-testid="media-gallery" data-existing="${html(state.mediaExisting)}" data-order="${html(state.mediaOrder ?? '')}" data-upload-order="${html(initialStateMediaOrder(state))}">${html(state.mediaExisting === 'existing' ? 'Existing media' : state.mediaExisting === 'known' || state.mediaExisting === 'uploaded' ? '001 thumbnail 002 gallery' : '')}</section>
     <input type="file" data-testid="media-upload" multiple>
     <label>Project file<input aria-label="Project file" value="${html(state.projectFileLink)}"></label>
@@ -49,10 +49,15 @@ function pageMarkup(state, listingId) {
       category: value('[aria-label="Category selection"]'),
       personalPriceUsd: value('[aria-label="Personal price *"]'),
       professionalPriceUsd: value('[aria-label="Professional price *"]'),
+      matureContent: !document.querySelector('[aria-label="No, this listing does not contain mature content."]')?.checked,
+      generatedWithAi: document.querySelector('[aria-label="Yes, it was partly or fully created with generative AI"]')?.checked ?? false,
+      allowsUsageWithAi: !(document.querySelector('[aria-label="Do not allow this product to be used by Generative AI Programs."]')?.checked ?? false),
+      promotionalContent: document.querySelector('[aria-label="Includes promotional content"]')?.checked ?? false,
+      forumPost: !document.querySelector('[aria-label="No, do not create a forum post"]')?.checked,
       activation: value('[aria-label="Activation"]'),
       documentationUrl: value('[aria-label="Documentation"]'),
       supportUrl: value('[aria-label="Support"]'),
-      technicalInformationFile: document.querySelector('[aria-label="Technical Information"]')?.value ?? '',
+      technicalInformationText: document.querySelector('[aria-label="Technical Information"]')?.value ?? '',
       projectFileLink: value('[aria-label="Project file"]'),
       mediaExisting: document.querySelector('[data-testid="media-gallery"]')?.dataset.existing ?? 'existing',
       mediaOrder: document.querySelector('[data-testid="media-gallery"]')?.dataset.order ?? ''
@@ -110,6 +115,15 @@ export async function startFixture(initialState, { dropSaveFields = [], redirect
     }
     if (request.method === 'POST' && url.pathname === '/api/cancel') {
       mutations.push({ method: 'POST', pathname: url.pathname, body: {} });
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end('{}');
+      return;
+    }
+    if (request.method === 'POST' && url.pathname === '/graphql') {
+      const bodyText = await readBody(request);
+      let body = {};
+      try { body = JSON.parse(bodyText || '{}'); } catch { /* the guard owns malformed request handling */ }
+      if (/\bmutation\b/i.test(body.query ?? '')) mutations.push({ method: 'POST', pathname: url.pathname, body: { operationName: body.operationName ?? null } });
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end('{}');
       return;

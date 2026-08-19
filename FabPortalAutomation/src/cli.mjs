@@ -65,16 +65,20 @@ function emit(value, json) {
   }
 }
 
-export async function main(argv = process.argv.slice(2)) {
+export async function main(argv = process.argv.slice(2), dependencies = {}) {
   const args = parseArgs(argv);
   if (args.help) { process.stdout.write(help()); return 0; }
   if (args.version) { process.stdout.write(`${VERSION}\n`); return 0; }
-  const manifestInfo = await loadSubmissionManifest(args.manifest);
-  const artifactDirectory = await createRunDirectory(args.output ?? path.resolve('artifacts'), manifestInfo.manifest.pluginName);
+  const loadManifest = dependencies.loadManifest ?? loadSubmissionManifest;
+  const createDirectory = dependencies.createDirectory ?? createRunDirectory;
+  const writeReportFile = dependencies.writeReport ?? writeRunReport;
+  const run = dependencies.run ?? runPortalAutomation;
+  const manifestInfo = await loadManifest(args.manifest);
+  const artifactDirectory = await createDirectory(args.output ?? path.resolve('artifacts'), manifestInfo.manifest.pluginName);
   const mode = args.submitForReview ? 'submit' : args.saveDraft ? 'save' : 'verify';
-  const result = await runPortalAutomation({ manifestInfo, cdpEndpoint: args.cdpendpoint, mode, outputDirectory: artifactDirectory });
+  const result = await run({ manifestInfo, cdpEndpoint: args.cdpendpoint, mode, saveDraftAuthorized: args.saveDraft, outputDirectory: artifactDirectory });
   result.artifactDirectory = artifactDirectory;
-  await writeRunReport({ directory: artifactDirectory, result, comparison: result.comparison, comparisonAfter: result.comparisonAfter, network: result.network, page: result.page });
+  await writeReportFile({ directory: artifactDirectory, result, comparison: result.comparison, comparisonAfter: result.comparisonAfter, network: result.network, page: result.page });
   if (result.browser) await result.browser.close().catch(() => undefined);
   delete result.page;
   delete result.browser;

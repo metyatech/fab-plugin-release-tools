@@ -26,7 +26,9 @@ export function buildMutationPlan(comparison, manifestInfo) {
       continue;
     }
     const packageMatch = fieldName.match(/^packages\[(\d+)\]\.projectFileLink$/);
-    const desired = packageMatch ? manifestInfo.manifest.packages[Number(packageMatch[1])].projectFileLink : manifestInfo.manifest[fieldName];
+    const desired = packageMatch
+      ? manifestInfo.manifest.packages[Number(packageMatch[1])].projectFileLink
+      : fieldName === 'technicalInformationFile' ? manifestInfo.technicalInformationText : manifestInfo.manifest[fieldName];
     plan.push({ fieldName, currentNormalizedValue: field.currentNormalizedValue, desiredNormalizedValue: desired, locatorStrategy: field.writeTarget.strategy, locatorExpression: field.writeTarget.expression, mutationType: type, checkedValue: field.writeTarget.checkedValue });
   }
   const keys = plan.map((entry) => `${entry.locatorStrategy}:${entry.locatorExpression}`);
@@ -72,7 +74,9 @@ export async function executeMutationPlan(page, preflight, manifestInfo) {
   const executed = [];
   for (const { item, locator } of preflight.targets) {
     const packageMatch = item.fieldName.match(/^packages\[(\d+)\]\.projectFileLink$/);
-    const desired = packageMatch ? manifestInfo.manifest.packages[Number(packageMatch[1])].projectFileLink : manifestInfo.manifest[item.fieldName];
+    const desired = packageMatch
+      ? manifestInfo.manifest.packages[Number(packageMatch[1])].projectFileLink
+      : item.fieldName === 'technicalInformationFile' ? manifestInfo.technicalInformationText : manifestInfo.manifest[item.fieldName];
     if (item.mutationType === 'text' || item.mutationType === 'richText') await locator.fill(String(desired));
     else if (item.mutationType === 'combobox') {
       await locator.click();

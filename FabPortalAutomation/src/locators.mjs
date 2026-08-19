@@ -63,7 +63,7 @@ export function fieldCandidates(field, manifest = {}) {
     case 'professionalPriceUsd': return [label('Professional price *'), label('Professional price')];
     case 'matureContent': return [role('No, this listing does not contain mature content.', 'radio'), label('No, this listing does not contain mature content.')];
     case 'generatedWithAi': return [role('Yes, it was partly or fully created with generative AI', 'radio'), label('Yes, it was partly or fully created with generative AI')];
-    case 'allowsUsageWithAi': return [role('Do not allow this product to be used by Generative AI Programs.', 'radio'), label('Do not allow this product to be used by Generative AI Programs.')];
+    case 'allowsUsageWithAi': return [role('Do not allow this product to be used by Generative AI Programs.', 'checkbox'), role('Do not allow this product to be used by Generative AI Programs.', 'radio'), label('Do not allow this product to be used by Generative AI Programs.')];
     case 'promotionalContent': return [role('Includes promotional content', 'checkbox'), label('Includes promotional content'), role('Includes promotional content', 'radio')];
     case 'forumPost': return [role('No, do not create a forum post', 'radio'), label('No, do not create a forum post')];
     case 'activation': return [label('Activation'), role('Activation', 'combobox'), role('Activation', 'textbox')];
@@ -75,7 +75,8 @@ export function fieldCandidates(field, manifest = {}) {
   }
 }
 
-export function mediaCandidates() {
+export function mediaCandidates({ fixture = false } = {}) {
+  if (!fixture) return [];
   return [
     candidate('testId', 'media-gallery', (page) => page.getByTestId('media-gallery')),
     candidate('css', '[data-testid="media-gallery"]', (page) => page.locator('[data-testid="media-gallery"]')),

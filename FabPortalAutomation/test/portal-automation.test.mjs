@@ -6,6 +6,7 @@ import test from 'node:test';
 import { chromium } from 'playwright-core';
 import { buildMutationPlan, preflightMutationPlan } from '../src/mutation-plan.mjs';
 import { installNetworkGuard } from '../src/network-guard.mjs';
+import { comparePlatformClassification } from '../src/comparison.mjs';
 import { runPortalAutomation } from '../src/portal.mjs';
 import { parseArgs } from '../src/cli.mjs';
 import { startFixture } from './fixtures/server.mjs';
@@ -180,6 +181,144 @@ test('verify-only mutation request is blocked', async () => {
   await fixture.close();
   assert.equal(fixture.mutations.length, 0);
   assert.equal(summary.networkMutationRequestsBlocked, 1);
+});
+
+test('GraphQL query is allowed while GraphQL mutation is blocked in verify mode', async () => {
+  const fixture = await startFixture(fixtureState(makeManifest()));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+  const guard = installNetworkGuard(context, { mode: 'verify' });
+  await page.evaluate(async () => {
+    await fetch('/graphql', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: 'query Listing { listing { id } }', operationName: 'Listing' }) });
+    await fetch('/graphql', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: 'mutation SaveDraft { saveDraft { id } }', operationName: 'SaveDraft' }) }).catch(() => undefined);
+  });
+  const summary = guard.summary();
+  await guard.dispose();
+  await context.close();
+  await fixture.close();
+  assert.equal(summary.networkMutationRequestsObserved, 1);
+  assert.equal(summary.networkMutationRequestsBlocked, 1);
+  assert.equal(fixture.mutations.length, 0);
+  assert.equal(summary.requests.find((item) => item.graphqlOperation?.type === 'query')?.blocked, false);
+});
+
+test('GraphQL Save mutation is allowed only in save phase', async () => {
+  const fixture = await startFixture(fixtureState(makeManifest()));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+  const guard = installNetworkGuard(context, { mode: 'save' });
+  guard.setPhase('save');
+  await page.evaluate(() => fetch('/graphql', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: 'mutation SaveDraft { saveDraft { id } }', operationName: 'SaveDraft' }) }));
+  const summary = guard.summary();
+  await guard.dispose();
+  await context.close();
+  await fixture.close();
+  assert.equal(summary.networkMutationRequestsObserved, 1);
+  assert.equal(summary.networkMutationRequestsBlocked, 0);
+  assert.equal(fixture.mutations[0].body.operationName, 'SaveDraft');
+});
+
+test('Submit is blocked in save phase and allowed only in submit phase', async () => {
+  const fixture = await startFixture(fixtureState(makeManifest()));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+  const guard = installNetworkGuard(context, { mode: 'submit' });
+  guard.setPhase('save');
+  await page.evaluate(() => fetch('/graphql', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: 'mutation SubmitForReview { submitForReview { id } }', operationName: 'SubmitForReview' }) }).catch(() => undefined));
+  guard.setPhase('submit');
+  await page.evaluate(() => fetch('/graphql', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: 'mutation SubmitForReview { submitForReview { id } }', operationName: 'SubmitForReview' }) }));
+  const summary = guard.summary();
+  await guard.dispose();
+  await context.close();
+  await fixture.close();
+  assert.equal(summary.networkMutationRequestsObserved, 2);
+  assert.equal(summary.networkMutationRequestsBlocked, 1);
+  assert.equal(fixture.mutations.length, 1);
+});
+
+test('Cancel and Delete GraphQL mutations are always blocked', async () => {
+  const fixture = await startFixture(fixtureState(makeManifest()));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+  const guard = installNetworkGuard(context, { mode: 'submit' });
+  guard.setPhase('submit');
+  for (const operationName of ['CancelSubmission', 'DeleteProduct']) {
+    await page.evaluate((name) => fetch('/graphql', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: `mutation ${name} { action { id } }`, operationName: name }) }).catch(() => undefined), operationName);
+  }
+  const summary = guard.summary();
+  await guard.dispose();
+  await context.close();
+  await fixture.close();
+  assert.equal(summary.networkMutationRequestsObserved, 2);
+  assert.equal(summary.networkMutationRequestsBlocked, 2);
+  assert.equal(fixture.mutations.length, 0);
+});
+
+test('media upload network intent requires the explicit media-upload phase', async () => {
+  const fixture = await startFixture(fixtureState(makeManifest()));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+  const guard = installNetworkGuard(context, { mode: 'save' });
+  guard.setPhase('save');
+  await page.evaluate(() => fetch('/api/media-upload', { method: 'POST', body: 'blocked-before-upload-phase' }).catch(() => undefined));
+  guard.setPhase('media-upload');
+  await page.evaluate(() => fetch('/api/media-upload', { method: 'POST', body: 'allowed-upload-phase' }));
+  await page.evaluate(() => fetch('/api/upload', { method: 'POST', body: 'unclassified-upload' }).catch(() => undefined));
+  const summary = guard.summary();
+  await guard.dispose();
+  await context.close();
+  await fixture.close();
+  assert.equal(summary.networkMutationRequestsObserved, 3);
+  assert.equal(summary.networkMutationRequestsBlocked, 2);
+  assert.equal(summary.requests.filter((item) => item.intent === 'media-upload' && !item.blocked).length, 1);
+});
+
+test('platform normalization only maps Windows to Win64', () => {
+  assert.equal(comparePlatformClassification('Windows', ['Win64']), 'MATCH');
+  assert.equal(comparePlatformClassification('Linux', ['Win64']), 'MISMATCH');
+  assert.equal(comparePlatformClassification('macOS', ['Win64']), 'MISMATCH');
+  assert.equal(comparePlatformClassification(null, ['Win64']), 'NOT_VISIBLE');
+});
+
+test('allowsUsageWithAi uses Fab negative-control polarity', async () => {
+  const matchingAllowed = await scenario({ manifest: makeManifest({ allowsUsageWithAi: true }), state: { allowsUsageWithAi: true } });
+  assert.equal(matchingAllowed.result.comparison.fields.find((item) => item.manifestJsonPath === 'allowsUsageWithAi').classification, 'MATCH');
+  const disallowedControlChecked = await scenario({ manifest: makeManifest({ allowsUsageWithAi: true }), state: { allowsUsageWithAi: false } });
+  assert.equal(disallowedControlChecked.result.comparison.fields.find((item) => item.manifestJsonPath === 'allowsUsageWithAi').classification, 'MISMATCH');
+  const matchingDisallowed = await scenario({ manifest: makeManifest({ allowsUsageWithAi: false }), state: { allowsUsageWithAi: false } });
+  assert.equal(matchingDisallowed.result.comparison.fields.find((item) => item.manifestJsonPath === 'allowsUsageWithAi').classification, 'MATCH');
+  const allowedControlUnchecked = await scenario({ manifest: makeManifest({ allowsUsageWithAi: false }), state: { allowsUsageWithAi: true } });
+  assert.equal(allowedControlUnchecked.result.comparison.fields.find((item) => item.manifestJsonPath === 'allowsUsageWithAi').classification, 'MISMATCH');
+});
+
+test('allowsUsageWithAi mutation changes only the negative control state', async () => {
+  const { result, fixture } = await scenario({ manifest: makeManifest({ allowsUsageWithAi: true }), state: { allowsUsageWithAi: false }, mode: 'save', saveDraftAuthorized: true });
+  assert.equal(result.result, 'PASS');
+  assert.deepEqual(result.executedMutations, ['allowsUsageWithAi']);
+  assert.equal(fixture.mutations[0].body.allowsUsageWithAi, true);
+});
+
+test('Technical Information writes file content, never its bundle-relative path', async () => {
+  const manifest = makeManifest();
+  const { result, fixture } = await scenario({ manifest, state: { technicalInformationText: manifest.technicalInformationFile }, mode: 'save', saveDraftAuthorized: true });
+  assert.equal(result.result, 'PASS');
+  assert.deepEqual(result.executedMutations, ['technicalInformationFile']);
+  assert.equal(fixture.mutations[0].body.technicalInformationText, 'Fixture technical information');
+  assert.notEqual(fixture.mutations[0].body.technicalInformationText, manifest.technicalInformationFile);
+});
+
+test('Technical Information post-save read-back compares exact normalized content', async () => {
+  const manifest = makeManifest();
+  const { result, fixture } = await scenario({ manifest, state: { technicalInformationText: 'old content' }, fixtureOptions: { dropSaveFields: ['technicalInformationText'] }, mode: 'save', saveDraftAuthorized: true });
+  assert.equal(result.result, 'FAIL');
+  assert.equal(result.saveInvoked, true);
+  assert.match(result.blockers.join(' '), /Technical Information|technicalInformationFile|mismatch/i);
+  assert.equal(fixture.mutations[0].body.technicalInformationText, 'Fixture technical information');
 });
 
 test('subcategory=[] is NOT_APPLICABLE when the portal has no control', async () => {

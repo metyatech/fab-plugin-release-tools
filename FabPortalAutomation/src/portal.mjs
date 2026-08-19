@@ -7,6 +7,17 @@ import { dangerousActionCandidates, listingEditUrl, resolveCandidate, saveCandid
 const REVIEW_LOCKED = new Set(['pending approval', 'pending publication', 'approved', 'live']);
 const KNOWN_STATUSES = ['Pending approval', 'Pending Publication', 'Changes needed', 'Draft', 'Approved', 'Live'];
 
+// These fields are owned by the manifest and must be readable or safely writable
+// before a Save Draft or Submit for review operation can begin. Subcategory=[] is
+// intentionally excluded because Fab may expose no distinct control for it.
+const CRITICAL_OWNED_FIELDS = new Set([
+  'shortDescription', 'longDescription', 'productType', 'category', 'tags',
+  'includedFormat', 'engineVersions', 'platforms', 'license',
+  'personalPriceUsd', 'professionalPriceUsd', 'matureContent', 'generatedWithAi',
+  'allowsUsageWithAi', 'promotionalContent', 'forumPost', 'activation',
+  'documentationUrl', 'supportUrl', 'technicalInformationFile', 'media',
+]);
+
 function normalized(value) {
   return String(value ?? '').replace(/\s+/g, ' ').trim();
 }
@@ -90,15 +101,22 @@ async function uniqueAction(page, candidates, actionName) {
   return resolved;
 }
 
-function criticalBlockers(comparison) {
-  return comparison.fields
-    .filter((field) => ['shortDescription', 'longDescription', 'productType', 'category', 'engineVersions', 'platforms', 'license', 'personalPriceUsd', 'professionalPriceUsd', 'matureContent', 'generatedWithAi', 'allowsUsageWithAi', 'promotionalContent', 'forumPost', 'documentationUrl', 'supportUrl', 'technicalInformationFile', 'media'].includes(field.manifestJsonPath) && ['NOT_VISIBLE', 'NOT_DISCOVERED'].includes(field.classification))
-    .map((field) => `${field.manifestJsonPath} is ${field.classification}.`);
+function criticalBlockers(comparison, manifest = null) {
+  const expected = new Set(CRITICAL_OWNED_FIELDS);
+  if (manifest?.packages) for (const [index] of manifest.packages.entries()) expected.add(`packages[${index}].projectFileLink`);
+  const fields = comparison.fields;
+  const missing = [...expected]
+    .filter((path) => !fields.some((field) => field.manifestJsonPath === path))
+    .map((path) => `${path} is NOT_DISCOVERED.`);
+  return [...missing, ...fields
+    .filter((field) => CRITICAL_OWNED_FIELDS.has(field.manifestJsonPath) || /^packages\[\d+\]\.projectFileLink$/.test(field.manifestJsonPath))
+    .filter((field) => ['NOT_VISIBLE', 'NOT_DISCOVERED'].includes(field.classification) || (field.classification === 'MISMATCH' && !field.writeTarget))
+    .map((field) => `${field.manifestJsonPath} is ${field.classification}${field.classification === 'MISMATCH' ? ' and has no approved writable locator' : ''}.`)];
 }
 
 async function verifyAfterStaging(page, manifestInfo) {
   const after = await compareManifest(page, manifestInfo);
-  const blockers = criticalBlockers(after);
+  const blockers = criticalBlockers(after, manifestInfo.manifest);
   if (after.mismatchCount > 0 || blockers.length > 0) throw new Error(`Staged portal values did not satisfy the manifest: ${[...blockers, `${after.mismatchCount} mismatch(es)`].join(' ')}`);
   return after;
 }
@@ -117,7 +135,7 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     const fabPages = context.pages().filter((candidate) => { try { return new URL(candidate.url()).hostname === 'www.fab.com'; } catch { return false; } });
     page = fabPages[0] ?? await context.newPage();
   }
-  const guard = installNetworkGuard(context, { mode: mode === 'verify' ? 'verify' : 'write' });
+  const guard = installNetworkGuard(context, { mode });
   const result = {
     schemaVersion: 1,
     mode,
@@ -153,7 +171,7 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
       return result;
     }
     if (REVIEW_LOCKED.has(result.listingStatus.toLowerCase())) throw new Error(`Listing status ${result.listingStatus} is review-locked; no write interaction is allowed.`);
-    const unresolved = criticalBlockers(result.comparison);
+    const unresolved = criticalBlockers(result.comparison, manifestInfo.manifest);
     if (unresolved.length > 0) throw new Error(`Write blocked by unresolved critical portal fields: ${unresolved.join(' ')}`);
     const mutation = buildMutationPlan(result.comparison, manifestInfo);
     result.plannedMutations = mutation.plan;
@@ -164,10 +182,12 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     } else {
       const preflight = await preflightMutationPlan(page, mutation.plan, manifestInfo.manifest);
       if (!preflight.ok) throw new Error(`Mutation preflight failed: ${preflight.failures.join(' ')}`);
-      guard.setPhase('save');
+      guard.setPhase(mutation.plan.some((item) => item.mutationType === 'upload') ? 'media-upload' : 'save');
       result.executedMutations = await executeMutationPlan(page, preflight, manifestInfo);
       result.writeInteractionsPerformed += result.executedMutations.length;
+      guard.setPhase('stage');
       result.comparisonAfter = await verifyAfterStaging(page, manifestInfo);
+      guard.setPhase('save');
       const save = await uniqueAction(page, saveCandidates(), 'Save Draft');
       await save.locator.click();
       result.saveInvoked = true;
@@ -180,7 +200,7 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     }
     if (mode === 'submit') {
       if (!result.saveInvoked && result.plannedMutations.length > 0) throw new Error('Submit for review requires a completed Save Draft operation.');
-      if (result.comparisonAfter.mismatchCount > 0 || criticalBlockers(result.comparisonAfter).length > 0) throw new Error('Submit for review blocked by post-save comparison.');
+      if (result.comparisonAfter.mismatchCount > 0 || criticalBlockers(result.comparisonAfter, manifestInfo.manifest).length > 0) throw new Error('Submit for review blocked by post-save comparison.');
       guard.setPhase('submit');
       const submit = await uniqueAction(page, submitCandidates(), 'Submit for review');
       await submit.locator.click();
@@ -205,4 +225,4 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
   }
 }
 
-export { criticalBlockers, readStatus, requireExactTitle };
+export { CRITICAL_OWNED_FIELDS, criticalBlockers, readStatus, requireExactTitle };
