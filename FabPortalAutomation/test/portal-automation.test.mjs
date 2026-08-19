@@ -58,6 +58,48 @@ test('verify-only performs zero writes', async () => {
   assert.equal(fixture.mutations.length, 0);
 });
 
+test('verify-only compares portal-unready manifests without writing', async () => {
+  const manifest = makeManifest({
+    portalReady: false,
+    packages: [{ engineVersion: '5.8', bundleRelativePath: 'packages/UE5.8/package.zip', sha256: 'b'.repeat(64), projectFileLink: null }],
+  });
+  const { result, fixture } = await scenario({ manifest });
+  const field = result.comparison.fields.find((item) => item.manifestJsonPath === 'packages[0].projectFileLink');
+  assert.equal(result.result, 'PASS');
+  assert.equal(result.writeReady, false);
+  assert.match(result.writeBlockers.join(' '), /Submission manifest portalReady is false/);
+  assert.equal(result.writeInteractionsPerformed, 0);
+  assert.equal(result.saveInvoked, false);
+  assert.equal(result.submitInvoked, false);
+  assert.equal(fixture.mutations.length, 0);
+  assert.equal(field.classification, 'NOT_APPLICABLE');
+  assert.equal(field.desiredValue, null);
+  assert.equal(field.writeTarget, null);
+  assert.equal(field.editableControlAvailable, false);
+  assert.equal(field.notes, 'The staging manifest has no verified Project File Link for this engine version; the existing Fab value was intentionally not compared or managed.');
+});
+
+test('save rejects an unready manifest before Fab mutation', async () => {
+  const manifest = makeManifest({ portalReady: false, packages: [{ engineVersion: '5.8', bundleRelativePath: 'packages/UE5.8/package.zip', sha256: 'b'.repeat(64), projectFileLink: null }] });
+  const { result, fixture } = await scenario({ manifest, mode: 'save', saveDraftAuthorized: true });
+  assert.equal(result.result, 'FAIL');
+  assert.equal(result.saveInvoked, false);
+  assert.equal(result.writeInteractionsPerformed, 0);
+  assert.equal(fixture.mutations.length, 0);
+  assert.match(result.blockers.join(' '), /portalReady is false/);
+});
+
+test('submit rejects an unready manifest before Fab mutation', async () => {
+  const manifest = makeManifest({ portalReady: false, packages: [{ engineVersion: '5.8', bundleRelativePath: 'packages/UE5.8/package.zip', sha256: 'b'.repeat(64), projectFileLink: null }] });
+  const { result, fixture } = await scenario({ manifest, mode: 'submit', saveDraftAuthorized: true });
+  assert.equal(result.result, 'FAIL');
+  assert.equal(result.saveInvoked, false);
+  assert.equal(result.submitInvoked, false);
+  assert.equal(result.writeInteractionsPerformed, 0);
+  assert.equal(fixture.mutations.length, 0);
+  assert.match(result.blockers.join(' '), /portalReady is false/);
+});
+
 test('passive target selection chooses the exact listing page among Fab tabs', async () => {
   const manifest = makeManifest();
   const fixture = await startFixture(fixtureState(manifest));

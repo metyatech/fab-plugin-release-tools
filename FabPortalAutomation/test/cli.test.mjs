@@ -9,8 +9,9 @@ const manifestInfo = {
 
 async function invoke(args) {
   let received;
+  let loadOptions;
   const code = await main(args, {
-    loadManifest: async () => manifestInfo,
+    loadManifest: async (_manifestPath, options) => { loadOptions = options; return manifestInfo; },
     createDirectory: async () => 'fixture-artifact-directory',
     writeReport: async () => undefined,
     run: async (options) => {
@@ -30,22 +31,24 @@ async function invoke(args) {
       };
     },
   });
-  return { code, received };
+  return { code, received, loadOptions };
 }
 
 test('actual CLI main path denies write authorization by default', async () => {
-  const { code, received } = await invoke(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', '--json']);
+  const { code, received, loadOptions } = await invoke(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', '--json']);
   assert.equal(code, 0);
   assert.equal(received.mode, 'verify');
   assert.equal(received.saveDraftAuthorized, false);
+  assert.deepEqual(loadOptions, { requirePortalReady: false });
   assert.equal(typeof received.manualInteraction.waitForConfirmation, 'function');
 });
 
 test('actual CLI main path propagates explicit Save Draft authorization', async () => {
-  const { code, received } = await invoke(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', '--save-draft', '--json']);
+  const { code, received, loadOptions } = await invoke(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', '--save-draft', '--json']);
   assert.equal(code, 0);
   assert.equal(received.mode, 'save');
   assert.equal(received.saveDraftAuthorized, true);
+  assert.deepEqual(loadOptions, { requirePortalReady: true });
 });
 
 test('CLI rejects Submit for review without Save Draft before core execution', async () => {
@@ -53,8 +56,9 @@ test('CLI rejects Submit for review without Save Draft before core execution', a
 });
 
 test('actual CLI main path propagates submit mode with Save Draft authorization', async () => {
-  const { code, received } = await invoke(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', '--save-draft', '--submit-for-review', '--json']);
+  const { code, received, loadOptions } = await invoke(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', '--save-draft', '--submit-for-review', '--json']);
   assert.equal(code, 0);
   assert.equal(received.mode, 'submit');
   assert.equal(received.saveDraftAuthorized, true);
+  assert.deepEqual(loadOptions, { requirePortalReady: true });
 });

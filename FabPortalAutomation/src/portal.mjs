@@ -376,11 +376,12 @@ async function waitForFormatView(page, manifest) {
   const deadline = Date.now() + 15000;
   while (Date.now() < deadline) {
     await detectManualBlock(page);
-    const projectLink = page.getByText(manifest.packages[0].projectFileLink, { exact: true });
     const engineVersion = page.getByText(/^UE_[0-9]+(?:\.[0-9]+)+$/, { exact: false });
     const formatHeading = page.getByRole('heading', { name: 'Project Versions*', exact: true });
     const platformChip = page.getByRole('button', { name: /^Remove (?:Windows|Win64|Linux|Mac(?: OS)?|macOS)$/ });
-    for (const locator of [projectLink, engineVersion, formatHeading, platformChip]) {
+    const locators = [engineVersion, formatHeading, platformChip];
+    if (manifest.packages[0].projectFileLink !== null) locators.unshift(page.getByText(manifest.packages[0].projectFileLink, { exact: true }));
+    for (const locator of locators) {
       if (await locator.count() === 0) continue;
       for (let index = 0; index < await locator.count(); index += 1) {
         if (await locator.nth(index).isVisible().catch(() => false)) return;
@@ -508,8 +509,17 @@ function criticalBlockers(comparison, manifest = null) {
     .map((field) => `${field.manifestJsonPath} is ${field.classification}${field.classification === 'MISMATCH' ? ' and has no approved writable locator' : ''}.`)];
 }
 
-function writeReadiness(listingStatus, comparison, manifest) {
+function manifestWriteBlockers(manifest) {
   const blockers = [];
+  if (manifest?.portalReady !== true) blockers.push('Submission manifest portalReady is false.');
+  for (const [index, pkg] of (manifest?.packages ?? []).entries()) {
+    if (pkg.projectFileLink === null) blockers.push(`packages[${index}].projectFileLink is unresolved.`);
+  }
+  return blockers;
+}
+
+function writeReadiness(listingStatus, comparison, manifest) {
+  const blockers = manifestWriteBlockers(manifest);
   if (REVIEW_LOCKED.has(normalized(listingStatus).toLowerCase())) blockers.push(`Listing status ${listingStatus} is review-locked.`);
   blockers.push(...criticalBlockers(comparison, manifest));
   return { writeReady: blockers.length === 0, writeBlockers: [...new Set(blockers)] };
@@ -704,6 +714,11 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
   Object.defineProperty(result, 'page', { value: page, enumerable: false, configurable: true });
   Object.defineProperty(result, 'browser', { value: browser, enumerable: false, configurable: true });
   try {
+    const manifestBlockers = manifestWriteBlockers(manifestInfo.manifest);
+    if (mode !== 'verify' && manifestBlockers.length > 0) {
+      result.writeBlockers = manifestBlockers;
+      throw new Error(`Write blocked by manifest readiness gates: ${manifestBlockers.join(' ')}`);
+    }
     const initialTarget = await withManualChallengeHandoff({
       context,
       page,

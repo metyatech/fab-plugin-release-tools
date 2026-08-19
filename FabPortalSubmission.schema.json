@@ -64,7 +64,7 @@
     "technicalInformationFile": { "$ref": "#/$defs/relativePath" },
     "media": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/mediaItem" } },
     "packages": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/packageItem" } },
-    "portalReady": { "const": true }
+    "portalReady": { "type": "boolean" }
   },
   "$defs": {
     "lowercaseUuid": {
@@ -106,7 +106,12 @@
         "engineVersion": { "type": "string", "minLength": 1 },
         "bundleRelativePath": { "$ref": "#/$defs/relativePath" },
         "sha256": { "$ref": "#/$defs/sha256" },
-        "projectFileLink": { "$ref": "#/$defs/httpsUrl" }
+        "projectFileLink": {
+          "anyOf": [
+            { "$ref": "#/$defs/httpsUrl" },
+            { "type": "null" }
+          ]
+        }
       }
     }
   }

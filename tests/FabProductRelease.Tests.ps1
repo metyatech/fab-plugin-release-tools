@@ -358,11 +358,16 @@ public sealed class FabProductTestHttpMessageHandler : HttpMessageHandler
         $root = Join-Path $TestDrive 'ManifestData'
         $outputRoot = Join-Path $TestDrive 'ManifestArtifacts'
         Initialize-ProductFixture -Root $root -EngineVersions @('5.10', '5.9') | Out-Null
+        $listingPath = Join-Path $root 'FabListingFields.json'
+        $listing = Get-Content -Raw -LiteralPath $listingPath | ConvertFrom-Json
+        $listing | Add-Member -NotePropertyName listing_id -NotePropertyValue '11111111-1111-4111-8111-111111111111'
+        Write-ProductFixtureJson -Value $listing -Path $listingPath
         Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot | Out-Null
         $manifestPath = Join-Path $outputRoot 'TestPlugin\FabSubmission\FabPortalSubmission.json'
         $manifestText = Get-Content -Raw -LiteralPath $manifestPath
         $manifestText | Should -Not -Match ([regex]::Escape($root))
         $manifest = $manifestText | ConvertFrom-Json
+        ($manifestText | Test-Json -SchemaFile (Join-Path $PSScriptRoot '..\FabPortalSubmission.schema.json')) | Should -BeTrue
         @($manifest.engineVersions) | Should -BeExactly @('5.9', '5.10')
         @($manifest.packages.engineVersion) | Should -BeExactly @('5.9', '5.10')
         @($manifest.media.order) | Should -BeExactly @(1, 2)

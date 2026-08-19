@@ -317,6 +317,11 @@ mismatch; it does not imply write readiness. The run report records
 `writeReady` and `writeBlockers` when review-locked status or unresolved
 critical fields would block a future write.
 
+Staging manifests with `portalReady: false` and unresolved package
+`projectFileLink: null` values are valid for read-only verification. They are
+never written to Fab; Save Draft and Submit for review require a manifest with
+`portalReady: true` and a verified HTTPS Project File Link for every package.
+
 Save and submit safety requires every manifest-owned critical field to be
 readable and either already matching or backed by an approved writable locator,
 including descriptions, taxonomy, tags, format/engine/platform, license,

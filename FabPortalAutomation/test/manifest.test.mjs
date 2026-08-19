@@ -41,6 +41,49 @@ test('manifest loader exposes Technical Information file content separately', as
   assert.equal(loaded.manifest.technicalInformationFile, 'submission/FabTechnicalInformation.txt');
 });
 
+test('verify manifest loading accepts generator-style portal-unready packages', async () => {
+  const fixture = await validManifestBundle();
+  fixture.manifest.portalReady = false;
+  fixture.manifest.packages[0].projectFileLink = null;
+  await writeFile(fixture.manifestPath, JSON.stringify(fixture.manifest));
+  const loaded = await loadSubmissionManifest(fixture.manifestPath, { requirePortalReady: false });
+  assert.equal(loaded.manifest.portalReady, false);
+  assert.equal(loaded.packageFiles[0].projectFileLink, null);
+  await assert.rejects(() => loadSubmissionManifest(fixture.manifestPath), /portalReady must be true|write-capable/);
+});
+
+test('verify manifest loading still enforces package, media, and Technical Information integrity', async () => {
+  const packageMismatch = await validManifestBundle();
+  packageMismatch.manifest.portalReady = false;
+  packageMismatch.manifest.packages[0].projectFileLink = null;
+  packageMismatch.manifest.packages[0].sha256 = '0'.repeat(64);
+  await writeFile(packageMismatch.manifestPath, JSON.stringify(packageMismatch.manifest));
+  await assert.rejects(() => loadSubmissionManifest(packageMismatch.manifestPath, { requirePortalReady: false }), /packages\[0\].bundleRelativePath SHA-256/);
+
+  const mediaMismatch = await validManifestBundle();
+  mediaMismatch.manifest.portalReady = false;
+  mediaMismatch.manifest.packages[0].projectFileLink = null;
+  mediaMismatch.manifest.media[0].sha256 = '0'.repeat(64);
+  await writeFile(mediaMismatch.manifestPath, JSON.stringify(mediaMismatch.manifest));
+  await assert.rejects(() => loadSubmissionManifest(mediaMismatch.manifestPath, { requirePortalReady: false }), /media\[1\].bundleRelativePath SHA-256/);
+
+  const technicalMissing = await validManifestBundle();
+  technicalMissing.manifest.portalReady = false;
+  technicalMissing.manifest.packages[0].projectFileLink = null;
+  const { unlink } = await import('node:fs/promises');
+  await unlink(path.join(path.dirname(technicalMissing.manifestPath), technicalMissing.manifest.technicalInformationFile));
+  await writeFile(technicalMissing.manifestPath, JSON.stringify(technicalMissing.manifest));
+  await assert.rejects(() => loadSubmissionManifest(technicalMissing.manifestPath, { requirePortalReady: false }), /technicalInformationFile does not exist/);
+});
+
+test('non-null project file links remain HTTPS-only', async () => {
+  const fixture = await validManifestBundle();
+  fixture.manifest.portalReady = false;
+  fixture.manifest.packages[0].projectFileLink = 'http://example.com/package.zip';
+  await writeFile(fixture.manifestPath, JSON.stringify(fixture.manifest));
+  await assert.rejects(() => loadSubmissionManifest(fixture.manifestPath, { requirePortalReady: false }), /projectFileLink must be HTTPS/);
+});
+
 test('runtime manifest validation requires non-blank descriptions', async () => {
   for (const mutation of [
     (manifest) => { delete manifest.shortDescription; },

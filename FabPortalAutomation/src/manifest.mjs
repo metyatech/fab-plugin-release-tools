@@ -93,9 +93,10 @@ function validateMedia(manifest) {
   if (manifest.media.some((item) => item?.role !== 'thumbnail' && item?.role !== 'gallery')) fail('media roles must be thumbnail or gallery.');
 }
 
-function validateTopLevel(manifest) {
+function validateTopLevel(manifest, { requirePortalReady = true } = {}) {
   if (manifest.schemaVersion !== 2) fail('schemaVersion must equal 2.');
-  if (manifest.portalReady !== true) fail('portalReady must be true.');
+  if (typeof manifest.portalReady !== 'boolean') fail('portalReady must be a boolean.');
+  if (requirePortalReady && manifest.portalReady !== true) fail('portalReady must be true for write-capable modes.');
   requireString(manifest.pluginName, 'pluginName');
   requireString(manifest.productVersion, 'productVersion');
   requireString(manifest.title, 'title');
@@ -131,7 +132,7 @@ function validateTopLevel(manifest) {
   validateMedia(manifest);
 }
 
-export async function loadSubmissionManifest(manifestPath) {
+export async function loadSubmissionManifest(manifestPath, { requirePortalReady = true } = {}) {
   const resolvedManifestPath = path.resolve(manifestPath);
   const raw = await readFile(resolvedManifestPath);
   const manifestSha256 = createHash('sha256').update(raw).digest('hex');
@@ -141,7 +142,7 @@ export async function loadSubmissionManifest(manifestPath) {
   } catch (error) {
     fail(`JSON parsing failed: ${error.message}`);
   }
-  validateTopLevel(manifest);
+  validateTopLevel(manifest, { requirePortalReady });
   const bundleRoot = path.dirname(resolvedManifestPath);
   const technicalInformation = resolveBundleFile(bundleRoot, manifest.technicalInformationFile, 'technicalInformationFile');
   const technicalInfo = await stat(technicalInformation.path).catch((error) => fail(`technicalInformationFile does not exist: ${error.message}`));
@@ -168,8 +169,14 @@ export async function loadSubmissionManifest(manifestPath) {
   for (const [index, item] of manifest.packages.entries()) {
     if (!item || typeof item !== 'object' || Array.isArray(item)) fail(`packages[${index}] must be an object.`);
     requireString(item.engineVersion, `packages[${index}].engineVersion`);
-    const projectFileLink = requireString(item.projectFileLink, `packages[${index}].projectFileLink`);
-    if (!projectFileLink.startsWith('https://')) fail(`packages[${index}].projectFileLink must be HTTPS.`);
+    if (!Object.prototype.hasOwnProperty.call(item, 'projectFileLink')) fail(`packages[${index}].projectFileLink must be present and either HTTPS or null.`);
+    const projectFileLink = item.projectFileLink;
+    if (projectFileLink === null) {
+      if (requirePortalReady) fail(`packages[${index}].projectFileLink must be HTTPS for write-capable modes.`);
+    } else {
+      requireString(projectFileLink, `packages[${index}].projectFileLink`);
+      if (!projectFileLink.startsWith('https://')) fail(`packages[${index}].projectFileLink must be HTTPS.`);
+    }
     const sha256 = requireSha256(item.sha256, `packages[${index}].sha256`);
     packageFiles.push({
       ...item,

@@ -81,9 +81,9 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
   const writeReportFile = dependencies.writeReport ?? writeRunReport;
   const run = dependencies.run ?? runPortalAutomation;
   const manualInteraction = dependencies.manualInteraction ?? createStdinManualInteraction();
-  const manifestInfo = await loadManifest(args.manifest);
-  const artifactDirectory = await createDirectory(args.output ?? path.resolve('artifacts'), manifestInfo.manifest.pluginName);
   const mode = args.submitForReview ? 'submit' : args.saveDraft ? 'save' : 'verify';
+  const manifestInfo = await loadManifest(args.manifest, { requirePortalReady: mode !== 'verify' });
+  const artifactDirectory = await createDirectory(args.output ?? path.resolve('artifacts'), manifestInfo.manifest.pluginName);
   const result = await run({ manifestInfo, cdpEndpoint: args.cdpendpoint, mode, saveDraftAuthorized: args.saveDraft, outputDirectory: artifactDirectory, manualInteraction });
   result.artifactDirectory = artifactDirectory;
   await writeReportFile({ directory: artifactDirectory, result, comparison: result.comparison, comparisonAfter: result.comparisonAfter, network: result.network, page: result.page });

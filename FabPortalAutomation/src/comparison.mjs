@@ -359,6 +359,20 @@ export async function compareManifest(page, manifestInfo, { view = 'listing' } =
   fields.push(await compareMedia(page, manifest, view));
   for (const [index, pkg] of manifest.packages.entries()) {
     const field = `packages[${index}].projectFileLink`;
+    if (pkg.projectFileLink === null) {
+      fields.push(fieldResult({
+        manifestJsonPath: field,
+        portalLabel: 'Project file',
+        desired: null,
+        current: null,
+        state: 'NOT_APPLICABLE',
+        resolved: null,
+        editableControlAvailable: false,
+        notes: 'The staging manifest has no verified Project File Link for this engine version; the existing Fab value was intentionally not compared or managed.',
+        writeTarget: null,
+      }));
+      continue;
+    }
     const locatorManifest = { projectFileLink: pkg.projectFileLink };
     const resolved = await resolveCandidate(page, fieldCandidates('projectFileLink', locatorManifest));
     let current = null;
