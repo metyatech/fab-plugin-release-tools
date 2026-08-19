@@ -318,6 +318,11 @@ and every package Project File Link. An empty `subcategory` is legitimately
 `NOT_APPLICABLE` when Fab exposes no distinct subcategory. Existing media whose
 identity cannot be proven remains a write blocker.
 
+Submit-for-review uses a scoped confirmation-dialog state machine when Fab
+requires confirmation. `submitInvoked` records execution of the final submit
+action, while `submitAccepted` is true only after the listing is read back in
+the accepted `Pending approval` state. Cancel submission is never used.
+
 ## Migration note
 
 Moving an existing plugin from a repository-specific `PackageForFab.ps1` to

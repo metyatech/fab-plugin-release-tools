@@ -6,6 +6,8 @@ import { dangerousActionCandidates, listingEditUrl, resolveCandidate, saveCandid
 
 const REVIEW_LOCKED = new Set(['pending approval', 'pending publication', 'approved', 'live']);
 const KNOWN_STATUSES = ['Pending approval', 'Pending Publication', 'Changes needed', 'Draft', 'Approved', 'Live'];
+const SUBMIT_ACCEPTED_STATUSES = new Set(['pending approval']);
+const SUBMIT_OUTCOME_TIMEOUT_MS = 5000;
 
 // These fields are owned by the manifest and must be readable or safely writable
 // before a Save Draft or Submit for review operation can begin. Subcategory=[] is
@@ -163,6 +165,72 @@ async function verifyAfterStaging(page, manifestInfo) {
   return after;
 }
 
+async function waitForSubmitOutcomeSignal(page) {
+  const signal = await page.waitForFunction(() => {
+    const visible = (node) => {
+      const style = window.getComputedStyle(node);
+      return !node.hasAttribute('hidden') && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    if ([...document.querySelectorAll('[role="dialog"]')].some(visible)) return 'dialog';
+    const status = document.querySelector('[data-testid="listing-status"]')?.textContent?.replace(/\s+/g, ' ').trim().toLowerCase();
+    if (status === 'pending approval') return 'status';
+    return null;
+  }, null, { timeout: SUBMIT_OUTCOME_TIMEOUT_MS }).catch(() => null);
+  return signal ? signal.jsonValue() : null;
+}
+
+async function recordPostSubmitStatus(page, result) {
+  result.postSubmitStatus = await readStatus(page).catch(() => null);
+  result.submitAccepted = SUBMIT_ACCEPTED_STATUSES.has(normalized(result.postSubmitStatus).toLowerCase());
+  if (!result.submitAccepted) {
+    throw new Error(`Fab did not reach an accepted post-submit status. Received ${result.postSubmitStatus ?? 'unknown'}.`);
+  }
+}
+
+async function executeSubmitFlow(page, guard, result) {
+  guard.setPhase('submit');
+  try {
+    const submit = await uniqueAction(page, submitCandidates(), 'Submit for review');
+    await submit.locator.click();
+    result.writeInteractionsPerformed += 1;
+    const signal = await waitForSubmitOutcomeSignal(page);
+    if (signal === 'dialog') {
+      const dialogs = page.getByRole('dialog');
+      const dialogCount = await dialogs.count();
+      const visibleDialogs = [];
+      for (let index = 0; index < dialogCount; index += 1) {
+        if (await dialogs.nth(index).isVisible().catch(() => false)) visibleDialogs.push(dialogs.nth(index));
+      }
+      if (visibleDialogs.length !== 1) {
+        result.postSubmitStatus = await readStatus(page).catch(() => null);
+        throw new Error(`Submit confirmation requires exactly one visible dialog; found ${visibleDialogs.length}.`);
+      }
+      const dialog = visibleDialogs[0];
+      const confirmation = dialog.getByRole('button', { name: /^(?:Confirm|Submit for review|Submit for Review)$/ });
+      const confirmationCount = await confirmation.count();
+      if (confirmationCount !== 1) {
+        result.postSubmitStatus = await readStatus(page).catch(() => null);
+        throw new Error(`Submit confirmation requires exactly one approved confirmation action; found ${confirmationCount}.`);
+      }
+      await confirmation.click();
+      result.submitInvoked = true;
+      result.writeInteractionsPerformed += 1;
+      await page.waitForFunction(() => document.querySelector('[data-testid="listing-status"]')?.textContent?.replace(/\s+/g, ' ').trim().toLowerCase() === 'pending approval', null, { timeout: SUBMIT_OUTCOME_TIMEOUT_MS }).catch(() => undefined);
+      await recordPostSubmitStatus(page, result);
+      return;
+    }
+    if (signal !== 'status') {
+      result.submitInvoked = true;
+      result.postSubmitStatus = await readStatus(page).catch(() => null);
+      throw new Error('Submit for review produced neither a valid confirmation dialog nor an accepted status transition.');
+    }
+    result.submitInvoked = true;
+    await recordPostSubmitStatus(page, result);
+  } finally {
+    guard.setPhase('stage');
+  }
+}
+
 export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'verify', saveDraftAuthorized = false, outputDirectory = null, origin = 'https://www.fab.com', page: injectedPage = null, context: injectedContext = null }) {
   if (mode === 'save' && !saveDraftAuthorized) throw new Error('Save Draft requires explicit Save Draft authorization.');
   if (mode === 'submit' && !saveDraftAuthorized) throw new Error('Submit for review requires explicit Save Draft authorization.');
@@ -192,6 +260,8 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     executedMutations: [],
     saveInvoked: false,
     submitInvoked: false,
+    submitAccepted: false,
+    postSubmitStatus: null,
     writeInteractionsPerformed: 0,
     dangerousActionsFound: [],
     blockers: [],
@@ -248,18 +318,7 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     if (mode === 'submit') {
       if (!result.saveInvoked && result.plannedMutations.length > 0) throw new Error('Submit for review requires a completed Save Draft operation.');
       if (result.comparisonAfter.mismatchCount > 0 || criticalBlockers(result.comparisonAfter, manifestInfo.manifest).length > 0) throw new Error('Submit for review blocked by post-save comparison.');
-      guard.setPhase('submit');
-      const submit = await uniqueAction(page, submitCandidates(), 'Submit for review');
-      await submit.locator.click();
-      result.submitInvoked = true;
-      result.writeInteractionsPerformed += 1;
-      await page.waitForTimeout(100);
-      guard.setPhase('stage');
-      const confirmation = page.getByRole('button', { name: /^(Submit for review|Submit for Review|Confirm)$/ });
-      if (await confirmation.count() === 1) {
-        await confirmation.click();
-        result.writeInteractionsPerformed += 1;
-      }
+      await executeSubmitFlow(page, guard, result);
     }
     result.result = 'PASS';
     return result;

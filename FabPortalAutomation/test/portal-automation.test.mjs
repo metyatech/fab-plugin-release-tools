@@ -44,6 +44,8 @@ test('verify-only performs zero writes', async () => {
   assert.equal(result.writeInteractionsPerformed, 0);
   assert.equal(result.saveInvoked, false);
   assert.equal(result.submitInvoked, false);
+  assert.equal(result.submitAccepted, false);
+  assert.equal(result.postSubmitStatus, null);
   assert.equal(fixture.mutations.length, 0);
 });
 
@@ -149,8 +151,79 @@ test('Submit runs only after exact comparison success', async () => {
   const { result, fixture } = await scenario({ mode: 'submit', saveDraftAuthorized: true });
   assert.equal(result.result, 'PASS');
   assert.equal(result.submitInvoked, true);
+  assert.equal(result.submitAccepted, true);
+  assert.equal(result.postSubmitStatus, 'Pending approval');
   assert.equal(result.saveInvoked, false);
   assert.equal(fixture.mutations.some((item) => item.pathname === '/api/submit'), true);
+});
+
+test('direct Submit succeeds only after an accepted status transition', async () => {
+  const { result, fixture } = await scenario({ mode: 'submit', saveDraftAuthorized: true, state: { submitFlow: 'direct' } });
+  assert.equal(result.result, 'PASS');
+  assert.equal(result.submitInvoked, true);
+  assert.equal(result.submitAccepted, true);
+  assert.equal(result.postSubmitStatus, 'Pending approval');
+  assert.equal(fixture.mutations.filter((item) => item.pathname === '/api/submit').length, 1);
+  assert.deepEqual(result.network.phaseHistory, ['stage', 'submit', 'stage']);
+  assert.equal(result.network.requests.find((item) => item.pathname === '/api/submit')?.phase, 'submit');
+});
+
+test('confirmation Submit scopes the confirmation and keeps submit phase active', async () => {
+  const { result, fixture } = await scenario({ mode: 'submit', saveDraftAuthorized: true, state: { submitFlow: 'confirmation' } });
+  assert.equal(result.result, 'PASS');
+  assert.equal(result.submitInvoked, true);
+  assert.equal(result.submitAccepted, true);
+  assert.equal(result.postSubmitStatus, 'Pending approval');
+  assert.equal(fixture.mutations.filter((item) => item.pathname === '/api/submit').length, 1);
+  assert.deepEqual(result.network.phaseHistory, ['stage', 'submit', 'stage']);
+  assert.equal(result.network.requests.find((item) => item.pathname === '/api/submit')?.phase, 'submit');
+  assert.equal(result.network.requests.find((item) => item.pathname === '/api/submit')?.blocked, false);
+});
+
+test('ambiguous confirmation actions fail without a confirmed submit', async () => {
+  const { result, fixture } = await scenario({ mode: 'submit', saveDraftAuthorized: true, state: { submitFlow: 'confirmation', submitConfirmationButtons: ['Confirm', 'Submit for review'] } });
+  assert.equal(result.result, 'FAIL');
+  assert.equal(result.submitInvoked, false);
+  assert.equal(result.submitAccepted, false);
+  assert.equal(fixture.mutations.filter((item) => item.pathname === '/api/submit').length, 0);
+  assert.equal(fixture.mutations.some((item) => item.pathname === '/api/cancel'), false);
+});
+
+test('confirmation with only Cancel fails without clicking Cancel', async () => {
+  const { result, fixture } = await scenario({ mode: 'submit', saveDraftAuthorized: true, state: { submitFlow: 'confirmation', submitConfirmationButtons: [] } });
+  assert.equal(result.result, 'FAIL');
+  assert.equal(result.submitInvoked, false);
+  assert.equal(result.submitAccepted, false);
+  assert.equal(fixture.mutations.filter((item) => item.pathname === '/api/submit').length, 0);
+  assert.equal(fixture.mutations.some((item) => item.pathname === '/api/cancel'), false);
+});
+
+test('Submit fails when neither confirmation nor accepted status appears', async () => {
+  const { result, fixture } = await scenario({ mode: 'submit', saveDraftAuthorized: true, state: { submitFlow: 'direct', submitStaysDraft: true } });
+  assert.equal(result.result, 'FAIL');
+  assert.equal(result.submitInvoked, true);
+  assert.equal(result.submitAccepted, false);
+  assert.equal(result.postSubmitStatus, 'Draft');
+  assert.equal(fixture.mutations.filter((item) => item.pathname === '/api/submit').length, 1);
+});
+
+test('blocked Submit request cannot be accepted', async () => {
+  const { result, fixture } = await scenario({ mode: 'submit', saveDraftAuthorized: true, state: { submitFlow: 'direct', submitRequestPath: '/api/action' } });
+  assert.equal(result.result, 'FAIL');
+  assert.equal(result.submitInvoked, true);
+  assert.equal(result.submitAccepted, false);
+  assert.equal(result.postSubmitStatus, 'Draft');
+  assert.equal(fixture.mutations.filter((item) => item.pathname === '/api/submit').length, 0);
+  assert.equal(result.network.networkMutationRequestsBlocked, 1);
+});
+
+test('failed Submit response cannot be accepted', async () => {
+  const { result, fixture } = await scenario({ mode: 'submit', saveDraftAuthorized: true, state: { submitFlow: 'direct', submitRequestFailure: true } });
+  assert.equal(result.result, 'FAIL');
+  assert.equal(result.submitInvoked, true);
+  assert.equal(result.submitAccepted, false);
+  assert.equal(result.postSubmitStatus, 'Draft');
+  assert.equal(fixture.mutations.filter((item) => item.pathname === '/api/submit').length, 1);
 });
 
 test('unexpected DELETE is blocked by the network guard', async () => {

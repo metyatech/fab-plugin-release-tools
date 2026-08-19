@@ -27,6 +27,8 @@ function markdown(result, comparison, after, network) {
 - Status: ${result.listingStatus ?? 'unknown'}
 - Save invoked: ${result.saveInvoked}
 - Submit invoked: ${result.submitInvoked}
+- Submit accepted: ${result.submitAccepted}
+- Post-submit status: ${result.postSubmitStatus ?? 'null'}
 - Write ready: ${result.writeReady}
 - Write interactions: ${result.writeInteractionsPerformed}
 - Network mutations observed/blocked: ${network?.networkMutationRequestsObserved ?? 0}/${network?.networkMutationRequestsBlocked ?? 0}
@@ -68,6 +70,8 @@ export async function writeRunReport({ directory, result, comparison, comparison
     executedMutations: result.executedMutations,
     saveInvoked: result.saveInvoked,
     submitInvoked: result.submitInvoked,
+    submitAccepted: result.submitAccepted,
+    postSubmitStatus: result.postSubmitStatus,
     writeReady: result.writeReady,
     writeBlockers: result.writeBlockers,
     readOnlyUiActions: result.readOnlyUiActions,

@@ -7,6 +7,10 @@ function html(value) {
 function pageMarkup(state, listingId) {
   const checked = (value) => value ? ' checked' : '';
   const radio = (label, isChecked) => `<label>${html(label)}<input type="radio" aria-label="${html(label)}"${checked(isChecked)}></label>`;
+  const confirmationButtons = (state.submitConfirmationButtons ?? ['Confirm']).map((label) => `<button type="button" data-testid="submit-confirm">${html(label)}</button>`).join('');
+  const confirmationDialog = state.submitFlow === 'confirmation'
+    ? `<div role="dialog" aria-label="Submit for review confirmation" hidden><h2>Submit for review?</h2>${confirmationButtons}<button type="button" data-testid="submit-cancel">Cancel</button></div>`
+    : '';
   return `<!doctype html><html><head><title>Fab fixture</title></head><body>
   <main>
     <h1>${html(state.title)}</h1>
@@ -39,6 +43,7 @@ function pageMarkup(state, listingId) {
     <button type="button" data-testid="save" ${state.disableSave ? 'disabled' : ''}>Save</button>
     <button type="button" data-testid="submit">Submit for review</button>
     <button type="button" data-testid="cancel">Cancel submission</button>
+    ${confirmationDialog}
   </main>
   <script>
     const value = (selector) => document.querySelector(selector)?.value ?? '';
@@ -64,7 +69,16 @@ function pageMarkup(state, listingId) {
       mediaOrder: document.querySelector('[data-testid="media-gallery"]')?.dataset.order ?? ''
     });
     document.querySelector('[data-testid="save"]').addEventListener('click', () => fetch('/api/save', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload()) }));
-    document.querySelector('[data-testid="submit"]').addEventListener('click', () => fetch('/api/submit', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) }));
+    const submitRequest = async () => {
+      const response = await fetch(${JSON.stringify(state.submitRequestPath ?? '/api/submit')}, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) });
+      if (response.ok && ${JSON.stringify((state.submitRequestPath ?? '/api/submit') === '/api/submit' && !state.submitStaysDraft && !state.submitRequestFailure)}) document.querySelector('[data-testid="listing-status"]').textContent = 'Pending approval';
+    };
+    document.querySelector('[data-testid="submit"]').addEventListener('click', () => {
+      if (${JSON.stringify(state.submitFlow === 'confirmation')}) document.querySelector('[role="dialog"]').hidden = false;
+      else submitRequest();
+    });
+    document.querySelectorAll('[data-testid="submit-confirm"]').forEach((button) => button.addEventListener('click', submitRequest));
+    document.querySelector('[data-testid="submit-cancel"]')?.addEventListener('click', () => fetch('/api/cancel', { method: 'POST' }));
     document.querySelector('[data-testid="cancel"]').addEventListener('click', () => fetch('/api/cancel', { method: 'POST' }));
     document.querySelectorAll('[aria-expanded="false"][aria-controls^="fixture-section-"]').forEach((toggle) => toggle.addEventListener('click', () => {
       if (${state.readOnlySectionMutation ? 'true' : 'false'}) fetch('/api/read-only-expansion', { method: 'POST' }).catch(() => undefined);
@@ -114,8 +128,9 @@ export async function startFixture(initialState, { dropSaveFields = [], redirect
     }
     if (request.method === 'POST' && url.pathname === '/api/submit') {
       mutations.push({ method: 'POST', pathname: url.pathname, body: {} });
-      state.status = 'Pending approval';
-      response.writeHead(200, { 'content-type': 'application/json' });
+      const accepted = !state.submitRequestFailure;
+      if (accepted && !state.submitStaysDraft) state.status = 'Pending approval';
+      response.writeHead(accepted ? 200 : 500, { 'content-type': 'application/json' });
       response.end('{}');
       return;
     }

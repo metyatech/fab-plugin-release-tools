@@ -76,6 +76,7 @@ export function installNetworkGuard(context, { mode = 'verify' } = {}) {
         graphqlOperation: graph,
         intent,
         mutation,
+        phase: state.phase,
         blocked: block,
       });
     }

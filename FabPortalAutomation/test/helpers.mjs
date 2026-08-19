@@ -66,6 +66,11 @@ export function fixtureState(manifest, overrides = {}) {
     mediaExisting: 'known',
     mediaOrder: manifest.media.map((item) => `${item.order}:${item.role}`).join(','),
     disableSave: false,
+    submitFlow: 'direct',
+    submitConfirmationButtons: ['Confirm'],
+    submitRequestPath: '/api/submit',
+    submitRequestFailure: false,
+    submitStaysDraft: false,
     ...overrides,
   };
 }

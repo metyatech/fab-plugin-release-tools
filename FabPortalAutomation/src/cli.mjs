@@ -59,6 +59,7 @@ function emit(value, json) {
     process.stdout.write(`Mode: ${value.mode}\nListing: ${value.listingTitle} (${value.listingId})\nStatus: ${value.listingStatus ?? 'unknown'}\n`);
     if (value.comparison?.counts) process.stdout.write(`MATCH=${value.comparison.counts.MATCH ?? 0} MISMATCH=${value.comparison.counts.MISMATCH ?? 0} NOT_VISIBLE=${value.comparison.counts.NOT_VISIBLE ?? 0} NOT_DISCOVERED=${value.comparison.counts.NOT_DISCOVERED ?? 0} NOT_APPLICABLE=${value.comparison.counts.NOT_APPLICABLE ?? 0}\n`);
     process.stdout.write(`writeInteractionsPerformed=${value.writeInteractionsPerformed} Save=${value.saveInvoked} Submit=${value.submitInvoked}\n`);
+    process.stdout.write(`submitAccepted=${value.submitAccepted} postSubmitStatus=${value.postSubmitStatus ?? 'null'}\n`);
     process.stdout.write(`writeReady=${value.writeReady} writeBlockers=${value.writeBlockers?.length ?? 0}\n`);
     process.stdout.write(`networkMutationRequestsObserved=${value.network?.networkMutationRequestsObserved ?? 0} networkMutationRequestsBlocked=${value.network?.networkMutationRequestsBlocked ?? 0}\n`);
     process.stdout.write(`Artifacts: ${value.artifactDirectory}\n`);
