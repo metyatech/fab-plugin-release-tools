@@ -27,7 +27,11 @@ function normalized(value) {
 async function exactText(page, textValue) {
   const locator = page.getByText(textValue, { exact: true });
   const count = await locator.count();
-  return { locator, count };
+  let visibleCount = 0;
+  for (let index = 0; index < count; index += 1) {
+    if (await locator.nth(index).isVisible().catch(() => false)) visibleCount += 1;
+  }
+  return { locator, count: visibleCount };
 }
 
 async function readStatus(page) {
@@ -131,8 +135,20 @@ async function readDangerousActions(page) {
 }
 
 async function uniqueAction(page, candidates, actionName) {
-  const resolved = await resolveCandidate(page, candidates);
-  if (!resolved.metadata?.unique) throw new Error(`${actionName} action is not uniquely available.`);
+  let resolved = null;
+  for (const candidate of candidates) {
+    const locator = candidate.create(page);
+    const count = await locator.count();
+    const visible = [];
+    for (let index = 0; index < count; index += 1) {
+      if (await locator.nth(index).isVisible().catch(() => false)) visible.push(locator.nth(index));
+    }
+    if (visible.length > 0) {
+      resolved = { locator: visible[0], candidate, metadata: { matchCount: visible.length, unique: visible.length === 1, strategy: candidate.strategy, expression: candidate.expression, confidence: candidate.confidence, reason: candidate.reason } };
+      break;
+    }
+  }
+  if (!resolved?.metadata?.unique) throw new Error(`${actionName} action is not uniquely available.`);
   const disabled = await resolved.locator.isDisabled().catch(() => false);
   if (disabled) throw new Error(`${actionName} action is disabled.`);
   return resolved;
@@ -165,18 +181,49 @@ async function verifyAfterStaging(page, manifestInfo) {
   return after;
 }
 
-async function waitForSubmitOutcomeSignal(page) {
-  const signal = await page.waitForFunction(() => {
-    const visible = (node) => {
-      const style = window.getComputedStyle(node);
-      return !node.hasAttribute('hidden') && style.display !== 'none' && style.visibility !== 'hidden';
-    };
-    if ([...document.querySelectorAll('[role="dialog"]')].some(visible)) return 'dialog';
-    const status = document.querySelector('[data-testid="listing-status"]')?.textContent?.replace(/\s+/g, ' ').trim().toLowerCase();
-    if (status === 'pending approval') return 'status';
-    return null;
-  }, null, { timeout: SUBMIT_OUTCOME_TIMEOUT_MS }).catch(() => null);
-  return signal ? signal.jsonValue() : null;
+async function tryReadStatus(page) {
+  try { return await readStatus(page); } catch { return null; }
+}
+
+async function visibleDialogRecords(page) {
+  const dialogs = page.getByRole('dialog');
+  const records = [];
+  for (let index = 0; index < await dialogs.count(); index += 1) {
+    const locator = dialogs.nth(index);
+    if (!await locator.isVisible().catch(() => false)) continue;
+    const signature = await locator.evaluate((element) => JSON.stringify({
+      id: element.id || null,
+      ariaLabel: element.getAttribute('aria-label'),
+      ariaLabelledBy: element.getAttribute('aria-labelledby'),
+      testId: element.getAttribute('data-testid'),
+      text: (element.textContent || '').replace(/\s+/g, ' ').trim(),
+    }));
+    records.push({ locator, signature });
+  }
+  return records;
+}
+
+async function waitForSubmitOutcomeSignal(page, beforeDialogs) {
+  const knownDialogSignatures = new Set(beforeDialogs.map((dialog) => dialog.signature));
+  const deadline = Date.now() + SUBMIT_OUTCOME_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const status = await tryReadStatus(page);
+    if (SUBMIT_ACCEPTED_STATUSES.has(normalized(status).toLowerCase())) return { kind: 'status', status };
+    const newlyVisibleDialogs = (await visibleDialogRecords(page)).filter((dialog) => !knownDialogSignatures.has(dialog.signature));
+    if (newlyVisibleDialogs.length > 0) return { kind: 'dialog', dialogs: newlyVisibleDialogs };
+    await page.waitForTimeout(50);
+  }
+  return null;
+}
+
+async function waitForAcceptedStatus(page) {
+  const deadline = Date.now() + SUBMIT_OUTCOME_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const status = await tryReadStatus(page);
+    if (SUBMIT_ACCEPTED_STATUSES.has(normalized(status).toLowerCase())) return status;
+    await page.waitForTimeout(50);
+  }
+  return null;
 }
 
 async function recordPostSubmitStatus(page, result) {
@@ -190,22 +237,17 @@ async function recordPostSubmitStatus(page, result) {
 async function executeSubmitFlow(page, guard, result) {
   guard.setPhase('submit');
   try {
+    const beforeDialogs = await visibleDialogRecords(page);
     const submit = await uniqueAction(page, submitCandidates(), 'Submit for review');
     await submit.locator.click();
     result.writeInteractionsPerformed += 1;
-    const signal = await waitForSubmitOutcomeSignal(page);
-    if (signal === 'dialog') {
-      const dialogs = page.getByRole('dialog');
-      const dialogCount = await dialogs.count();
-      const visibleDialogs = [];
-      for (let index = 0; index < dialogCount; index += 1) {
-        if (await dialogs.nth(index).isVisible().catch(() => false)) visibleDialogs.push(dialogs.nth(index));
-      }
-      if (visibleDialogs.length !== 1) {
+    const signal = await waitForSubmitOutcomeSignal(page, beforeDialogs);
+    if (signal?.kind === 'dialog') {
+      if (signal.dialogs.length !== 1) {
         result.postSubmitStatus = await readStatus(page).catch(() => null);
-        throw new Error(`Submit confirmation requires exactly one visible dialog; found ${visibleDialogs.length}.`);
+        throw new Error(`Submit confirmation requires exactly one newly visible dialog; found ${signal.dialogs.length}.`);
       }
-      const dialog = visibleDialogs[0];
+      const dialog = signal.dialogs[0].locator;
       const confirmation = dialog.getByRole('button', { name: /^(?:Confirm|Submit for review|Submit for Review)$/ });
       const confirmationCount = await confirmation.count();
       if (confirmationCount !== 1) {
@@ -215,11 +257,11 @@ async function executeSubmitFlow(page, guard, result) {
       await confirmation.click();
       result.submitInvoked = true;
       result.writeInteractionsPerformed += 1;
-      await page.waitForFunction(() => document.querySelector('[data-testid="listing-status"]')?.textContent?.replace(/\s+/g, ' ').trim().toLowerCase() === 'pending approval', null, { timeout: SUBMIT_OUTCOME_TIMEOUT_MS }).catch(() => undefined);
+      await waitForAcceptedStatus(page);
       await recordPostSubmitStatus(page, result);
       return;
     }
-    if (signal !== 'status') {
+    if (signal?.kind !== 'status') {
       result.submitInvoked = true;
       result.postSubmitStatus = await readStatus(page).catch(() => null);
       throw new Error('Submit for review produced neither a valid confirmation dialog nor an accepted status transition.');

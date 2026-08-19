@@ -71,6 +71,8 @@ export function fixtureState(manifest, overrides = {}) {
     submitRequestPath: '/api/submit',
     submitRequestFailure: false,
     submitStaysDraft: false,
+    statusRendering: 'testid',
+    preExistingDialog: false,
     ...overrides,
   };
 }

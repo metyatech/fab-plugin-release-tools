@@ -168,6 +168,25 @@ test('direct Submit succeeds only after an accepted status transition', async ()
   assert.equal(result.network.requests.find((item) => item.pathname === '/api/submit')?.phase, 'submit');
 });
 
+test('direct Submit accepts a plain visible status without listing-status testid', async () => {
+  const { result, fixture } = await scenario({ mode: 'submit', saveDraftAuthorized: true, state: { statusRendering: 'plain-text' } });
+  assert.equal(result.result, 'PASS');
+  assert.equal(result.submitInvoked, true);
+  assert.equal(result.submitAccepted, true);
+  assert.equal(result.postSubmitStatus, 'Pending approval');
+  assert.equal(fixture.mutations.filter((item) => item.pathname === '/api/submit').length, 1);
+});
+
+test('pre-existing unrelated dialog is not mistaken for submit confirmation', async () => {
+  const { result, fixture } = await scenario({ mode: 'submit', saveDraftAuthorized: true, state: { preExistingDialog: true } });
+  assert.equal(result.result, 'PASS');
+  assert.equal(result.submitInvoked, true);
+  assert.equal(result.submitAccepted, true);
+  assert.equal(result.postSubmitStatus, 'Pending approval');
+  assert.equal(fixture.mutations.filter((item) => item.pathname === '/api/submit').length, 1);
+  assert.equal(fixture.mutations.some((item) => item.pathname === '/api/cancel'), false);
+});
+
 test('confirmation Submit scopes the confirmation and keeps submit phase active', async () => {
   const { result, fixture } = await scenario({ mode: 'submit', saveDraftAuthorized: true, state: { submitFlow: 'confirmation' } });
   assert.equal(result.result, 'PASS');

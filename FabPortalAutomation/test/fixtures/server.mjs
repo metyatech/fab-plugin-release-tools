@@ -11,10 +11,16 @@ function pageMarkup(state, listingId) {
   const confirmationDialog = state.submitFlow === 'confirmation'
     ? `<div role="dialog" aria-label="Submit for review confirmation" hidden><h2>Submit for review?</h2>${confirmationButtons}<button type="button" data-testid="submit-cancel">Cancel</button></div>`
     : '';
+  const unrelatedDialog = state.preExistingDialog
+    ? '<div role="dialog" aria-label="Unrelated information"><h2>Unrelated information</h2><p>This dialog is not a submission confirmation.</p><button type="button" data-testid="unrelated-dialog-close">Close</button></div>'
+    : '';
+  const statusMarkup = state.statusRendering === 'plain-text'
+    ? `<div data-status-value>${html(state.status)}</div>`
+    : `<div data-testid="listing-status" data-status-value>${html(state.status)}</div>`;
   return `<!doctype html><html><head><title>Fab fixture</title></head><body>
   <main>
     <h1>${html(state.title)}</h1>
-    <div data-testid="listing-status">${html(state.status)}</div>
+    ${statusMarkup}
     <label>Title *<input aria-label="Title *" value="${html(state.title)}" ${state.disableFields?.includes('title') ? 'disabled' : ''}></label>
     <label>Short description *<input aria-label="Short description *" value="${html(state.shortDescription)}" ${state.disableFields?.includes('shortDescription') ? 'disabled' : ''}></label>
     <label>Description *<div role="textbox" aria-label="Description *" contenteditable="true">${html(state.longDescription)}</div></label>
@@ -43,6 +49,7 @@ function pageMarkup(state, listingId) {
     <button type="button" data-testid="save" ${state.disableSave ? 'disabled' : ''}>Save</button>
     <button type="button" data-testid="submit">Submit for review</button>
     <button type="button" data-testid="cancel">Cancel submission</button>
+    ${unrelatedDialog}
     ${confirmationDialog}
   </main>
   <script>
@@ -71,7 +78,7 @@ function pageMarkup(state, listingId) {
     document.querySelector('[data-testid="save"]').addEventListener('click', () => fetch('/api/save', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload()) }));
     const submitRequest = async () => {
       const response = await fetch(${JSON.stringify(state.submitRequestPath ?? '/api/submit')}, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) });
-      if (response.ok && ${JSON.stringify((state.submitRequestPath ?? '/api/submit') === '/api/submit' && !state.submitStaysDraft && !state.submitRequestFailure)}) document.querySelector('[data-testid="listing-status"]').textContent = 'Pending approval';
+      if (response.ok && ${JSON.stringify((state.submitRequestPath ?? '/api/submit') === '/api/submit' && !state.submitStaysDraft && !state.submitRequestFailure)}) document.querySelector('[data-status-value]').textContent = 'Pending approval';
     };
     document.querySelector('[data-testid="submit"]').addEventListener('click', () => {
       if (${JSON.stringify(state.submitFlow === 'confirmation')}) document.querySelector('[role="dialog"]').hidden = false;
