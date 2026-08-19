@@ -352,7 +352,40 @@ function Import-FabProductListing {
         throw 'listing support_url must exactly match FabPluginRelease.json.supportUrl.'
     }
 
+    $listingIdProperty = $listing.PSObject.Properties['listing_id']
+    $configurationListingId = if ($null -eq $Configuration.listingId) {
+        $null
+    }
+    else {
+        [string]$Configuration.listingId
+    }
+    $listingId = $null
+    if ($null -ne $listingIdProperty) {
+        if ($listingIdProperty.Value -isnot [string] -or
+            [string]$listingIdProperty.Value -cnotmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') {
+            throw 'listing_id must be a lowercase UUID.'
+        }
+        $listingId = [string]$listingIdProperty.Value
+        if ($null -ne $configurationListingId -and $listingId -cne $configurationListingId) {
+            throw 'ListingFields.json listing_id conflicts with FabPluginRelease.json listingId.'
+        }
+    }
+    else {
+        $listingId = $configurationListingId
+    }
+
+    $publicReleaseSha256Property = $listing.PSObject.Properties['public_release_sha256']
+    $publicReleaseSha256 = $null
+    if ($null -ne $publicReleaseSha256Property) {
+        if ($publicReleaseSha256Property.Value -isnot [string] -or
+            [string]$publicReleaseSha256Property.Value -cnotmatch '^[0-9a-fA-F]{64}$') {
+            throw 'public_release_sha256 must be a 64-character SHA-256 hexadecimal value.'
+        }
+        $publicReleaseSha256 = ([string]$publicReleaseSha256Property.Value).ToLowerInvariant()
+    }
+
     $projectFileLinks = [ordered]@{}
+    $usesLegacyProjectFileLink = $false
     $projectFileLinksValue = Get-FabProductPropertyValue -Object $listing -Name 'project_file_links'
     if ($null -ne $projectFileLinksValue) {
         if ($projectFileLinksValue -isnot [pscustomobject]) {
@@ -371,6 +404,7 @@ function Import-FabProductListing {
     }
     if ($projectFileLinks.Count -eq 0 -and $null -ne $legacyProjectFileLink -and $configuredVersions.Count -eq 1) {
         $projectFileLinks[$configuredVersions[0]] = [string]$legacyProjectFileLink
+        $usesLegacyProjectFileLink = $true
     }
     if ($projectFileLinks.Count -gt 0) {
         if ($projectFileLinks.Count -ne $configuredVersions.Count -or
@@ -383,6 +417,7 @@ function Import-FabProductListing {
     return [pscustomobject]@{
         Product                 = [string]$listing.product
         ProductVersion          = [string]$listing.version
+        ListingId               = $listingId
         Title                   = $title
         ShortDescription        = $shortDescription
         LongDescription         = $longDescription
@@ -406,6 +441,8 @@ function Import-FabProductListing {
         SupportUrl              = $supportUrl
         SourceRepositoryUrl     = [string]$listing.source_repository_url
         ProjectFileLinks        = $projectFileLinks
+        PublicReleaseSha256     = $publicReleaseSha256
+        UsesLegacyProjectFileLink = $usesLegacyProjectFileLink
         Media                   = $media
         Raw                     = $listing
     }
@@ -1000,6 +1037,192 @@ function Test-FabProductPublicUrl {
     return $valid
 }
 
+$script:FabProductMaximumRemotePackageBytes = 15L * 1024L * 1024L * 1024L
+$script:FabProductMaximumRemoteRedirects = 10
+
+function ConvertTo-FabProductSafeUrl {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Url
+    )
+
+    $uri = $null
+    if (-not [System.Uri]::TryCreate($Url, [System.UriKind]::Absolute, [ref]$uri)) {
+        return '<invalid-url>'
+    }
+    try {
+        $builder = [System.UriBuilder]::new($uri)
+        $builder.UserName = ''
+        $builder.Password = ''
+        $builder.Query = ''
+        $builder.Fragment = ''
+        return $builder.Uri.AbsoluteUri
+    }
+    catch {
+        return '<invalid-url>'
+    }
+}
+
+function Get-FabProductStreamSha256 {
+    param(
+        [Parameter(Mandatory)]
+        [System.IO.Stream]$Stream,
+
+        [long]$MaximumBytes = $script:FabProductMaximumRemotePackageBytes
+    )
+
+    if ($MaximumBytes -le 0) {
+        throw 'MaximumBytes must be positive.'
+    }
+    $hashAlgorithm = [System.Security.Cryptography.SHA256]::Create()
+    $buffer = [byte[]]::new(1024 * 1024)
+    $totalBytes = 0L
+    try {
+        while (($read = $Stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            $totalBytes += $read
+            if ($totalBytes -gt $MaximumBytes) {
+                throw 'Remote Project File Link exceeds the package size limit.'
+            }
+            [void]$hashAlgorithm.TransformBlock($buffer, 0, $read, $buffer, 0)
+        }
+        [void]$hashAlgorithm.TransformFinalBlock([byte[]]::new(0), 0, 0)
+        return [pscustomobject]@{
+            Sha256 = [System.Convert]::ToHexString($hashAlgorithm.Hash).ToLowerInvariant()
+            Bytes  = $totalBytes
+        }
+    }
+    finally {
+        $hashAlgorithm.Dispose()
+    }
+}
+
+function Get-FabProductHttpClient {
+    $handler = [System.Net.Http.HttpClientHandler]::new()
+    $handler.AllowAutoRedirect = $false
+    $handler.UseCookies = $false
+    $handler.UseDefaultCredentials = $false
+    $handler.AutomaticDecompression = [System.Net.DecompressionMethods]::None
+    $client = [System.Net.Http.HttpClient]::new($handler)
+    $client.Timeout = [System.TimeSpan]::FromSeconds(30)
+    return $client
+}
+
+function Get-FabProductRemoteZipHash {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Url,
+
+        [Parameter(Mandatory)]
+        [string]$ExpectedSha256,
+
+        [System.Net.Http.HttpClient]$HttpClient
+    )
+
+    if ($ExpectedSha256 -cnotmatch '^[0-9a-fA-F]{64}$') {
+        throw 'ExpectedSha256 must be a 64-character SHA-256 hexadecimal value.'
+    }
+    $safeUrl = ConvertTo-FabProductSafeUrl -Url $Url
+    $uri = $null
+    if (-not [System.Uri]::TryCreate($Url, [System.UriKind]::Absolute, [ref]$uri) -or
+        $uri.Scheme -cne 'https' -or [string]::IsNullOrWhiteSpace($uri.Host)) {
+        throw "Public Project File Link must be an absolute HTTPS URL: $safeUrl"
+    }
+
+    $ownsClient = $null -eq $HttpClient
+    if ($ownsClient) {
+        $HttpClient = Get-FabProductHttpClient
+    }
+    $currentUri = $uri
+    $redirectCount = 0
+    try {
+        while ($true) {
+            $request = [System.Net.Http.HttpRequestMessage]::new(
+                [System.Net.Http.HttpMethod]::Get, $currentUri)
+            $response = $null
+            try {
+                try {
+                    $response = $HttpClient.SendAsync(
+                        $request,
+                        [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead
+                    ).GetAwaiter().GetResult()
+                }
+                catch {
+                    throw "Public Project File Link request failed for $safeUrl."
+                }
+
+                $statusCode = [int]$response.StatusCode
+                if ($statusCode -ge 300 -and $statusCode -le 399) {
+                    if ($redirectCount -ge $script:FabProductMaximumRemoteRedirects -or
+                        $null -eq $response.Headers.Location) {
+                        throw "Public Project File Link redirect limit failed for $safeUrl."
+                    }
+                    $nextUri = if ($response.Headers.Location.IsAbsoluteUri) {
+                        $response.Headers.Location
+                    }
+                    else {
+                        [System.Uri]::new($currentUri, $response.Headers.Location)
+                    }
+                    if ($nextUri.Scheme -cne 'https' -or
+                        [string]::IsNullOrWhiteSpace($nextUri.Host)) {
+                        throw "Public Project File Link redirect must remain HTTPS for $safeUrl."
+                    }
+                    $currentUri = $nextUri
+                    $redirectCount++
+                    continue
+                }
+                if ($statusCode -lt 200 -or $statusCode -gt 299) {
+                    throw "Public Project File Link returned HTTP $statusCode for $safeUrl."
+                }
+                if ($null -eq $response.Content) {
+                    throw "Public Project File Link returned no content for $safeUrl."
+                }
+                $contentLength = $response.Content.Headers.ContentLength
+                if ($null -ne $contentLength -and
+                    $contentLength -gt $script:FabProductMaximumRemotePackageBytes) {
+                    throw "Public Project File Link exceeds the package size limit for $safeUrl."
+                }
+                $remoteStream = $null
+                try {
+                    $remoteStream = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+                    $streamResult = Get-FabProductStreamSha256 -Stream $remoteStream
+                }
+                catch {
+                    throw "Public Project File Link transfer failed for $safeUrl."
+                }
+                finally {
+                    if ($null -ne $remoteStream) {
+                        $remoteStream.Dispose()
+                    }
+                }
+                if ($null -ne $contentLength -and $streamResult.Bytes -ne $contentLength) {
+                    throw "Public Project File Link transfer was truncated for $safeUrl."
+                }
+                $actualSha256 = [string]$streamResult.Sha256
+                if ($actualSha256 -cne $ExpectedSha256.ToLowerInvariant()) {
+                    throw "Public Project File Link SHA-256 mismatch for $safeUrl."
+                }
+                return [pscustomobject]@{
+                    Url           = $safeUrl
+                    Sha256        = $actualSha256
+                    Bytes         = [long]$streamResult.Bytes
+                    RedirectCount = $redirectCount
+                }
+            }
+            finally {
+                if ($null -ne $response) {
+                    $response.Dispose()
+                }
+                $request.Dispose()
+            }
+        }
+    }
+    finally {
+        if ($ownsClient) {
+            $HttpClient.Dispose()
+        }
+    }
+}
+
 function Publish-FabProductProjectFile {
     param(
         [Parameter(Mandatory)]
@@ -1136,14 +1359,31 @@ function Resolve-FabProductProjectFileLink {
         $uri = $null
         if (-not [System.Uri]::TryCreate($url, [System.UriKind]::Absolute, [ref]$uri) -or
             $uri.Scheme -cne 'https' -or [string]::IsNullOrWhiteSpace($uri.Host)) {
-            throw "Project File Link must be an absolute HTTPS URL for UE${engineVersion}: $url"
+            throw "Project File Link must be an absolute HTTPS URL for UE${engineVersion}: $(ConvertTo-FabProductSafeUrl -Url $url)"
         }
-        if (Test-FabProductPublicUrl -Url $url) {
-            $links[$engineVersion] = $url
+        $matchingReleases = @($Releases | Where-Object {
+                [string]$_.EngineVersion -ceq $engineVersion
+            })
+        if ($matchingReleases.Count -ne 1) {
+            throw "Exactly one generated release is required for UE$engineVersion Project File Link verification."
         }
-        else {
-            $pending.Add($engineVersion)
+        $release = $matchingReleases[0]
+        $expectedSha256 = [string]$release.Sha256
+        if ($expectedSha256 -cnotmatch '^[0-9a-f]{64}$') {
+            throw "Generated UE$engineVersion release has an invalid SHA-256."
         }
+        $metadataSha256 = [string]$Listing.PublicReleaseSha256
+        $crossCheckMetadata = $EngineVersions.Count -eq 1 -and
+            [bool]$Listing.UsesLegacyProjectFileLink -and
+            -not [string]::IsNullOrWhiteSpace($metadataSha256)
+        if ($crossCheckMetadata -and $metadataSha256 -cne $expectedSha256) {
+            throw 'public_release_sha256 does not match the generated release SHA-256.'
+        }
+        $remote = Get-FabProductRemoteZipHash -Url $url -ExpectedSha256 $expectedSha256
+        if ($crossCheckMetadata -and [string]$remote.Sha256 -cne $metadataSha256) {
+            throw 'Downloaded Project File Link SHA-256 does not match public_release_sha256.'
+        }
+        $links[$engineVersion] = $url
     }
     return [pscustomobject]@{
         Links    = $links
@@ -1428,7 +1668,7 @@ function Invoke-FabProductReleaseCore {
             schemaVersion            = 2
             pluginName               = [string]$configuration.pluginName
             productVersion           = $descriptor.VersionName
-            listingId                = if ($null -eq $configuration.listingId) { $null } else { [string]$configuration.listingId }
+            listingId                = $listing.ListingId
             title                    = $listing.Title
             shortDescription         = $listing.ShortDescription
             longDescription          = $listing.LongDescription

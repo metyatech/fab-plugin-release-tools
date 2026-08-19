@@ -734,6 +734,9 @@ InModuleScope FabPluginReleaseTools {
 
         It 'removes FabURL when listingId is null' {
             $configuration.listingId = $null
+            [System.IO.File]::WriteAllText(
+                (Join-Path $TestDrive 'FabListingFields.json'),
+                '{"listing_id":"42e5c3b5-36c3-4a91-ba59-8101812e62c3"}')
             Set-JsonObjectProperty -Object $descriptor -Name FabURL -Value 'legacy'
             $result = ConvertTo-SalesPluginDescriptor -SourceDescriptor $descriptor `
                 -Configuration $configuration -EngineVersion '5.8' -DestinationPath $destination

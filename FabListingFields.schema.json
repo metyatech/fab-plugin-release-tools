@@ -34,6 +34,10 @@
   ],
   "properties": {
     "schema_version": { "type": ["string", "number"] },
+    "listing_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
     "product": { "type": "string", "minLength": 1 },
     "version": { "type": "string", "minLength": 1 },
     "title": { "type": "string", "minLength": 1 },
@@ -84,6 +88,10 @@
     "project_file_links": {
       "type": "object",
       "additionalProperties": { "$ref": "#/definitions/httpsUrl" }
+    },
+    "public_release_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{64}$"
     }
   },
   "definitions": {

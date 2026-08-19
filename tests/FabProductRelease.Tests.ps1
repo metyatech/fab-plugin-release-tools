@@ -8,6 +8,58 @@ Describe 'Fab product release orchestration' {
         $scriptPath = Join-Path $PSScriptRoot '..\Invoke-FabProductRelease.ps1'
         . $scriptPath -PluginPath $PSScriptRoot
 
+        if ($null -eq ('FabProductTestHttpMessageHandler' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
+
+public sealed class FabProductTestHttpMessageHandler : HttpMessageHandler
+{
+    private readonly HttpResponseMessage response;
+
+    public FabProductTestHttpMessageHandler(HttpResponseMessage response)
+    {
+        this.response = response;
+    }
+
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        return Task.FromResult(response);
+    }
+}
+'@
+        }
+
+        function Get-TestSha256 {
+            param([Parameter(Mandatory)][byte[]]$Bytes)
+            $sha = [System.Security.Cryptography.SHA256]::Create()
+            try {
+                return [System.Convert]::ToHexString($sha.ComputeHash($Bytes)).ToLowerInvariant()
+            }
+            finally {
+                $sha.Dispose()
+            }
+        }
+
+        function Get-TestRemoteHttpClient {
+            param(
+                [Parameter(Mandatory)]
+                [int]$StatusCode,
+
+                [byte[]]$Bytes
+            )
+            $response = [System.Net.Http.HttpResponseMessage]::new(
+                [System.Net.HttpStatusCode]$StatusCode)
+            if ($null -ne $Bytes) {
+                $response.Content = [System.Net.Http.ByteArrayContent]::new($Bytes)
+            }
+            return [System.Net.Http.HttpClient]::new(
+                [FabProductTestHttpMessageHandler]::new($response))
+        }
+
         function Write-ProductFixtureJson {
             param(
                 [Parameter(Mandatory)]
@@ -344,6 +396,65 @@ Describe 'Fab product release orchestration' {
         @($manifest.tags) | Should -BeExactly @('Plugin', 'Testing')
     }
 
+    It 'accepts and propagates a listing_id from ListingFields.json' {
+        $root = Join-Path $TestDrive 'ListingId'
+        $outputRoot = Join-Path $TestDrive 'ListingIdArtifacts'
+        Initialize-ProductFixture -Root $root -EngineVersions @('5.8') | Out-Null
+        $listingPath = Join-Path $root 'FabListingFields.json'
+        $listing = Get-Content -Raw -LiteralPath $listingPath | ConvertFrom-Json
+        $listing | Add-Member -NotePropertyName listing_id `
+            -NotePropertyValue '42e5c3b5-36c3-4a91-ba59-8101812e62c3'
+        Write-ProductFixtureJson -Value $listing -Path $listingPath
+        Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot | Out-Null
+        $manifest = Get-Content -Raw -LiteralPath (
+            Join-Path $outputRoot 'TestPlugin\FabSubmission\FabPortalSubmission.json') | ConvertFrom-Json
+        $manifest.listingId | Should -BeExactly '42e5c3b5-36c3-4a91-ba59-8101812e62c3'
+    }
+
+    It 'falls back to FabPluginRelease.json listingId when listing metadata omits listing_id' {
+        $root = Join-Path $TestDrive 'ListingIdFallback'
+        $outputRoot = Join-Path $TestDrive 'ListingIdFallbackArtifacts'
+        Initialize-ProductFixture -Root $root -EngineVersions @('5.8') | Out-Null
+        $configPath = Join-Path $root 'FabPluginRelease.json'
+        $configuration = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
+        $configuration.listingId = '42e5c3b5-36c3-4a91-ba59-8101812e62c3'
+        Write-ProductFixtureJson -Value $configuration -Path $configPath
+        Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot | Out-Null
+        $manifest = Get-Content -Raw -LiteralPath (
+            Join-Path $outputRoot 'TestPlugin\FabSubmission\FabPortalSubmission.json') | ConvertFrom-Json
+        $manifest.listingId | Should -BeExactly '42e5c3b5-36c3-4a91-ba59-8101812e62c3'
+    }
+
+    It 'rejects conflicting non-null listing IDs before building' {
+        $root = Join-Path $TestDrive 'ListingIdConflict'
+        $outputRoot = Join-Path $TestDrive 'ListingIdConflictArtifacts'
+        Initialize-ProductFixture -Root $root -EngineVersions @('5.8') | Out-Null
+        $listingPath = Join-Path $root 'FabListingFields.json'
+        $listing = Get-Content -Raw -LiteralPath $listingPath | ConvertFrom-Json
+        $listing | Add-Member -NotePropertyName listing_id `
+            -NotePropertyValue '42e5c3b5-36c3-4a91-ba59-8101812e62c3'
+        Write-ProductFixtureJson -Value $listing -Path $listingPath
+        $configPath = Join-Path $root 'FabPluginRelease.json'
+        $configuration = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
+        $configuration.listingId = '19cb2daa-b018-46ae-b28c-7bfe21075c4a'
+        Write-ProductFixtureJson -Value $configuration -Path $configPath
+        { Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot } |
+            Should -Throw '*listing_id conflicts*'
+        @($script:ProductReleaseInvocations) | Should -HaveCount 0
+    }
+
+    It 'rejects an invalid listing_id' {
+        $root = Join-Path $TestDrive 'InvalidListingId'
+        $outputRoot = Join-Path $TestDrive 'InvalidListingIdArtifacts'
+        Initialize-ProductFixture -Root $root -EngineVersions @('5.8') | Out-Null
+        $listingPath = Join-Path $root 'FabListingFields.json'
+        $listing = Get-Content -Raw -LiteralPath $listingPath | ConvertFrom-Json
+        $listing | Add-Member -NotePropertyName listing_id -NotePropertyValue 'NOT-A-UUID'
+        Write-ProductFixtureJson -Value $listing -Path $listingPath
+        { Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot } |
+            Should -Throw '*schema.json*'
+    }
+
     It 'sets portalReady and maps a configured project_file_link exactly' {
         $root = Join-Path $TestDrive 'ConfiguredLink'
         $outputRoot = Join-Path $TestDrive 'ConfiguredLinkArtifacts'
@@ -353,7 +464,10 @@ Describe 'Fab product release orchestration' {
         $listing | Add-Member -NotePropertyName project_file_link `
             -NotePropertyValue 'https://downloads.example.invalid/TestPlugin_1.0.0_UE5.8_Win64.zip'
         Write-ProductFixtureJson -Value $listing -Path $listingPath
-        Mock -CommandName Test-FabProductPublicUrl -MockWith { return $true }
+        Mock -CommandName Get-FabProductRemoteZipHash -MockWith {
+            param([string]$Url, [string]$ExpectedSha256)
+            return [pscustomobject]@{ Url = $Url; Sha256 = $ExpectedSha256; Bytes = 1; RedirectCount = 0 }
+        }
         Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot | Out-Null
         $manifest = Get-Content -Raw -LiteralPath (
             Join-Path $outputRoot 'TestPlugin\FabSubmission\FabPortalSubmission.json') | ConvertFrom-Json
@@ -361,6 +475,100 @@ Describe 'Fab product release orchestration' {
         $manifest.packages[0].projectFileLink | Should -BeExactly $listing.project_file_link
         (Get-Content -Raw -LiteralPath (Join-Path $outputRoot 'TestPlugin\FabSubmission\SubmissionChecklist.txt')) |
             Should -Match 'PASS - portal automation input ready'
+    }
+
+    It 'streams remote content and computes its SHA-256' {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes('streamed zip content')
+        $expected = Get-TestSha256 -Bytes $bytes
+        $stream = [System.IO.MemoryStream]::new($bytes)
+        try {
+            $result = Get-FabProductStreamSha256 -Stream $stream -MaximumBytes 1024
+            $result.Sha256 | Should -BeExactly $expected
+            $result.Bytes | Should -Be $bytes.Length
+        }
+        finally {
+            $stream.Dispose()
+        }
+    }
+
+    It 'passes when the remote ZIP bytes match the generated SHA-256' {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes('matching zip content')
+        $expected = Get-TestSha256 -Bytes $bytes
+        $client = Get-TestRemoteHttpClient -StatusCode 200 -Bytes $bytes
+        try {
+            $result = Get-FabProductRemoteZipHash -Url 'https://downloads.example.invalid/file.zip' `
+                -ExpectedSha256 $expected -HttpClient $client
+            $result.Sha256 | Should -BeExactly $expected
+        }
+        finally {
+            $client.Dispose()
+        }
+    }
+
+    It 'fails when a reachable remote ZIP has different bytes' {
+        $client = Get-TestRemoteHttpClient -StatusCode 200 `
+            -Bytes ([System.Text.Encoding]::UTF8.GetBytes('different zip content'))
+        try {
+            { Get-FabProductRemoteZipHash -Url 'https://downloads.example.invalid/file.zip' `
+                    -ExpectedSha256 ('a' * 64) -HttpClient $client } |
+                Should -Throw '*SHA-256 mismatch*'
+        }
+        finally {
+            $client.Dispose()
+        }
+    }
+
+    It 'fails on a non-success remote HTTP result' {
+        $client = Get-TestRemoteHttpClient -StatusCode 404
+        try {
+            { Get-FabProductRemoteZipHash -Url 'https://downloads.example.invalid/file.zip' `
+                    -ExpectedSha256 ('a' * 64) -HttpClient $client } |
+                Should -Throw '*HTTP 404*'
+        }
+        finally {
+            $client.Dispose()
+        }
+    }
+
+    It 'fails when public_release_sha256 disagrees with the generated ZIP' {
+        $root = Join-Path $TestDrive 'PublicReleaseHashMismatch'
+        $outputRoot = Join-Path $TestDrive 'PublicReleaseHashMismatchArtifacts'
+        Initialize-ProductFixture -Root $root -EngineVersions @('5.8') | Out-Null
+        $listingPath = Join-Path $root 'FabListingFields.json'
+        $listing = Get-Content -Raw -LiteralPath $listingPath | ConvertFrom-Json
+        $listing | Add-Member -NotePropertyName project_file_link `
+            -NotePropertyValue 'https://downloads.example.invalid/TestPlugin_1.0.0_UE5.8_Win64.zip'
+        $listing | Add-Member -NotePropertyName public_release_sha256 -NotePropertyValue ('a' * 64)
+        Write-ProductFixtureJson -Value $listing -Path $listingPath
+        { Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot } |
+            Should -Throw '*public_release_sha256*'
+    }
+
+    It 'requires generated, remote, and metadata SHA-256 values to agree' {
+        $root = Join-Path $TestDrive 'AllProjectFileHashesMatch'
+        $outputRoot = Join-Path $TestDrive 'AllProjectFileHashesMatchArtifacts'
+        Initialize-ProductFixture -Root $root -EngineVersions @('5.8') | Out-Null
+        $matchingHash = Get-TestSha256 -Bytes ([System.Text.Encoding]::UTF8.GetBytes('package-5.8'))
+        $listingPath = Join-Path $root 'FabListingFields.json'
+        $listing = Get-Content -Raw -LiteralPath $listingPath | ConvertFrom-Json
+        $listing | Add-Member -NotePropertyName project_file_link `
+            -NotePropertyValue 'https://downloads.example.invalid/TestPlugin_1.0.0_UE5.8_Win64.zip'
+        $listing | Add-Member -NotePropertyName public_release_sha256 -NotePropertyValue $matchingHash
+        Write-ProductFixtureJson -Value $listing -Path $listingPath
+        Mock -CommandName Get-FabProductRemoteZipHash -MockWith {
+            param([string]$Url, [string]$ExpectedSha256)
+            return [pscustomobject]@{
+                Url = $Url
+                Sha256 = $ExpectedSha256
+                Bytes = 11
+                RedirectCount = 0
+            }
+        }
+        Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot | Out-Null
+        $manifest = Get-Content -Raw -LiteralPath (
+            Join-Path $outputRoot 'TestPlugin\FabSubmission\FabPortalSubmission.json') | ConvertFrom-Json
+        $manifest.portalReady | Should -BeTrue
+        $manifest.packages[0].sha256 | Should -BeExactly $matchingHash
     }
 
     It 'keeps portalReady false for multi-version listings without per-engine links' {
@@ -387,7 +595,10 @@ Describe 'Fab product release orchestration' {
             '5.9'  = 'https://downloads.example.invalid/TestPlugin_1.0.0_UE5.9_Win64.zip'
         })
         Write-ProductFixtureJson -Value $listing -Path $listingPath
-        Mock -CommandName Test-FabProductPublicUrl -MockWith { return $true }
+        Mock -CommandName Get-FabProductRemoteZipHash -MockWith {
+            param([string]$Url, [string]$ExpectedSha256)
+            return [pscustomobject]@{ Url = $Url; Sha256 = $ExpectedSha256; Bytes = 1; RedirectCount = 0 }
+        }
         Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot | Out-Null
         $manifest = Get-Content -Raw -LiteralPath (
             Join-Path $outputRoot 'TestPlugin\FabSubmission\FabPortalSubmission.json') | ConvertFrom-Json

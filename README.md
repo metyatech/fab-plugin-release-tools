@@ -87,6 +87,11 @@ The engine versions, platforms, documentation URL, and support URL are
 cross-checked against `FabPluginRelease.json`; media files must be regular
 files below the plugin root. The first media file is the thumbnail and all
 remaining files are gallery images.
+An optional lowercase `listing_id` identifies an existing Fab listing for
+browser automation. When present it takes precedence over `FabPluginRelease.json`
+`listingId`; conflicting non-null values fail, and no ID is derived from the
+listing title. `public_release_sha256` is an optional SHA-256 cross-check for a
+single-engine legacy `project_file_link`.
 
 Optional parameters are `-EngineRoot`, `-ListingFieldsPath`,
 `-OutputDirectory`, `-KeepWorkingDirectory`, and `-PublishProjectFiles`.
@@ -106,9 +111,12 @@ pwsh .\Invoke-FabProductRelease.ps1 -PluginPath <path>
 
 Without `-PublishProjectFiles`, project file links must be supplied in
 `project_file_links` for every engine version. The legacy singular
-`project_file_link` is accepted only for a one-version product. Missing or
-unreachable links leave `portalReady` false and are shown as PENDING in
-`SubmissionChecklist.txt`; no URL is invented.
+`project_file_link` is accepted only for a one-version product. Missing links
+leave `portalReady` false and are shown as PENDING in
+`SubmissionChecklist.txt`; configured links are fetched unauthenticated with
+bounded HTTPS redirects and streamed SHA-256 verification against the locally
+generated ZIP. A failed transfer or hash mismatch fails the release; no URL is
+invented.
 
 For a portal-ready bundle with public project files:
 
