@@ -17,8 +17,7 @@ function pageMarkup(state, listingId) {
   const statusMarkup = state.statusRendering === 'plain-text'
     ? `<div data-status-value>${html(state.status)}</div>`
     : `<div data-testid="listing-status" data-status-value>${html(state.status)}</div>`;
-  return `<!doctype html><html><head><title>Fab fixture</title></head><body>
-  <main>
+  const listingControls = `
     <h1>${html(state.title)}</h1>
     ${statusMarkup}
     <label>Title *<input aria-label="Title *" value="${html(state.title)}" ${state.disableFields?.includes('title') ? 'disabled' : ''}></label>
@@ -27,9 +26,7 @@ function pageMarkup(state, listingId) {
     <label>Product type *<select aria-label="Product type *"><option selected>${html(state.productType)}</option></select></label>
     <label>Category *<input role="combobox" aria-label="Category selection" value="${html(state.category)}"></label>
     <label>Tags *<input aria-label="Tags *" value="${html(state.tags[0] ?? '')}" readonly></label>
-    <button type="button">Unreal Engine</button>
-    ${state.engineVersions.map((version) => `<div>UE_${html(version)}</div>`).join('')}
-    <label>Supported development platforms *<input aria-label="Supported development platforms *" value="${html(state.platformDisplay ?? 'Windows')}" readonly></label>
+    <button type="button" data-testid="included-format">Unreal Engine</button>
     ${radio('Standard License (Free or Paid)', true)}
     <label>Personal price *<input aria-label="Personal price *" value="${html(state.personalPriceUsd)}"></label>
     <label>Professional price *<input aria-label="Professional price *" value="${html(state.professionalPriceUsd)}"></label>
@@ -39,21 +36,50 @@ function pageMarkup(state, listingId) {
     <label>${html('Includes promotional content')}<input type="checkbox" aria-label="Includes promotional content"${checked(state.promotionalContent)}></label>
     ${radio('No, do not create a forum post', !state.forumPost)}
     <label>Activation<input aria-label="Activation" value="${html(state.activation)}"></label>
-    <label>Documentation<input aria-label="Documentation" value="${html(state.documentationUrl)}"></label>
-    <label>Support<input aria-label="Support" value="${html(state.supportUrl)}"></label>
-    <label>Technical Information<textarea aria-label="Technical Information">${html(state.technicalInformationText)}</textarea></label>
-    <section data-testid="media-gallery" data-existing="${html(state.mediaExisting)}" data-order="${html(state.mediaOrder ?? '')}" data-upload-order="${html(initialStateMediaOrder(state))}">${html(state.mediaExisting === 'existing' ? 'Existing media' : state.mediaExisting === 'known' || state.mediaExisting === 'uploaded' ? '001 thumbnail 002 gallery' : '')}</section>
-    <input type="file" data-testid="media-upload" multiple>
-    <label>Project file<input aria-label="Project file" value="${html(state.projectFileLink)}"></label>
     ${(state.readOnlySections ?? []).map((label, index) => `<button type="button" aria-label="toggle ${html(label)}" aria-expanded="false" aria-controls="fixture-section-${index}">toggle ${html(label)}</button><section id="fixture-section-${index}" hidden>${html(label)} content</section>`).join('')}
     <button type="button" data-testid="save" ${state.disableSave ? 'disabled' : ''}>Save</button>
     <button type="button" data-testid="submit">Submit for review</button>
     <button type="button" data-testid="cancel">Cancel submission</button>
     ${unrelatedDialog}
-    ${confirmationDialog}
-  </main>
+    ${confirmationDialog}`;
+  const formatControls = `
+    <button type="button" aria-label="Back to listing">Back to listing</button>
+    <h2>Unreal Engine</h2>
+    <h3>Project Versions*</h3>
+    ${state.engineVersions.map((version) => `<div>UE_${html(version)}</div>`).join('')}
+    <button type="button" aria-label="Remove ${html(state.platformDisplay ?? 'Windows')}">Remove ${html(state.platformDisplay ?? 'Windows')}</button>
+    <label>Project File Link<input aria-label="Project File Link" value="${html(state.projectFileLink)}" ${state.disableFields?.includes('projectFileLink') ? 'disabled' : ''}></label>
+    <section aria-label="Technical details">
+      <p>Documentation: ${html(state.documentationUrl)}</p>
+      <p>Support: ${html(state.supportUrl)}</p>
+      <div aria-label="Technical Information" contenteditable="true">${html(state.technicalInformationText)}</div>
+    </section>
+    <section data-testid="media-gallery" data-existing="${html(state.mediaExisting)}" data-order="${html(state.mediaOrder ?? '')}" data-upload-order="${html(initialStateMediaOrder(state))}">${html(state.mediaExisting === 'existing' ? 'Existing media' : state.mediaExisting === 'known' || state.mediaExisting === 'uploaded' ? '001 thumbnail 002 gallery' : 'Empty gallery')}</section>
+    <input type="file" data-testid="media-upload" multiple>`;
+  return `<!doctype html><html><head><title>Fab fixture</title></head><body>
+  <main id="listing-view">${listingControls}</main>
+  <main id="format-view" hidden>${formatControls}</main>
   <script>
+    const listingView = document.querySelector('#listing-view');
+    const formatView = document.querySelector('#format-view');
     const value = (selector) => document.querySelector(selector)?.value ?? '';
+    const syncFormatState = () => {
+      const project = document.querySelector('[aria-label="Project File Link"]');
+      if (project) window.fixtureProjectFileLink = project.value;
+      const technical = document.querySelector('[aria-label="Technical Information"]');
+      if (technical) window.fixtureTechnicalInformationText = technical.innerText;
+    };
+    const setView = (view) => {
+      syncFormatState();
+      const main = view === 'listing';
+      if (main && ${JSON.stringify(state.dropStagedFields ?? [])}.includes('projectFileLink')) {
+        const project = document.querySelector('[aria-label="Project File Link"]');
+        if (project) project.value = ${JSON.stringify(state.projectFileLink)};
+        window.fixtureProjectFileLink = ${JSON.stringify(state.projectFileLink)};
+      }
+      listingView.hidden = !main;
+      formatView.hidden = main;
+    };
     const payload = () => ({
       title: value('[aria-label="Title *"]'),
       shortDescription: value('[aria-label="Short description *"]'),
@@ -68,14 +94,16 @@ function pageMarkup(state, listingId) {
       promotionalContent: document.querySelector('[aria-label="Includes promotional content"]')?.checked ?? false,
       forumPost: !document.querySelector('[aria-label="No, do not create a forum post"]')?.checked,
       activation: value('[aria-label="Activation"]'),
-      documentationUrl: value('[aria-label="Documentation"]'),
-      supportUrl: value('[aria-label="Support"]'),
-      technicalInformationText: document.querySelector('[aria-label="Technical Information"]')?.value ?? '',
-      projectFileLink: value('[aria-label="Project file"]'),
+      documentationUrl: ${JSON.stringify(state.documentationUrl)},
+      supportUrl: ${JSON.stringify(state.supportUrl)},
+      technicalInformationText: window.fixtureTechnicalInformationText ?? ${JSON.stringify(state.technicalInformationText)},
+      projectFileLink: window.fixtureProjectFileLink ?? ${JSON.stringify(state.projectFileLink)},
       mediaExisting: document.querySelector('[data-testid="media-gallery"]')?.dataset.existing ?? 'existing',
       mediaOrder: document.querySelector('[data-testid="media-gallery"]')?.dataset.order ?? ''
     });
-    document.querySelector('[data-testid="save"]').addEventListener('click', () => fetch('/api/save', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload()) }));
+    document.querySelector('[data-testid="included-format"]').addEventListener('click', () => setView('format'));
+    document.querySelector('[aria-label="Back to listing"]').addEventListener('click', () => setView('listing'));
+    document.querySelector('[data-testid="save"]').addEventListener('click', () => { syncFormatState(); fetch('/api/save', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload()) }); });
     const submitRequest = async () => {
       const response = await fetch(${JSON.stringify(state.submitRequestPath ?? '/api/submit')}, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) });
       if (response.ok && ${JSON.stringify((state.submitRequestPath ?? '/api/submit') === '/api/submit' && !state.submitStaysDraft && !state.submitRequestFailure)}) document.querySelector('[data-status-value]').textContent = 'Pending approval';

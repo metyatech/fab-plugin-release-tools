@@ -114,19 +114,44 @@ async function ensureTarget(page, manifest, origin) {
   return { expectedUrl: expected, finalUrl: page.url() };
 }
 
-async function openFormatIfNeeded(page, manifest, guard) {
-  const link = page.getByText(manifest.packages[0].projectFileLink, { exact: true });
-  for (let index = 0; index < await link.count(); index += 1) {
-    if (await link.nth(index).isVisible().catch(() => false)) return false;
+async function isVisibleUnique(locator) {
+  if (await locator.count() !== 1) return false;
+  return await locator.isVisible().catch(() => false);
+}
+
+async function ensureListingView(page, manifest, origin, guard = null) {
+  const formatHeading = page.getByRole('heading', { name: 'Project Versions*', exact: true });
+  const listingControl = page.getByRole('button', { name: manifest.includedFormat, exact: true });
+  if (await isVisibleUnique(formatHeading)) {
+    const back = page.getByRole('button', { name: 'Back to listing', exact: true });
+    if (await isVisibleUnique(back)) {
+      const beforeMutations = guard?.summary().networkMutationRequestsObserved ?? 0;
+      await back.click();
+      const afterMutations = guard?.summary().networkMutationRequestsObserved ?? beforeMutations;
+      if (afterMutations > beforeMutations) throw new Error('Read-only listing navigation caused a network mutation; discovery was aborted safely.');
+    }
+    else await page.goto(listingEditUrl(manifest.listingId, origin), { waitUntil: 'domcontentloaded' });
+  } else if (!await isVisibleUnique(listingControl)) {
+    await page.goto(listingEditUrl(manifest.listingId, origin), { waitUntil: 'domcontentloaded' });
   }
+  await ensureTarget(page, manifest, origin);
+  if (!await isVisibleUnique(page.getByRole('button', { name: manifest.includedFormat, exact: true }))) {
+    throw new Error('Fab listing main view could not be proven after navigation.');
+  }
+}
+
+async function ensureFormatView(page, manifest, origin, guard) {
+  await ensureListingView(page, manifest, origin, guard);
   const format = page.getByRole('button', { name: manifest.includedFormat, exact: true });
-  if (await format.count() === 1) {
-    await format.click();
-    await page.waitForTimeout(100);
-    if ((guard?.summary().networkMutationRequestsObserved ?? 0) > 0) throw new Error('Read-only format expansion caused a network mutation; discovery was aborted safely.');
-    return true;
-  }
-  return false;
+  if (!await isVisibleUnique(format)) throw new Error('Unreal Engine format navigation control is not uniquely visible.');
+  const beforeMutations = guard?.summary().networkMutationRequestsObserved ?? 0;
+  await format.click();
+  await page.waitForTimeout(100);
+  const afterMutations = guard?.summary().networkMutationRequestsObserved ?? beforeMutations;
+  if (afterMutations > beforeMutations) throw new Error('Read-only format navigation caused a network mutation; discovery was aborted safely.');
+  await waitForFormatView(page, manifest);
+  const formatHeading = page.getByRole('heading', { name: 'Project Versions*', exact: true });
+  if (!await isVisibleUnique(formatHeading)) throw new Error('Fab Unreal Engine format view could not be proven after navigation.');
 }
 
 async function waitForFormatView(page, manifest) {
@@ -149,20 +174,47 @@ async function waitForFormatView(page, manifest) {
 }
 
 const FORMAT_COMPARISON_FIELDS = new Set(['engineVersions', 'platforms', 'technicalInformationFile', 'media']);
+const FORMAT_READ_EVIDENCE_FIELDS = new Set(['documentationUrl', 'supportUrl']);
 
-function mergeListingAndFormatComparisons(listingComparison, formatComparison, manifest) {
+function comparisonEvidenceRank(field) {
+  return ['MATCH', 'MISMATCH'].includes(field?.classification) ? 2 : field?.classification === 'NOT_APPLICABLE' ? 1 : 0;
+}
+
+function mergeComparisonField(mainField, formatField) {
+  if (!formatField) return mainField;
+  const path = mainField.manifestJsonPath;
+  const formatOwned = FORMAT_COMPARISON_FIELDS.has(path) || /^packages\[\d+\]\.projectFileLink$/.test(path);
+  const formatReadEvidence = FORMAT_READ_EVIDENCE_FIELDS.has(path);
+  if (!formatOwned && !formatReadEvidence) return mainField;
+  const mainRank = comparisonEvidenceRank(mainField);
+  const formatRank = comparisonEvidenceRank(formatField);
+  if (formatRank > mainRank) return formatField;
+  return mainField;
+}
+
+export function mergeListingAndFormatComparisons(listingComparison, formatComparison, manifest) {
   const formatFields = new Map(formatComparison.fields.map((field) => [field.manifestJsonPath, field]));
-  const fields = listingComparison.fields.map((field) => {
-    if (FORMAT_COMPARISON_FIELDS.has(field.manifestJsonPath) && formatFields.has(field.manifestJsonPath)) return formatFields.get(field.manifestJsonPath);
-    return field;
-  });
+  const fields = listingComparison.fields.map((field) => mergeComparisonField(field, formatFields.get(field.manifestJsonPath)));
   for (const [index] of manifest.packages.entries()) {
     const field = `packages[${index}].projectFileLink`;
     const replacement = formatFields.get(field);
     const position = fields.findIndex((item) => item.manifestJsonPath === field);
-    if (replacement && position >= 0) fields[position] = replacement;
+    if (replacement && position >= 0) fields[position] = mergeComparisonField(fields[position], replacement);
   }
   return summarizeComparison(fields);
+}
+
+export async function collectPortalComparison(page, manifestInfo, { guard, origin = 'https://www.fab.com' } = {}) {
+  const actions = [];
+  const manifest = manifestInfo.manifest;
+  await ensureListingView(page, manifest, origin, guard);
+  actions.push(...await prepareReadOnlySections(page, guard));
+  const listingComparison = await compareManifest(page, manifestInfo, { view: 'listing' });
+  await ensureFormatView(page, manifest, origin, guard);
+  actions.push('opened Unreal Engine format section');
+  actions.push(...await prepareReadOnlySections(page, guard));
+  const formatComparison = await compareManifest(page, manifestInfo, { view: 'format' });
+  return { comparison: mergeListingAndFormatComparisons(listingComparison, formatComparison, manifest), readOnlyUiActions: actions };
 }
 
 const READ_ONLY_SECTION_TOGGLES = [
@@ -244,11 +296,36 @@ function writeReadiness(listingStatus, comparison, manifest) {
   return { writeReady: blockers.length === 0, writeBlockers: [...new Set(blockers)] };
 }
 
-async function verifyAfterStaging(page, manifestInfo) {
-  const after = await compareManifest(page, manifestInfo);
-  const blockers = criticalBlockers(after, manifestInfo.manifest);
-  if (after.mismatchCount > 0 || blockers.length > 0) throw new Error(`Staged portal values did not satisfy the manifest: ${[...blockers, `${after.mismatchCount} mismatch(es)`].join(' ')}`);
-  return after;
+async function assertView(page, view, manifest) {
+  if (view === 'format') {
+    if (!await isVisibleUnique(page.getByRole('heading', { name: 'Project Versions*', exact: true }))) throw new Error('Format mutation attempted while the listing view was active.');
+    return;
+  }
+  if (!await isVisibleUnique(page.getByRole('button', { name: manifest.includedFormat, exact: true }))) throw new Error('Listing mutation attempted while the format view was active.');
+}
+
+async function preflightMutationViews(page, plan, manifestInfo, origin, guard) {
+  const groups = ['listing', 'format']
+    .map((view) => ({ view, plan: plan.filter((item) => (item.view ?? 'listing') === view) }))
+    .filter((group) => group.plan.length > 0);
+  const failures = [];
+  const prepared = [];
+  for (const group of groups) {
+    await (group.view === 'format'
+      ? ensureFormatView(page, manifestInfo.manifest, origin, guard)
+      : ensureListingView(page, manifestInfo.manifest, origin, guard));
+    const preflight = await preflightMutationPlan(page, group.plan, manifestInfo.manifest);
+    failures.push(...preflight.failures);
+    prepared.push({ ...group, preflight });
+  }
+  return { ok: failures.length === 0, failures, groups: prepared };
+}
+
+function assertCompleteComparison(comparison, manifest) {
+  const blockers = criticalBlockers(comparison, manifest);
+  if (comparison.mismatchCount > 0 || blockers.length > 0) {
+    throw new Error(`Staged portal values did not satisfy the manifest: ${[...blockers, `${comparison.mismatchCount} mismatch(es)`].join(' ')}`);
+  }
 }
 
 async function tryReadStatus(page) {
@@ -388,18 +465,9 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     await ensureTarget(page, manifestInfo.manifest, origin);
     result.listingStatus = await readStatus(page);
     result.dangerousActionsFound = await readDangerousActions(page);
-    result.readOnlyUiActions.push(...await prepareReadOnlySections(page, guard));
-    const listingComparison = await compareManifest(page, manifestInfo);
-    const formatOpened = await openFormatIfNeeded(page, manifestInfo.manifest, guard);
-    if (formatOpened) {
-      result.readOnlyUiActions.push('opened Unreal Engine format section');
-      await waitForFormatView(page, manifestInfo.manifest);
-      result.readOnlyUiActions.push(...await prepareReadOnlySections(page, guard));
-      const formatComparison = await compareManifest(page, manifestInfo);
-      result.comparison = mergeListingAndFormatComparisons(listingComparison, formatComparison, manifestInfo.manifest);
-    } else {
-      result.comparison = listingComparison;
-    }
+    const collected = await collectPortalComparison(page, manifestInfo, { guard, origin });
+    result.readOnlyUiActions.push(...collected.readOnlyUiActions);
+    result.comparison = collected.comparison;
     ({ writeReady: result.writeReady, writeBlockers: result.writeBlockers } = writeReadiness(result.listingStatus, result.comparison, manifestInfo.manifest));
     if (mode === 'verify') {
       if (result.comparison.mismatchCount > 0) result.blockers.push(`${result.comparison.mismatchCount} manifest mismatch(es).`);
@@ -414,14 +482,27 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     if (mutation.plan.length === 0) {
       result.comparisonAfter = result.comparison;
     } else {
-      const preflight = await preflightMutationPlan(page, mutation.plan, manifestInfo.manifest);
+      const preflight = await preflightMutationViews(page, mutation.plan, manifestInfo, origin, guard);
       if (!preflight.ok) throw new Error(`Mutation preflight failed: ${preflight.failures.join(' ')}`);
-      guard.setPhase('stage');
-      result.executedMutations = await executeMutationPlan(page, preflight, manifestInfo, { setPhase: (phase) => guard.setPhase(phase) });
+      result.executedMutations = [];
+      for (const group of preflight.groups) {
+        await (group.view === 'format'
+          ? ensureFormatView(page, manifestInfo.manifest, origin, guard)
+          : ensureListingView(page, manifestInfo.manifest, origin, guard));
+        const executed = await executeMutationPlan(page, group.preflight, manifestInfo, {
+          setPhase: (phase) => guard.setPhase(phase),
+          assertView: (view) => assertView(page, view, manifestInfo.manifest),
+        });
+        result.executedMutations.push(...executed);
+      }
       result.writeInteractionsPerformed += result.executedMutations.length;
       guard.setPhase('stage');
-      result.comparisonAfter = await verifyAfterStaging(page, manifestInfo);
+      const staged = await collectPortalComparison(page, manifestInfo, { guard, origin });
+      result.readOnlyUiActions.push(...staged.readOnlyUiActions);
+      result.comparisonAfter = staged.comparison;
+      assertCompleteComparison(result.comparisonAfter, manifestInfo.manifest);
       ({ writeReady: result.writeReady, writeBlockers: result.writeBlockers } = writeReadiness(result.listingStatus, result.comparisonAfter, manifestInfo.manifest));
+      await ensureListingView(page, manifestInfo.manifest, origin, guard);
       guard.setPhase('save');
       const save = await uniqueAction(page, saveCandidates(), 'Save Draft');
       await save.locator.click();
@@ -432,12 +513,16 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
       await page.reload({ waitUntil: 'domcontentloaded' });
       await ensureTarget(page, manifestInfo.manifest, origin);
       result.listingStatus = await readStatus(page);
-      result.comparisonAfter = await verifyAfterStaging(page, manifestInfo);
+      const postSave = await collectPortalComparison(page, manifestInfo, { guard, origin });
+      result.readOnlyUiActions.push(...postSave.readOnlyUiActions);
+      result.comparisonAfter = postSave.comparison;
+      assertCompleteComparison(result.comparisonAfter, manifestInfo.manifest);
       ({ writeReady: result.writeReady, writeBlockers: result.writeBlockers } = writeReadiness(result.listingStatus, result.comparisonAfter, manifestInfo.manifest));
     }
     if (mode === 'submit') {
       if (!result.saveInvoked && result.plannedMutations.length > 0) throw new Error('Submit for review requires a completed Save Draft operation.');
       if (result.comparisonAfter.mismatchCount > 0 || criticalBlockers(result.comparisonAfter, manifestInfo.manifest).length > 0) throw new Error('Submit for review blocked by post-save comparison.');
+      await ensureListingView(page, manifestInfo.manifest, origin, guard);
       await executeSubmitFlow(page, guard, result);
     }
     result.result = 'PASS';

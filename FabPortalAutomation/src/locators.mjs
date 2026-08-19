@@ -14,14 +14,18 @@ export async function resolveCandidate(page, candidates) {
   for (const item of candidates) {
     const locator = item.create(page);
     const matchCount = await locator.count();
-    if (matchCount === 1) {
+    const visibleIndexes = [];
+    for (let index = 0; index < matchCount; index += 1) {
+      if (await locator.nth(index).isVisible().catch(() => false)) visibleIndexes.push(index);
+    }
+    if (visibleIndexes.length === 1) {
       return {
-        locator,
+        locator: locator.nth(visibleIndexes[0]),
         candidate: item,
         metadata: {
           strategy: item.strategy,
           expression: item.expression,
-          matchCount,
+          matchCount: 1,
           unique: true,
           confidence: item.confidence,
           reason: item.reason,
@@ -36,7 +40,14 @@ export async function resolveCandidate(page, candidates) {
     metadata: first ? {
       strategy: first.strategy,
       expression: first.expression,
-      matchCount: await first.create(page).count(),
+      matchCount: await (async () => {
+        const locator = first.create(page);
+        let visibleCount = 0;
+        for (let index = 0; index < await locator.count(); index += 1) {
+          if (await locator.nth(index).isVisible().catch(() => false)) visibleCount += 1;
+        }
+        return visibleCount;
+      })(),
       unique: false,
       confidence: 'low',
       reason: 'No approved candidate uniquely matched the current DOM.',
@@ -79,7 +90,7 @@ export function fieldCandidates(field, manifest = {}) {
 export function mediaCandidates({ fixture = false } = {}) {
   if (!fixture) return [];
   return [
-    candidate('testId', 'media-gallery', (page) => page.getByTestId('media-gallery')),
+    candidate('testId', 'media-gallery', (page) => page.getByTestId('media-gallery'), { expression: 'page.getByTestId("media-gallery")' }),
     candidate('css', '[data-testid="media-gallery"]', (page) => page.locator('[data-testid="media-gallery"]')),
   ];
 }

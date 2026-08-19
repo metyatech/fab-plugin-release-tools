@@ -7,7 +7,7 @@ import { chromium } from 'playwright-core';
 import { buildMutationPlan, preflightMutationPlan } from '../src/mutation-plan.mjs';
 import { installNetworkGuard } from '../src/network-guard.mjs';
 import { comparePlatformClassification, comparePriceClassification } from '../src/comparison.mjs';
-import { detectManualBlock, runPortalAutomation } from '../src/portal.mjs';
+import { detectManualBlock, mergeListingAndFormatComparisons, runPortalAutomation } from '../src/portal.mjs';
 import { parseArgs } from '../src/cli.mjs';
 import { startFixture } from './fixtures/server.mjs';
 import { fixtureState, makeManifest, makeManifestInfo, listingId } from './helpers.mjs';
@@ -105,6 +105,46 @@ test('one changed field changes only that field', async () => {
   assert.equal(fixture.mutations[0].body.shortDescription, 'New Fixture Short Description');
 });
 
+test('format view owns format controls and hides listing controls', async () => {
+  const manifest = makeManifest();
+  const fixture = await startFixture(fixtureState(manifest));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+  assert.equal(await page.getByLabel('Short description *', { exact: true }).isVisible(), true);
+  assert.equal(await page.getByLabel('Project File Link', { exact: true }).isVisible(), false);
+  await page.getByRole('button', { name: 'Unreal Engine', exact: true }).click();
+  assert.equal(await page.getByLabel('Short description *', { exact: true }).isVisible(), false);
+  assert.equal(await page.getByLabel('Project File Link', { exact: true }).isVisible(), true);
+  await context.close();
+  await fixture.close();
+});
+
+test('format evidence merges documentation and support when the listing view is unresolved', () => {
+  const manifest = makeManifest();
+  const makeField = (path, classification, view) => ({ manifestJsonPath: path, classification, view, currentVisibleValue: classification === 'MATCH' ? manifest[path] : null });
+  const main = { fields: [makeField('documentationUrl', 'NOT_VISIBLE', 'listing'), makeField('supportUrl', 'NOT_DISCOVERED', 'listing')] };
+  const format = { fields: [makeField('documentationUrl', 'MATCH', 'format'), makeField('supportUrl', 'MATCH', 'format')] };
+  const merged = mergeListingAndFormatComparisons(main, format, manifest);
+  assert.equal(merged.fields.find((field) => field.manifestJsonPath === 'documentationUrl').classification, 'MATCH');
+  assert.equal(merged.fields.find((field) => field.manifestJsonPath === 'documentationUrl').view, 'format');
+  assert.equal(merged.fields.find((field) => field.manifestJsonPath === 'supportUrl').classification, 'MATCH');
+  assert.equal(merged.fields.find((field) => field.manifestJsonPath === 'supportUrl').view, 'format');
+  const mainMatch = { fields: [makeField('documentationUrl', 'MATCH', 'listing')] };
+  const weakFormat = { fields: [makeField('documentationUrl', 'NOT_VISIBLE', 'format')] };
+  assert.equal(mergeListingAndFormatComparisons(mainMatch, weakFormat, manifest).fields[0].view, 'listing');
+});
+
+test('fixture format technical details recover documentation and support values', async () => {
+  const { result } = await scenario();
+  const documentation = result.comparison.fields.find((field) => field.manifestJsonPath === 'documentationUrl');
+  const support = result.comparison.fields.find((field) => field.manifestJsonPath === 'supportUrl');
+  assert.equal(documentation.classification, 'MATCH');
+  assert.equal(documentation.view, 'format');
+  assert.equal(support.classification, 'MATCH');
+  assert.equal(support.view, 'format');
+});
+
 test('disabled planned locator fails preflight with zero mutations', async () => {
   const manifest = makeManifest({ shortDescription: 'New Fixture Short Description' });
   const { result, fixture } = await scenario({ manifest, state: { shortDescription: 'Old Fixture Short Description', disableFields: ['shortDescription'] }, mode: 'save', saveDraftAuthorized: true });
@@ -112,6 +152,39 @@ test('disabled planned locator fails preflight with zero mutations', async () =>
   assert.match(result.blockers.join(' '), /writable locator|preflight/i);
   assert.equal(result.writeInteractionsPerformed, 0);
   assert.equal(fixture.mutations.length, 0);
+});
+
+test('format-only mutation carries format ownership and executes in format view', async () => {
+  const manifest = makeManifest({ packages: [{ engineVersion: '5.8', bundleRelativePath: 'packages/UE5.8/package.zip', sha256: 'b'.repeat(64), projectFileLink: 'https://example.com/new-package.zip' }] });
+  const { result, fixture } = await scenario({ manifest, state: { projectFileLink: 'https://example.com/old-package.zip' }, mode: 'save', saveDraftAuthorized: true });
+  assert.equal(result.result, 'PASS');
+  assert.deepEqual(result.plannedMutations.map((item) => item.view), ['format']);
+  assert.deepEqual(result.executedMutations, ['packages[0].projectFileLink']);
+  assert.equal(fixture.mutations.filter((item) => item.pathname === '/api/save').length, 1);
+});
+
+test('format preflight failure after listing preflight causes zero mutations everywhere', async () => {
+  const manifest = makeManifest({ shortDescription: 'Changed listing text', packages: [{ engineVersion: '5.8', bundleRelativePath: 'packages/UE5.8/package.zip', sha256: 'b'.repeat(64), projectFileLink: 'https://example.com/new-package.zip' }] });
+  const { result, fixture } = await scenario({ manifest, state: { shortDescription: 'Old listing text', projectFileLink: 'https://example.com/old-package.zip', disableFields: ['projectFileLink'] }, mode: 'save', saveDraftAuthorized: true });
+  assert.equal(result.result, 'FAIL');
+  assert.match(result.blockers.join(' '), /projectFileLink|disabled|preflight/i);
+  assert.deepEqual(result.executedMutations, []);
+  assert.equal(result.writeInteractionsPerformed, 0);
+  assert.equal(fixture.mutations.length, 0);
+});
+
+test('listing locator cannot be preflighted while format view is active', async () => {
+  const manifest = makeManifest();
+  const fixture = await startFixture(fixtureState(manifest));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+  await page.getByRole('button', { name: 'Unreal Engine', exact: true }).click();
+  const preflight = await preflightMutationPlan(page, [{ fieldName: 'shortDescription', view: 'listing', locatorStrategy: 'getByLabel', locatorExpression: 'page.getByLabel("Short description *")', mutationType: 'text' }], manifest);
+  assert.equal(preflight.ok, false);
+  assert.match(preflight.failures.join(' '), /not visible|match count/i);
+  await context.close();
+  await fixture.close();
 });
 
 test('duplicate mutation targets are rejected before execution', () => {
@@ -514,6 +587,35 @@ test('mixed mutation plans switch phases narrowly and submit permits pre-save me
   assert.deepEqual(result.network.phaseHistory, ['stage', 'field-update', 'stage', 'media-upload', 'stage', 'save', 'stage', 'submit', 'stage']);
   assert.equal(fixture.mutations.some((item) => item.pathname === '/api/save'), true);
   assert.equal(fixture.mutations.some((item) => item.pathname === '/api/submit'), true);
+});
+
+test('mixed staging runs a full multi-view comparison before Save', async () => {
+  const manifest = makeManifest({ shortDescription: 'Changed listing text', packages: [{ engineVersion: '5.8', bundleRelativePath: 'packages/UE5.8/package.zip', sha256: 'b'.repeat(64), projectFileLink: 'https://example.com/new-package.zip' }] });
+  const { result, fixture } = await scenario({ manifest, state: { shortDescription: 'Old listing text', projectFileLink: 'https://example.com/old-package.zip' }, mode: 'save', saveDraftAuthorized: true });
+  assert.equal(result.result, 'PASS');
+  assert.equal(result.comparisonAfter.counts.MISMATCH, 0);
+  assert.equal(result.comparisonAfter.fields.find((field) => field.manifestJsonPath === 'shortDescription').view, 'listing');
+  assert.equal(result.comparisonAfter.fields.find((field) => field.manifestJsonPath === 'packages[0].projectFileLink').view, 'format');
+  assert.equal(fixture.mutations.filter((item) => item.pathname === '/api/save').length, 1);
+});
+
+test('format mismatch during staged multi-view verification prevents Save', async () => {
+  const manifest = makeManifest({ packages: [{ engineVersion: '5.8', bundleRelativePath: 'packages/UE5.8/package.zip', sha256: 'b'.repeat(64), projectFileLink: 'https://example.com/new-package.zip' }] });
+  const { result, fixture } = await scenario({ manifest, state: { projectFileLink: 'https://example.com/old-package.zip', dropStagedFields: ['projectFileLink'] }, mode: 'save', saveDraftAuthorized: true });
+  assert.equal(result.result, 'FAIL');
+  assert.equal(result.saveInvoked, false);
+  assert.equal(fixture.mutations.some((item) => item.pathname === '/api/save'), false);
+  assert.match(result.blockers.join(' '), /projectFileLink|mismatch|staged/i);
+});
+
+test('post-save read-back rechecks the format view', async () => {
+  const manifest = makeManifest({ packages: [{ engineVersion: '5.8', bundleRelativePath: 'packages/UE5.8/package.zip', sha256: 'b'.repeat(64), projectFileLink: 'https://example.com/new-package.zip' }] });
+  const { result, fixture } = await scenario({ manifest, state: { projectFileLink: 'https://example.com/old-package.zip' }, fixtureOptions: { dropSaveFields: ['projectFileLink'] }, mode: 'save', saveDraftAuthorized: true });
+  assert.equal(result.result, 'FAIL');
+  assert.equal(result.saveInvoked, true);
+  assert.equal(result.comparisonAfter.fields.find((field) => field.manifestJsonPath === 'packages[0].projectFileLink').view, 'format');
+  assert.equal(result.comparisonAfter.fields.find((field) => field.manifestJsonPath === 'packages[0].projectFileLink').classification, 'MISMATCH');
+  assert.equal(fixture.mutations.filter((item) => item.pathname === '/api/save').length, 1);
 });
 
 test('allowsUsageWithAi uses Fab negative-control polarity', async () => {

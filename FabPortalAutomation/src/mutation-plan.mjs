@@ -29,9 +29,9 @@ export function buildMutationPlan(comparison, manifestInfo) {
     const desired = packageMatch
       ? manifestInfo.manifest.packages[Number(packageMatch[1])].projectFileLink
       : fieldName === 'technicalInformationFile' ? manifestInfo.technicalInformationText : manifestInfo.manifest[fieldName];
-    plan.push({ fieldName, currentNormalizedValue: field.currentNormalizedValue, desiredNormalizedValue: desired, locatorStrategy: field.writeTarget.strategy, locatorExpression: field.writeTarget.expression, mutationType: type, checkedValue: field.writeTarget.checkedValue });
+    plan.push({ fieldName, view: field.writeTarget.view ?? field.view ?? 'listing', currentNormalizedValue: field.currentNormalizedValue, desiredNormalizedValue: desired, locatorStrategy: field.writeTarget.strategy, locatorExpression: field.writeTarget.expression, mutationType: type, checkedValue: field.writeTarget.checkedValue });
   }
-  const keys = plan.map((entry) => `${entry.locatorStrategy}:${entry.locatorExpression}`);
+  const keys = plan.map((entry) => `${entry.view}:${entry.locatorStrategy}:${entry.locatorExpression}`);
   if (new Set(keys).size !== keys.length) blockers.push('Mutation plan contains duplicate target locators.');
   return { plan, blockers };
 }
@@ -51,6 +51,8 @@ export async function preflightMutationPlan(page, plan, manifest) {
     const count = await resolved.locator.count();
     if (count !== 1) failures.push(`${item.fieldName}: locator match count is ${count}.`);
     if (count === 1) {
+      const visible = await resolved.locator.isVisible().catch(() => false);
+      if (!visible) failures.push(`${item.fieldName}: control is not visible in the expected ${item.view ?? 'listing'} view.`);
       let disabled = false;
       let editable = false;
       try { disabled = await resolved.locator.isDisabled(); } catch { /* static controls are not writable */ }
@@ -70,9 +72,10 @@ async function selectExactOption(page, desired) {
   await options.click();
 }
 
-export async function executeMutationPlan(page, preflight, manifestInfo, { setPhase = null } = {}) {
+export async function executeMutationPlan(page, preflight, manifestInfo, { setPhase = null, assertView = null } = {}) {
   const executed = [];
   for (const { item, locator } of preflight.targets) {
+    await assertView?.(item.view ?? 'listing');
     setPhase?.(item.mutationType === 'upload' ? 'media-upload' : 'field-update');
     const packageMatch = item.fieldName.match(/^packages\[(\d+)\]\.projectFileLink$/);
     const desired = packageMatch
