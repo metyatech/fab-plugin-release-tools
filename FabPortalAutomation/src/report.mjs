@@ -36,7 +36,13 @@ function markdown(result, comparison, after, network) {
 - Target page selection: ${result.targetPageSelectionReason ?? 'unknown'}
 - Initial navigation performed: ${result.initialNavigationPerformed}
 - Hard navigation count: ${result.hardNavigationCount}
+- Automation hard navigation count: ${result.automationHardNavigationCount}
 - Reload count: ${result.reloadCount}
+- Human-observed navigation count: ${result.humanObservedNavigationCount}
+- Manual challenge detected: ${result.manualChallengeDetected}
+- Manual challenge handoff count: ${result.manualChallengeHandoffCount}
+- Manual challenge completed: ${result.manualChallengeCompleted}
+- Manual challenge cancelled: ${result.manualChallengeCancelled}
 - Network mutations observed/blocked: ${network?.networkMutationRequestsObserved ?? 0}/${network?.networkMutationRequestsBlocked ?? 0}
 - Read-only UI actions: ${result.readOnlyUiActions?.length ? result.readOnlyUiActions.join(', ') : 'none'}
 
@@ -84,7 +90,13 @@ export async function writeRunReport({ directory, result, comparison, comparison
     targetPageSelectionReason: result.targetPageSelectionReason,
     initialNavigationPerformed: result.initialNavigationPerformed,
     hardNavigationCount: result.hardNavigationCount,
+    automationHardNavigationCount: result.automationHardNavigationCount,
     reloadCount: result.reloadCount,
+    humanObservedNavigationCount: result.humanObservedNavigationCount,
+    manualChallengeDetected: result.manualChallengeDetected,
+    manualChallengeHandoffCount: result.manualChallengeHandoffCount,
+    manualChallengeCompleted: result.manualChallengeCompleted,
+    manualChallengeCancelled: result.manualChallengeCancelled,
     passiveAttach: result.passiveAttach,
     readOnlyUiActions: result.readOnlyUiActions,
     writeInteractionsPerformed: result.writeInteractionsPerformed,

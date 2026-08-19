@@ -38,6 +38,7 @@ test('actual CLI main path denies write authorization by default', async () => {
   assert.equal(code, 0);
   assert.equal(received.mode, 'verify');
   assert.equal(received.saveDraftAuthorized, false);
+  assert.equal(typeof received.manualInteraction.waitForConfirmation, 'function');
 });
 
 test('actual CLI main path propagates explicit Save Draft authorization', async () => {

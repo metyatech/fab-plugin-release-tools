@@ -19,15 +19,18 @@ $ErrorActionPreference = 'Stop'
 function Invoke-NodeProcess {
     param(
         [Parameter(Mandatory)]
-        [string[]]$Arguments
+        [string[]]$Arguments,
+        [switch]$Interactive
     )
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = 'node'
     $startInfo.UseShellExecute = $false
-    $startInfo.CreateNoWindow = $true
-    $startInfo.RedirectStandardOutput = $true
-    $startInfo.RedirectStandardError = $true
+    $startInfo.CreateNoWindow = -not $Interactive
+    if (-not $Interactive) {
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+    }
     foreach ($argument in $Arguments) {
         [void]$startInfo.ArgumentList.Add($argument)
     }
@@ -35,6 +38,14 @@ function Invoke-NodeProcess {
     $process.StartInfo = $startInfo
     if (-not $process.Start()) {
         throw 'Unable to start Node.js.'
+    }
+    if ($Interactive) {
+        $process.WaitForExit()
+        return [pscustomobject]@{
+            ExitCode = $process.ExitCode
+            StandardOutput = ''
+            StandardError = ''
+        }
     }
     $stdout = $process.StandardOutput.ReadToEndAsync()
     $stderr = $process.StandardError.ReadToEndAsync()
@@ -85,7 +96,7 @@ if ($SaveDraft) { [void]$arguments.Add('--save-draft') }
 if ($SubmitForReview) { [void]$arguments.Add('--submit-for-review') }
 if ($Json) { [void]$arguments.Add('--json') }
 if ($VerboseOutput) { [void]$arguments.Add('--verbose') }
-$result = Invoke-NodeProcess -Arguments $arguments.ToArray()
+$result = Invoke-NodeProcess -Arguments $arguments.ToArray() -Interactive
 if (-not [string]::IsNullOrEmpty($result.StandardOutput)) {
     $result.StandardOutput | Write-Output
 }

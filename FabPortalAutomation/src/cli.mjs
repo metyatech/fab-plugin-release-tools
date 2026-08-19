@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadSubmissionManifest } from './manifest.mjs';
+import { createStdinManualInteraction } from './manual-handoff.mjs';
 import { runPortalAutomation } from './portal.mjs';
 import { createRunDirectory, writeRunReport } from './report.mjs';
 
@@ -16,7 +17,9 @@ Usage:
 
 Default mode is read-only verification. Save Draft and Submit for review are
 explicit, guarded operations. Pending approval listings are never modified and
-Cancel submission is never invoked automatically.
+Cancel submission is never invoked automatically. If a visible Cloudflare
+challenge is detected, automation pauses without browser operations until you
+complete it manually and press Enter; q + Enter cancels the run.
 
 Options:
   --manifest <path>       FabPortalSubmission.json (required)
@@ -61,6 +64,8 @@ function emit(value, json) {
     process.stdout.write(`writeInteractionsPerformed=${value.writeInteractionsPerformed} Save=${value.saveInvoked} Submit=${value.submitInvoked}\n`);
     process.stdout.write(`submitAccepted=${value.submitAccepted} postSubmitStatus=${value.postSubmitStatus ?? 'null'}\n`);
     process.stdout.write(`writeReady=${value.writeReady} writeBlockers=${value.writeBlockers?.length ?? 0}\n`);
+    process.stdout.write(`manualChallengeDetected=${value.manualChallengeDetected} manualChallengeHandoffCount=${value.manualChallengeHandoffCount} manualChallengeCompleted=${value.manualChallengeCompleted} manualChallengeCancelled=${value.manualChallengeCancelled}\n`);
+    process.stdout.write(`automationHardNavigationCount=${value.automationHardNavigationCount} humanObservedNavigationCount=${value.humanObservedNavigationCount}\n`);
     process.stdout.write(`networkMutationRequestsObserved=${value.network?.networkMutationRequestsObserved ?? 0} networkMutationRequestsBlocked=${value.network?.networkMutationRequestsBlocked ?? 0}\n`);
     process.stdout.write(`Artifacts: ${value.artifactDirectory}\n`);
     if (value.blockers?.length) process.stdout.write(`Blockers: ${value.blockers.join(' | ')}\n`);
@@ -75,10 +80,11 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
   const createDirectory = dependencies.createDirectory ?? createRunDirectory;
   const writeReportFile = dependencies.writeReport ?? writeRunReport;
   const run = dependencies.run ?? runPortalAutomation;
+  const manualInteraction = dependencies.manualInteraction ?? createStdinManualInteraction();
   const manifestInfo = await loadManifest(args.manifest);
   const artifactDirectory = await createDirectory(args.output ?? path.resolve('artifacts'), manifestInfo.manifest.pluginName);
   const mode = args.submitForReview ? 'submit' : args.saveDraft ? 'save' : 'verify';
-  const result = await run({ manifestInfo, cdpEndpoint: args.cdpendpoint, mode, saveDraftAuthorized: args.saveDraft, outputDirectory: artifactDirectory });
+  const result = await run({ manifestInfo, cdpEndpoint: args.cdpendpoint, mode, saveDraftAuthorized: args.saveDraft, outputDirectory: artifactDirectory, manualInteraction });
   result.artifactDirectory = artifactDirectory;
   await writeReportFile({ directory: artifactDirectory, result, comparison: result.comparison, comparisonAfter: result.comparisonAfter, network: result.network, page: result.page });
   if (result.browser) await result.browser.close().catch(() => undefined);

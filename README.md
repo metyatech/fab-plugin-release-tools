@@ -303,7 +303,12 @@ The default is read-only verification. Explicit `-SaveDraft` enables a guarded
 draft save, and `-SaveDraft -SubmitForReview` additionally enables submission.
 Pending approval listings cannot be modified; Cancel submission is never
 invoked automatically. The automation never handles Cloudflare, credentials,
-MFA, or browser storage.
+MFA, or browser storage. If a visible Cloudflare/security challenge appears,
+the automation enters a manual handoff: browser operations stop, you complete
+the challenge in the dedicated Chrome, then press Enter here to resume. Use
+`q` followed by Enter to cancel the run. A bounded number of handoff cycles is
+allowed; a challenge after staged mutations fails safely and requires a clean
+restart.
 
 A verify-only `PASS` reports that observation completed without a proven
 mismatch; it does not imply write readiness. The run report records

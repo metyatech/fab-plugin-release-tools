@@ -73,6 +73,10 @@ export function fixtureState(manifest, overrides = {}) {
     submitStaysDraft: false,
     statusRendering: 'testid',
     preExistingDialog: false,
+    challengeVisible: false,
+    challengeAfterFirstMutation: false,
+    challengeOnReadOnlyExpansion: false,
+    challengeAfterSave: false,
     ...overrides,
   };
 }

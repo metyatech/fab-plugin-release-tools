@@ -1,6 +1,7 @@
 import { chromium } from 'playwright-core';
 import { compareManifest, summarizeComparison } from './comparison.mjs';
 import { buildMutationPlan, executeMutationPlan, preflightMutationPlan } from './mutation-plan.mjs';
+import { createStdinManualInteraction, DEFAULT_MANUAL_CHALLENGE_MAX_CYCLES, normalizeManualInteractionDecision } from './manual-handoff.mjs';
 import { installNetworkGuard } from './network-guard.mjs';
 import { dangerousActionCandidates, listingEditUrl, resolveCandidate, saveCandidates, submitCandidates } from './locators.mjs';
 
@@ -29,6 +30,22 @@ const CRITICAL_OWNED_FIELDS = new Set([
   'allowsUsageWithAi', 'promotionalContent', 'forumPost', 'activation',
   'documentationUrl', 'supportUrl', 'technicalInformationFile', 'media',
 ]);
+
+export class ManualChallengeError extends Error {
+  constructor() {
+    super('MANUAL ACTION REQUIRED: Cloudflare or a browser security challenge is blocking Fab. Complete it manually and rerun.');
+    this.name = 'ManualChallengeError';
+    this.code = 'MANUAL_CHALLENGE';
+  }
+}
+
+class ManualChallengeCancelledError extends Error {
+  constructor() {
+    super('MANUAL_CHALLENGE_CANCELLED');
+    this.name = 'ManualChallengeCancelledError';
+    this.code = 'MANUAL_CHALLENGE_CANCELLED';
+  }
+}
 
 function normalized(value) {
   return String(value ?? '').replace(/\s+/g, ' ').trim();
@@ -93,7 +110,7 @@ async function hasVisibleChallengeText(page, pattern) {
 async function detectManualBlock(page) {
   for (const pattern of MANUAL_CHALLENGE_TEXT) {
     if (await hasVisibleChallengeText(page, pattern)) {
-      throw new Error('MANUAL ACTION REQUIRED: Cloudflare or a browser security challenge is blocking Fab. Complete it manually and rerun.');
+      throw new ManualChallengeError();
     }
   }
   const currentUrl = new URL(page.url());
@@ -153,12 +170,66 @@ async function ensurePassiveTarget(page, manifest, origin) {
   throw lastTitleError ?? new Error('Fab listing title was not readable during passive attach.');
 }
 
+function createNavigationDiagnostics(context, result) {
+  const handlers = new Map();
+  const automationNavigations = new Map();
+  const observePage = (page) => {
+    if (!page || handlers.has(page)) return;
+    const handler = (frame) => {
+      if (frame !== page.mainFrame()) return;
+      const pending = automationNavigations.get(page) ?? 0;
+      if (pending > 0) {
+        if (pending === 1) automationNavigations.delete(page);
+        else automationNavigations.set(page, pending - 1);
+        return;
+      }
+      result.humanObservedNavigationCount += 1;
+    };
+    handlers.set(page, handler);
+    page.on('framenavigated', handler);
+  };
+  const markAutomationNavigation = (page) => automationNavigations.set(page, (automationNavigations.get(page) ?? 0) + 1);
+  const clearAutomationNavigation = (page) => {
+    const pending = automationNavigations.get(page) ?? 0;
+    if (pending <= 1) automationNavigations.delete(page);
+    else automationNavigations.set(page, pending - 1);
+  };
+  for (const page of context.pages()) observePage(page);
+  const onPage = (page) => observePage(page);
+  context.on('page', onPage);
+  return {
+    observePage,
+    markAutomationNavigation,
+    clearAutomationNavigation,
+    dispose() {
+      context.off('page', onPage);
+      for (const [page, handler] of handlers) page.off('framenavigated', handler);
+    },
+  };
+}
+
 async function hardNavigate(page, url, options, diagnostics, initial = false) {
   if (diagnostics) {
     diagnostics.hardNavigationCount += 1;
+    diagnostics.automationHardNavigationCount += 1;
     if (initial) diagnostics.initialNavigationPerformed = true;
+    diagnostics.navigationDiagnostics?.markAutomationNavigation(page);
   }
-  return page.goto(url, options);
+  try {
+    return await page.goto(url, options);
+  } finally {
+    diagnostics?.navigationDiagnostics?.clearAutomationNavigation(page);
+  }
+}
+
+async function reloadWithDiagnostics(page, options, diagnostics) {
+  diagnostics.reloadCount += 1;
+  diagnostics.navigationDiagnostics?.markAutomationNavigation(page);
+  try {
+    return await page.reload(options);
+  } finally {
+    diagnostics.navigationDiagnostics?.clearAutomationNavigation(page);
+  }
 }
 
 async function ensureTarget(page, manifest, origin, { passive = false, diagnostics = null, initial = false } = {}) {
@@ -167,6 +238,7 @@ async function ensureTarget(page, manifest, origin, { passive = false, diagnosti
   const formatView = page.getByRole('heading', { name: 'Project Versions*', exact: true });
   const formatViewVisible = await formatView.count() > 0 && await formatView.first().isVisible().catch(() => false);
   if (page.url() !== expected || formatViewVisible) await hardNavigate(page, expected, { waitUntil: 'domcontentloaded' }, diagnostics, initial);
+  await detectManualBlock(page);
   await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => undefined);
   await detectManualBlock(page);
   const parsed = new URL(page.url());
@@ -174,6 +246,58 @@ async function ensureTarget(page, manifest, origin, { passive = false, diagnosti
   if (!match || match[1] !== manifest.listingId) throw new Error(`Fab listing URL UUID mismatch. Expected ${manifest.listingId}; received ${parsed.pathname}.`);
   await requireExactTitle(page, manifest.title);
   return { expectedUrl: expected, finalUrl: page.url() };
+}
+
+function isManualChallengeError(error) {
+  return error?.code === 'MANUAL_CHALLENGE';
+}
+
+function manualChallengeRestartError(result) {
+  const phase = result.saveInvoked ? 'after Save' : 'after Fab mutations were staged';
+  return new Error(`Cloudflare challenge appeared ${phase}. Restart from a clean listing state; no additional Save or Submit was attempted.`);
+}
+
+async function withManualChallengeHandoff({ context, page, manifest, origin, action, result, manualInteraction, maxCycles, diagnostics }) {
+  let currentPage = page;
+  while (true) {
+    try {
+      return { page: currentPage, value: await action(currentPage) };
+    } catch (error) {
+      if (!isManualChallengeError(error)) throw error;
+      result.manualChallengeDetected = true;
+      if (result.writeInteractionsPerformed > 0) throw manualChallengeRestartError(result);
+      if (result.manualChallengeHandoffCount >= maxCycles) {
+        throw new Error(`Manual Cloudflare handoff exceeded the maximum of ${maxCycles} cycles.`);
+      }
+      result.manualChallengeHandoffCount += 1;
+      if (!manualInteraction || typeof manualInteraction.waitForConfirmation !== 'function') {
+        throw new Error('Cloudflare challenge requires an injectable manual interaction provider.');
+      }
+      const decision = normalizeManualInteractionDecision(await manualInteraction.waitForConfirmation({
+        cycle: result.manualChallengeHandoffCount,
+        maxCycles,
+      }));
+      if (decision === 'cancelled') {
+        result.manualChallengeCancelled = true;
+        throw new ManualChallengeCancelledError();
+      }
+      if (decision !== 'confirmed') {
+        throw new Error('Manual Cloudflare handoff requires Enter to continue or q + Enter to cancel.');
+      }
+      let revalidatedPage;
+      try {
+        revalidatedPage = selectExistingTargetPage(context, manifest, origin);
+        diagnostics?.navigationDiagnostics?.observePage(revalidatedPage);
+        await ensurePassiveTarget(revalidatedPage, manifest, origin);
+        await readStatus(revalidatedPage);
+      } catch (revalidationError) {
+        if (isManualChallengeError(revalidationError)) continue;
+        throw revalidationError;
+      }
+      result.manualChallengeCompleted = true;
+      currentPage = revalidatedPage;
+    }
+  }
 }
 
 async function isVisibleUnique(locator) {
@@ -241,6 +365,7 @@ async function waitForFormatView(page, manifest) {
   if (isFixture) return;
   const deadline = Date.now() + 15000;
   while (Date.now() < deadline) {
+    await detectManualBlock(page);
     const projectLink = page.getByText(manifest.packages[0].projectFileLink, { exact: true });
     const engineVersion = page.getByText(/^UE_[0-9]+(?:\.[0-9]+)+$/, { exact: false });
     const formatHeading = page.getByRole('heading', { name: 'Project Versions*', exact: true });
@@ -388,7 +513,7 @@ async function assertView(page, view, manifest) {
   if (!await isVisibleUnique(page.getByRole('button', { name: manifest.includedFormat, exact: true }))) throw new Error('Listing mutation attempted while the format view was active.');
 }
 
-async function preflightMutationViews(page, plan, manifestInfo, origin, guard) {
+async function preflightMutationViews(page, plan, manifestInfo, origin, guard, diagnostics) {
   const groups = ['listing', 'format']
     .map((view) => ({ view, plan: plan.filter((item) => (item.view ?? 'listing') === view) }))
     .filter((group) => group.plan.length > 0);
@@ -396,8 +521,8 @@ async function preflightMutationViews(page, plan, manifestInfo, origin, guard) {
   const prepared = [];
   for (const group of groups) {
     await (group.view === 'format'
-      ? ensureFormatView(page, manifestInfo.manifest, origin, guard)
-      : ensureListingView(page, manifestInfo.manifest, origin, guard));
+      ? ensureFormatView(page, manifestInfo.manifest, origin, guard, { diagnostics })
+      : ensureListingView(page, manifestInfo.manifest, origin, guard, { diagnostics }));
     const preflight = await preflightMutationPlan(page, group.plan, manifestInfo.manifest);
     failures.push(...preflight.failures);
     prepared.push({ ...group, preflight });
@@ -504,13 +629,14 @@ async function executeSubmitFlow(page, guard, result) {
   }
 }
 
-export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'verify', saveDraftAuthorized = false, outputDirectory = null, origin = 'https://www.fab.com', page: injectedPage = null, context: injectedContext = null }) {
+export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'verify', saveDraftAuthorized = false, outputDirectory = null, origin = 'https://www.fab.com', page: injectedPage = null, context: injectedContext = null, manualInteraction = null, maxManualChallengeCycles = DEFAULT_MANUAL_CHALLENGE_MAX_CYCLES }) {
   if (mode === 'save' && !saveDraftAuthorized) throw new Error('Save Draft requires explicit Save Draft authorization.');
   if (mode === 'submit' && !saveDraftAuthorized) throw new Error('Submit for review requires explicit Save Draft authorization.');
   let browser = null;
   let context = injectedContext;
   let page = injectedPage;
   const passiveAttach = mode === 'verify';
+  const interaction = manualInteraction ?? createStdinManualInteraction();
   let targetPageSelectionReason = injectedPage ? 'Caller-supplied page was used for controlled fixture verification.' : null;
   if (!page) {
     if (!context && !cdpEndpoint) throw new Error('A CDP endpoint is required for the production browser connection.');
@@ -557,15 +683,61 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     initialNavigationPerformed: false,
     hardNavigationCount: 0,
     reloadCount: 0,
+    automationHardNavigationCount: 0,
+    humanObservedNavigationCount: 0,
+    manualChallengeDetected: false,
+    manualChallengeHandoffCount: 0,
+    manualChallengeCompleted: false,
+    manualChallengeCancelled: false,
     passiveAttach,
   };
+  const navigationDiagnostics = createNavigationDiagnostics(context, result);
+  Object.defineProperty(result, 'navigationDiagnostics', { value: navigationDiagnostics, enumerable: false, configurable: true });
   Object.defineProperty(result, 'page', { value: page, enumerable: false, configurable: true });
   Object.defineProperty(result, 'browser', { value: browser, enumerable: false, configurable: true });
   try {
-    await ensureTarget(page, manifestInfo.manifest, origin, { passive: passiveAttach, diagnostics: result, initial: true });
-    result.listingStatus = await readStatus(page);
+    const initialTarget = await withManualChallengeHandoff({
+      context,
+      page,
+      manifest: manifestInfo.manifest,
+      origin,
+      result,
+      manualInteraction: interaction,
+      maxCycles: maxManualChallengeCycles,
+      diagnostics: result,
+      action: (candidatePage) => ensureTarget(candidatePage, manifestInfo.manifest, origin, { passive: passiveAttach, diagnostics: result, initial: true }),
+    });
+    page = initialTarget.page;
+    const initialRead = await withManualChallengeHandoff({
+      context,
+      page,
+      manifest: manifestInfo.manifest,
+      origin,
+      result,
+      manualInteraction: interaction,
+      maxCycles: maxManualChallengeCycles,
+      diagnostics: result,
+      action: async (candidatePage) => {
+        await detectManualBlock(candidatePage);
+        return readStatus(candidatePage);
+      },
+    });
+    page = initialRead.page;
+    result.listingStatus = initialRead.value;
     result.dangerousActionsFound = await readDangerousActions(page);
-    const collected = await collectPortalComparison(page, manifestInfo, { guard, origin, passive: passiveAttach, diagnostics: result });
+    const collectedResult = await withManualChallengeHandoff({
+      context,
+      page,
+      manifest: manifestInfo.manifest,
+      origin,
+      result,
+      manualInteraction: interaction,
+      maxCycles: maxManualChallengeCycles,
+      diagnostics: result,
+      action: (candidatePage) => collectPortalComparison(candidatePage, manifestInfo, { guard, origin, passive: passiveAttach, diagnostics: result }),
+    });
+    page = collectedResult.page;
+    const collected = collectedResult.value;
     result.readOnlyUiActions.push(...collected.readOnlyUiActions);
     result.comparison = collected.comparison;
     ({ writeReady: result.writeReady, writeBlockers: result.writeBlockers } = writeReadiness(result.listingStatus, result.comparison, manifestInfo.manifest));
@@ -582,27 +754,57 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     if (mutation.plan.length === 0) {
       result.comparisonAfter = result.comparison;
     } else {
-      const preflight = await preflightMutationViews(page, mutation.plan, manifestInfo, origin, guard);
-      if (!preflight.ok) throw new Error(`Mutation preflight failed: ${preflight.failures.join(' ')}`);
-      result.executedMutations = [];
-      for (const group of preflight.groups) {
-        await (group.view === 'format'
-          ? ensureFormatView(page, manifestInfo.manifest, origin, guard)
-          : ensureListingView(page, manifestInfo.manifest, origin, guard));
-        const executed = await executeMutationPlan(page, group.preflight, manifestInfo, {
-          setPhase: (phase) => guard.setPhase(phase),
-          assertView: (view) => assertView(page, view, manifestInfo.manifest),
-        });
-        result.executedMutations.push(...executed);
-      }
-      result.writeInteractionsPerformed += result.executedMutations.length;
+      const mutationRun = await withManualChallengeHandoff({
+        context,
+        page,
+        manifest: manifestInfo.manifest,
+        origin,
+        result,
+        manualInteraction: interaction,
+        maxCycles: maxManualChallengeCycles,
+        diagnostics: result,
+        action: async (candidatePage) => {
+          const preflight = await preflightMutationViews(candidatePage, mutation.plan, manifestInfo, origin, guard, result);
+          if (!preflight.ok) throw new Error(`Mutation preflight failed: ${preflight.failures.join(' ')}`);
+          result.executedMutations = [];
+          for (const group of preflight.groups) {
+            await (group.view === 'format'
+              ? ensureFormatView(candidatePage, manifestInfo.manifest, origin, guard, { diagnostics: result })
+              : ensureListingView(candidatePage, manifestInfo.manifest, origin, guard, { diagnostics: result }));
+            await executeMutationPlan(candidatePage, group.preflight, manifestInfo, {
+              setPhase: (phase) => guard.setPhase(phase),
+              assertView: (view) => assertView(candidatePage, view, manifestInfo.manifest),
+              beforeMutation: () => detectManualBlock(candidatePage),
+              onMutationExecuted: (item) => {
+                result.executedMutations.push(item.fieldName);
+                result.writeInteractionsPerformed += 1;
+              },
+            });
+          }
+          return preflight;
+        },
+      });
+      page = mutationRun.page;
       guard.setPhase('stage');
-      const staged = await collectPortalComparison(page, manifestInfo, { guard, origin });
+      const stagedRun = await withManualChallengeHandoff({
+        context,
+        page,
+        manifest: manifestInfo.manifest,
+        origin,
+        result,
+        manualInteraction: interaction,
+        maxCycles: maxManualChallengeCycles,
+        diagnostics: result,
+        action: (candidatePage) => collectPortalComparison(candidatePage, manifestInfo, { guard, origin, diagnostics: result }),
+      });
+      page = stagedRun.page;
+      const staged = stagedRun.value;
       result.readOnlyUiActions.push(...staged.readOnlyUiActions);
       result.comparisonAfter = staged.comparison;
       assertCompleteComparison(result.comparisonAfter, manifestInfo.manifest);
       ({ writeReady: result.writeReady, writeBlockers: result.writeBlockers } = writeReadiness(result.listingStatus, result.comparisonAfter, manifestInfo.manifest));
-      await ensureListingView(page, manifestInfo.manifest, origin, guard);
+      await ensureListingView(page, manifestInfo.manifest, origin, guard, { diagnostics: result });
+      await detectManualBlock(page);
       guard.setPhase('save');
       const save = await uniqueAction(page, saveCandidates(), 'Save Draft');
       await save.locator.click();
@@ -610,11 +812,33 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
       result.writeInteractionsPerformed += 1;
       await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => undefined);
       guard.setPhase('stage');
-      result.reloadCount += 1;
-      await page.reload({ waitUntil: 'domcontentloaded' });
-      await ensureTarget(page, manifestInfo.manifest, origin, { diagnostics: result });
+      await reloadWithDiagnostics(page, { waitUntil: 'domcontentloaded' }, result);
+      const postSaveTarget = await withManualChallengeHandoff({
+        context,
+        page,
+        manifest: manifestInfo.manifest,
+        origin,
+        result,
+        manualInteraction: interaction,
+        maxCycles: maxManualChallengeCycles,
+        diagnostics: result,
+        action: (candidatePage) => ensureTarget(candidatePage, manifestInfo.manifest, origin, { diagnostics: result }),
+      });
+      page = postSaveTarget.page;
       result.listingStatus = await readStatus(page);
-      const postSave = await collectPortalComparison(page, manifestInfo, { guard, origin });
+      const postSaveRun = await withManualChallengeHandoff({
+        context,
+        page,
+        manifest: manifestInfo.manifest,
+        origin,
+        result,
+        manualInteraction: interaction,
+        maxCycles: maxManualChallengeCycles,
+        diagnostics: result,
+        action: (candidatePage) => collectPortalComparison(candidatePage, manifestInfo, { guard, origin, diagnostics: result }),
+      });
+      page = postSaveRun.page;
+      const postSave = postSaveRun.value;
       result.readOnlyUiActions.push(...postSave.readOnlyUiActions);
       result.comparisonAfter = postSave.comparison;
       assertCompleteComparison(result.comparisonAfter, manifestInfo.manifest);
@@ -623,17 +847,34 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     if (mode === 'submit') {
       if (!result.saveInvoked && result.plannedMutations.length > 0) throw new Error('Submit for review requires a completed Save Draft operation.');
       if (result.comparisonAfter.mismatchCount > 0 || criticalBlockers(result.comparisonAfter, manifestInfo.manifest).length > 0) throw new Error('Submit for review blocked by post-save comparison.');
-      await ensureListingView(page, manifestInfo.manifest, origin, guard);
-      await executeSubmitFlow(page, guard, result);
+      const submitRun = await withManualChallengeHandoff({
+        context,
+        page,
+        manifest: manifestInfo.manifest,
+        origin,
+        result,
+        manualInteraction: interaction,
+        maxCycles: maxManualChallengeCycles,
+        diagnostics: result,
+        action: async (candidatePage) => {
+          await ensureListingView(candidatePage, manifestInfo.manifest, origin, guard, { diagnostics: result });
+          await detectManualBlock(candidatePage);
+          await executeSubmitFlow(candidatePage, guard, result);
+        },
+      });
+      page = submitRun.page;
     }
     result.result = 'PASS';
     return result;
   } catch (error) {
     result.blockers.push(error instanceof Error ? error.message : String(error));
+    if (error?.code === 'MANUAL_CHALLENGE_CANCELLED') result.result = 'MANUAL_CHALLENGE_CANCELLED';
     return result;
   } finally {
     result.selectedPageUrl = page?.url() ?? result.selectedPageUrl;
+    Object.defineProperty(result, 'page', { value: page, enumerable: false, configurable: true });
     result.network = guard.summary();
+    navigationDiagnostics.dispose();
     await guard.dispose().catch(() => undefined);
     // The CLI disconnects after reports are written. This keeps screenshots and
     // post-run evidence available without using the browser as a write channel.

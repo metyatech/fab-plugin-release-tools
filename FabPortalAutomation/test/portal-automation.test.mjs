@@ -23,14 +23,14 @@ test.after(async () => {
   await browser.close();
 });
 
-async function scenario({ manifest = makeManifest(), state = {}, fixtureOptions = {}, mode = 'verify', saveDraftAuthorized = false, mediaFiles = [] } = {}) {
+async function scenario({ manifest = makeManifest(), state = {}, fixtureOptions = {}, mode = 'verify', saveDraftAuthorized = false, mediaFiles = [], manualInteraction = null } = {}) {
   const fixture = await startFixture(fixtureState(manifest, state), fixtureOptions);
   const context = await browser.newContext();
   const page = await context.newPage();
   const info = await makeManifestInfo(manifest, { mediaFiles });
   try {
     await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
-    const result = await runPortalAutomation({ manifestInfo: info, mode, saveDraftAuthorized, origin: fixture.origin, page, context });
+    const result = await runPortalAutomation({ manifestInfo: info, mode, saveDraftAuthorized, origin: fixture.origin, page, context, manualInteraction });
     return { result, fixture };
   } finally {
     await context.close();
@@ -126,6 +126,292 @@ test('verify-only passively attaches to a ready target without navigation or rel
     assert.equal(navigationsAfterAttach, 0);
     assert.equal(networkIdleWaitsAfterAttach, 0);
     assert.equal(context.pages().length, 1);
+  } finally {
+    await context.close();
+    await fixture.close();
+  }
+});
+
+async function waitForPrompt(promptState) {
+  const deadline = Date.now() + 3000;
+  while (!promptState.entered && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(promptState.entered, true, 'manual challenge prompt was not reached');
+}
+
+test('startup Cloudflare challenge pauses without browser operations until human confirmation', async () => {
+  const manifest = makeManifest();
+  const fixture = await startFixture(fixtureState(manifest, { challengeVisible: true }));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const info = await makeManifestInfo(manifest);
+  await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+  let gotoCount = 0;
+  let reloadCount = 0;
+  const originalGoto = page.goto.bind(page);
+  const originalReload = page.reload.bind(page);
+  page.goto = async (...args) => { gotoCount += 1; return originalGoto(...args); };
+  page.reload = async (...args) => { reloadCount += 1; return originalReload(...args); };
+  const promptState = { entered: false };
+  let releasePrompt;
+  const manualInteraction = {
+    waitForConfirmation: () => {
+      promptState.entered = true;
+      return new Promise((resolve) => { releasePrompt = resolve; });
+    },
+  };
+  const resultPromise = runPortalAutomation({ manifestInfo: info, mode: 'verify', origin: fixture.origin, page, context, manualInteraction });
+  try {
+    await waitForPrompt(promptState);
+    assert.equal(gotoCount, 0);
+    assert.equal(reloadCount, 0);
+    assert.equal(fixture.mutations.length, 0);
+    assert.equal(fixture.requests.some((request) => request.method === 'POST'), false);
+    fixture.state.challengeVisible = false;
+    await page.evaluate(() => { document.querySelector('[data-testid="fixture-challenge"]').hidden = true; });
+    releasePrompt('confirmed');
+    const result = await resultPromise;
+    assert.equal(result.result, 'PASS');
+    assert.equal(result.manualChallengeDetected, true);
+    assert.equal(result.manualChallengeHandoffCount, 1);
+    assert.equal(result.manualChallengeCompleted, true);
+    assert.equal(result.manualChallengeCancelled, false);
+    assert.equal(result.writeInteractionsPerformed, 0);
+  } finally {
+    await context.close();
+    await fixture.close();
+  }
+});
+
+test('manual handoff repeats when the challenge remains after confirmation', async () => {
+  const manifest = makeManifest();
+  const fixture = await startFixture(fixtureState(manifest, { challengeVisible: true }));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const info = await makeManifestInfo(manifest);
+  await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+  let prompts = 0;
+  const manualInteraction = {
+    waitForConfirmation: async () => {
+      prompts += 1;
+      if (prompts === 2) {
+        fixture.state.challengeVisible = false;
+        await page.evaluate(() => { document.querySelector('[data-testid="fixture-challenge"]').hidden = true; });
+      }
+      return 'confirmed';
+    },
+  };
+  try {
+    const result = await runPortalAutomation({ manifestInfo: info, mode: 'verify', origin: fixture.origin, page, context, manualInteraction });
+    assert.equal(result.result, 'PASS');
+    assert.equal(prompts, 2);
+    assert.equal(result.manualChallengeHandoffCount, 2);
+    assert.equal(result.manualChallengeCompleted, true);
+  } finally {
+    await context.close();
+    await fixture.close();
+  }
+});
+
+test('manual handoff fails safely after the maximum number of cycles', async () => {
+  const manifest = makeManifest();
+  const fixture = await startFixture(fixtureState(manifest, { challengeVisible: true }));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const info = await makeManifestInfo(manifest);
+  await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+  let prompts = 0;
+  try {
+    const result = await runPortalAutomation({
+      manifestInfo: info,
+      mode: 'verify',
+      origin: fixture.origin,
+      page,
+      context,
+      manualInteraction: { waitForConfirmation: async () => { prompts += 1; return 'confirmed'; } },
+      maxManualChallengeCycles: 3,
+    });
+    assert.equal(result.result, 'FAIL');
+    assert.equal(prompts, 3);
+    assert.equal(result.manualChallengeHandoffCount, 3);
+    assert.equal(result.manualChallengeCompleted, false);
+    assert.match(result.blockers.join(' '), /maximum of 3 cycles/i);
+    assert.equal(result.writeInteractionsPerformed, 0);
+  } finally {
+    await context.close();
+    await fixture.close();
+  }
+});
+
+test('human cancellation reports MANUAL_CHALLENGE_CANCELLED without writes', async () => {
+  const manifest = makeManifest();
+  const fixture = await startFixture(fixtureState(manifest, { challengeVisible: true }));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const info = await makeManifestInfo(manifest);
+  await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+  try {
+    const result = await runPortalAutomation({ manifestInfo: info, mode: 'verify', origin: fixture.origin, page, context, manualInteraction: { waitForConfirmation: async () => 'cancelled' } });
+    assert.equal(result.result, 'MANUAL_CHALLENGE_CANCELLED');
+    assert.equal(result.manualChallengeCancelled, true);
+    assert.equal(result.writeInteractionsPerformed, 0);
+    assert.equal(fixture.mutations.length, 0);
+  } finally {
+    await context.close();
+    await fixture.close();
+  }
+});
+
+test('human reload during handoff is observed and the exact target is rediscovered', async () => {
+  const manifest = makeManifest();
+  const fixture = await startFixture(fixtureState(manifest, { challengeVisible: true }));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const info = await makeManifestInfo(manifest);
+  await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+  let prompts = 0;
+  const manualInteraction = {
+    waitForConfirmation: async () => {
+      prompts += 1;
+      fixture.state.challengeVisible = false;
+      await page.reload();
+      await page.evaluate(() => { document.querySelector('[data-testid="fixture-challenge"]').hidden = true; });
+      return 'confirmed';
+    },
+  };
+  try {
+    const result = await runPortalAutomation({ manifestInfo: info, mode: 'verify', origin: fixture.origin, page, context, manualInteraction });
+    assert.equal(result.result, 'PASS');
+    assert.equal(prompts, 1);
+    assert.equal(result.humanObservedNavigationCount, 1);
+    assert.equal(result.selectedPageUrl, page.url());
+    assert.equal(result.automationHardNavigationCount, 0);
+  } finally {
+    await context.close();
+    await fixture.close();
+  }
+});
+
+test('startup challenge can be cleared before a guarded Save Draft mutation', async () => {
+  const manifest = makeManifest({ shortDescription: 'Changed after handoff' });
+  const fixture = await startFixture(fixtureState(manifest, { challengeVisible: true, shortDescription: 'Old before handoff' }));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const info = await makeManifestInfo(manifest);
+  await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+  try {
+    const result = await runPortalAutomation({
+      manifestInfo: info,
+      mode: 'save',
+      saveDraftAuthorized: true,
+      origin: fixture.origin,
+      page,
+      context,
+      manualInteraction: { waitForConfirmation: async () => { fixture.state.challengeVisible = false; await page.evaluate(() => { document.querySelector('[data-testid="fixture-challenge"]').hidden = true; }); return 'confirmed'; } },
+    });
+    assert.equal(result.result, 'PASS');
+    assert.equal(result.saveInvoked, true);
+    assert.equal(result.manualChallengeCompleted, true);
+    assert.equal(fixture.mutations.some((item) => item.pathname === '/api/save'), true);
+  } finally {
+    await context.close();
+    await fixture.close();
+  }
+});
+
+test('startup challenge can be cleared before guarded Submit for review', async () => {
+  const manifest = makeManifest({ shortDescription: 'Changed before submit' });
+  const fixture = await startFixture(fixtureState(manifest, { challengeVisible: true, shortDescription: 'Old before submit' }));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const info = await makeManifestInfo(manifest);
+  await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+  try {
+    const result = await runPortalAutomation({
+      manifestInfo: info,
+      mode: 'submit',
+      saveDraftAuthorized: true,
+      origin: fixture.origin,
+      page,
+      context,
+      manualInteraction: { waitForConfirmation: async () => { fixture.state.challengeVisible = false; await page.evaluate(() => { document.querySelector('[data-testid="fixture-challenge"]').hidden = true; }); return 'confirmed'; } },
+    });
+    assert.equal(result.result, 'PASS');
+    assert.equal(result.submitInvoked, true);
+    assert.equal(result.submitAccepted, true);
+    assert.equal(result.manualChallengeCompleted, true);
+    assert.equal(fixture.mutations.some((item) => item.pathname === '/api/submit'), true);
+  } finally {
+    await context.close();
+    await fixture.close();
+  }
+});
+
+test('challenge during approved read-only expansion can hand off before mutation', async () => {
+  const manifest = makeManifest();
+  const fixture = await startFixture(fixtureState(manifest, { readOnlySections: ['Additional information'], challengeOnReadOnlyExpansion: true }));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const info = await makeManifestInfo(manifest);
+  await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+  try {
+    const result = await runPortalAutomation({
+      manifestInfo: info,
+      mode: 'verify',
+      origin: fixture.origin,
+      page,
+      context,
+      manualInteraction: { waitForConfirmation: async () => { fixture.state.challengeVisible = false; await page.evaluate(() => { document.querySelector('[data-testid="fixture-challenge"]').hidden = true; }); return 'confirmed'; } },
+    });
+    assert.equal(result.result, 'PASS');
+    assert.equal(result.manualChallengeHandoffCount, 1);
+    assert.equal(result.writeInteractionsPerformed, 0);
+    assert.equal(fixture.mutations.length, 0);
+  } finally {
+    await context.close();
+    await fixture.close();
+  }
+});
+
+test('challenge after Save fails safely and is reported without repeating Save', async () => {
+  const manifest = makeManifest({ shortDescription: 'Changed before post-save challenge' });
+  const fixture = await startFixture(fixtureState(manifest, { shortDescription: 'Old before post-save challenge', challengeAfterSave: true }));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const info = await makeManifestInfo(manifest);
+  await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+  try {
+    const result = await runPortalAutomation({ manifestInfo: info, mode: 'save', saveDraftAuthorized: true, origin: fixture.origin, page, context, manualInteraction: { waitForConfirmation: async () => 'confirmed' } });
+    assert.equal(result.result, 'FAIL');
+    assert.equal(result.manualChallengeDetected, true);
+    assert.equal(result.saveInvoked, true);
+    assert.equal(result.submitInvoked, false);
+    assert.equal(result.manualChallengeHandoffCount, 0);
+    assert.match(result.blockers.join(' '), /after Save|clean listing state/i);
+    assert.equal(fixture.mutations.filter((item) => item.pathname === '/api/save').length, 1);
+  } finally {
+    await context.close();
+    await fixture.close();
+  }
+});
+
+test('challenge after a staged mutation fails safe without Save or Submit', async () => {
+  const manifest = makeManifest({ shortDescription: 'Changed staged value' });
+  const fixture = await startFixture(fixtureState(manifest, { shortDescription: 'Old staged value', challengeAfterFirstMutation: true }));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const info = await makeManifestInfo(manifest);
+  await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+  try {
+    const result = await runPortalAutomation({ manifestInfo: info, mode: 'save', saveDraftAuthorized: true, origin: fixture.origin, page, context, manualInteraction: { waitForConfirmation: async () => 'confirmed' } });
+    assert.equal(result.result, 'FAIL');
+    assert.equal(result.manualChallengeDetected, true);
+    assert.equal(result.manualChallengeHandoffCount, 0);
+    assert.equal(result.saveInvoked, false);
+    assert.equal(result.submitInvoked, false);
+    assert.equal(result.writeInteractionsPerformed, 1);
+    assert.match(result.blockers.join(' '), /staged|clean listing state/i);
+    assert.equal(fixture.mutations.some((item) => item.pathname === '/api/save'), false);
+    assert.equal(fixture.mutations.some((item) => item.pathname === '/api/submit'), false);
   } finally {
     await context.close();
     await fixture.close();

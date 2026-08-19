@@ -74,10 +74,11 @@ async function selectExactOption(page, desired) {
   await options.click();
 }
 
-export async function executeMutationPlan(page, preflight, manifestInfo, { setPhase = null, assertView = null } = {}) {
+export async function executeMutationPlan(page, preflight, manifestInfo, { setPhase = null, assertView = null, beforeMutation = null, onMutationExecuted = null } = {}) {
   const executed = [];
   for (const { item } of preflight.targets) {
     await assertView?.(item.view ?? 'listing');
+    await beforeMutation?.(item);
     const exact = await resolveExactWritableTarget(page, item);
     if (!exact.ok) throw new Error(`Execution target validation failed: ${exact.failures.join(' ')}`);
     const locator = exact.locator;
@@ -107,6 +108,7 @@ export async function executeMutationPlan(page, preflight, manifestInfo, { setPh
       setPhase?.('stage');
     }
     executed.push(item.fieldName);
+    await onMutationExecuted?.(item);
   }
   return executed;
 }

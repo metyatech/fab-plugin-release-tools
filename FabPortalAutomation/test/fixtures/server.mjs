@@ -7,6 +7,7 @@ function html(value) {
 function pageMarkup(state, listingId) {
   const checked = (value) => value ? ' checked' : '';
   const radio = (label, isChecked) => `<label>${html(label)}<input type="radio" aria-label="${html(label)}"${checked(isChecked)}></label>`;
+  const challengeMarkup = `<section data-testid="fixture-challenge"${state.challengeVisible ? '' : ' hidden'}><h2>Verify you are human</h2><p>Cloudflare security check</p></section>`;
   const confirmationButtons = (state.submitConfirmationButtons ?? ['Confirm']).map((label) => `<button type="button" data-testid="submit-confirm">${html(label)}</button>`).join('');
   const confirmationDialog = state.submitFlow === 'confirmation'
     ? `<div role="dialog" aria-label="Submit for review confirmation" hidden><h2>Submit for review?</h2>${confirmationButtons}<button type="button" data-testid="submit-cancel">Cancel</button></div>`
@@ -18,6 +19,7 @@ function pageMarkup(state, listingId) {
     ? `<div data-status-value>${html(state.status)}</div>`
     : `<div data-testid="listing-status" data-status-value>${html(state.status)}</div>`;
   const listingControls = `
+    ${challengeMarkup}
     <h1>${html(state.title)}</h1>
     ${statusMarkup}
     <label>Title *<input aria-label="Title *" value="${html(state.title)}" ${state.disableFields?.includes('title') ? 'disabled' : ''}></label>
@@ -115,8 +117,18 @@ function pageMarkup(state, listingId) {
     document.querySelectorAll('[data-testid="submit-confirm"]').forEach((button) => button.addEventListener('click', submitRequest));
     document.querySelector('[data-testid="submit-cancel"]')?.addEventListener('click', () => fetch('/api/cancel', { method: 'POST' }));
     document.querySelector('[data-testid="cancel"]').addEventListener('click', () => fetch('/api/cancel', { method: 'POST' }));
+    let stagedInputObserved = false;
+    const challenge = document.querySelector('[data-testid="fixture-challenge"]');
+    const revealChallenge = () => { if (challenge) challenge.hidden = false; };
+    document.querySelectorAll('input,select,[contenteditable="true"]').forEach((control) => control.addEventListener('input', () => {
+      if (${state.challengeAfterFirstMutation ? 'true' : 'false'} && !stagedInputObserved) {
+        stagedInputObserved = true;
+        revealChallenge();
+      }
+    }));
     document.querySelectorAll('[aria-expanded="false"][aria-controls^="fixture-section-"]').forEach((toggle) => toggle.addEventListener('click', () => {
       if (${state.readOnlySectionMutation ? 'true' : 'false'}) fetch('/api/read-only-expansion', { method: 'POST' }).catch(() => undefined);
+      if (${state.challengeOnReadOnlyExpansion ? 'true' : 'false'}) revealChallenge();
       toggle.setAttribute('aria-expanded', 'true');
       document.getElementById(toggle.getAttribute('aria-controls')).hidden = false;
     }));
@@ -157,6 +169,7 @@ export async function startFixture(initialState, { dropSaveFields = [], redirect
       const body = JSON.parse(await readBody(request) || '{}');
       mutations.push({ method: 'POST', pathname: url.pathname, body });
       for (const [key, value] of Object.entries(body)) if (!dropSaveFields.includes(key)) state[key] = value;
+      if (state.challengeAfterSave) state.challengeVisible = true;
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end('{}');
       return;
