@@ -4,9 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { chromium } from 'playwright-core';
-import { buildMutationPlan, preflightMutationPlan } from '../src/mutation-plan.mjs';
+import { buildMutationPlan, executeMutationPlan, preflightMutationPlan } from '../src/mutation-plan.mjs';
 import { installNetworkGuard } from '../src/network-guard.mjs';
-import { comparePlatformClassification, comparePriceClassification } from '../src/comparison.mjs';
+import { compareManifest, comparePlatformClassification, comparePriceClassification } from '../src/comparison.mjs';
 import { detectManualBlock, mergeListingAndFormatComparisons, runPortalAutomation } from '../src/portal.mjs';
 import { parseArgs } from '../src/cli.mjs';
 import { startFixture } from './fixtures/server.mjs';
@@ -180,11 +180,78 @@ test('listing locator cannot be preflighted while format view is active', async 
   const page = await context.newPage();
   await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
   await page.getByRole('button', { name: 'Unreal Engine', exact: true }).click();
-  const preflight = await preflightMutationPlan(page, [{ fieldName: 'shortDescription', view: 'listing', locatorStrategy: 'getByLabel', locatorExpression: 'page.getByLabel("Short description *")', mutationType: 'text' }], manifest);
+  const preflight = await preflightMutationPlan(page, [{ fieldName: 'shortDescription', view: 'listing', locator: { strategy: 'getByLabel', name: 'Short description *', exact: true }, locatorStrategy: 'getByLabel', locatorExpression: 'page.getByLabel("Short description *")', mutationType: 'text' }], manifest);
   assert.equal(preflight.ok, false);
   assert.match(preflight.failures.join(' '), /not visible|match count/i);
   await context.close();
   await fixture.close();
+});
+
+test('technical information uses the approved contenteditable target without an aria label', async () => {
+  const manifest = makeManifest({ technicalInformationText: 'New technical information' });
+  const { result, fixture } = await scenario({ manifest, state: { technicalInformationText: 'Old technical information', technicalInformationNoLabel: true }, mode: 'save', saveDraftAuthorized: true });
+  const technical = result.plannedMutations.find((item) => item.fieldName === 'technicalInformationFile');
+  assert.equal(result.result, 'PASS');
+  assert.equal(technical.view, 'format');
+  assert.equal(technical.locator.strategy, 'contenteditable');
+  assert.equal(technical.locator.selector, '[contenteditable="true"]');
+  assert.equal(result.executedMutations.includes('technicalInformationFile'), true);
+  assert.equal(fixture.mutations.filter((item) => item.pathname === '/api/save').length, 1);
+  assert.equal(fixture.mutations[0].body.technicalInformationText, 'New technical information');
+  assert.equal(fixture.mutations[0].body.technicalInformationText.includes('FabTechnicalInformation.txt'), false);
+});
+
+test('preflight never falls back from the comparison-approved locator', async () => {
+  const manifest = makeManifest({ shortDescription: 'Changed short description' });
+  const fixture = await startFixture(fixtureState(manifest, { shortDescription: 'Old short description' }));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const info = await makeManifestInfo(manifest);
+  try {
+    await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+    const comparison = await compareManifest(page, info, { view: 'listing' });
+    const mutation = buildMutationPlan(comparison, info);
+    assert.equal(mutation.plan[0].locator.strategy, 'getByLabel');
+    await page.evaluate(() => {
+      document.querySelector('[aria-label="Short description *"]').closest('label').remove();
+      const fallback = document.createElement('input');
+      fallback.setAttribute('aria-label', 'Short description');
+      fallback.value = 'Fallback control';
+      document.body.append(fallback);
+    });
+    const preflight = await preflightMutationPlan(page, mutation.plan, manifest);
+    assert.equal(preflight.ok, false);
+    assert.match(preflight.failures.join(' '), /approved|target|match count/i);
+    assert.deepEqual(preflight.targets, []);
+    assert.equal(fixture.mutations.length, 0);
+  } finally {
+    await context.close();
+    await fixture.close();
+  }
+});
+
+test('DOM change after global preflight fails before the first exact-target mutation', async () => {
+  const manifest = makeManifest({ shortDescription: 'Changed short description' });
+  const fixture = await startFixture(fixtureState(manifest, { shortDescription: 'Old short description' }));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const info = await makeManifestInfo(manifest);
+  try {
+    await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+    const comparison = await compareManifest(page, info, { view: 'listing' });
+    const mutation = buildMutationPlan(comparison, info);
+    const preflight = await preflightMutationPlan(page, mutation.plan, manifest);
+    assert.equal(preflight.ok, true);
+    await page.evaluate(() => document.querySelector('[aria-label="Short description *"]').remove());
+    await assert.rejects(
+      executeMutationPlan(page, preflight, info),
+      /approved|target|match count|visible/i,
+    );
+    assert.equal(fixture.mutations.length, 0);
+  } finally {
+    await context.close();
+    await fixture.close();
+  }
 });
 
 test('duplicate mutation targets are rejected before execution', () => {

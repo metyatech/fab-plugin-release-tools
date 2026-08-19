@@ -6,8 +6,34 @@ function expressionFor(strategy, value) {
   return `page.locator(${quoted})`;
 }
 
-export function candidate(strategy, value, create, { confidence = 'high', reason = 'Approved semantic locator.', expression = null } = {}) {
-  return { strategy, value, create, expression: expression ?? expressionFor(strategy, value), confidence, reason };
+function defaultDescriptor(strategy, value) {
+  if (strategy === 'getByLabel') return { strategy, name: value, exact: true };
+  if (strategy === 'getByRole') {
+    const separator = String(value).indexOf(':');
+    return separator < 0
+      ? { strategy, role: value, name: null, exact: true }
+      : { strategy, role: String(value).slice(0, separator), name: String(value).slice(separator + 1), exact: true };
+  }
+  if (strategy === 'getByText') return { strategy, text: value, exact: true };
+  if (strategy === 'contenteditable') return { strategy, selector: '[contenteditable="true"]' };
+  if (strategy === 'testId') return { strategy, value };
+  if (strategy === 'css') return { strategy, selector: value };
+  return { strategy, value };
+}
+
+export function candidate(strategy, value, create, { confidence = 'high', reason = 'Approved semantic locator.', expression = null, locator = null } = {}) {
+  return { strategy, value, create, expression: expression ?? expressionFor(strategy, value), locator: locator ?? defaultDescriptor(strategy, value), confidence, reason };
+}
+
+export function resolveLocatorDescriptor(page, descriptor) {
+  if (!descriptor || typeof descriptor !== 'object' || typeof descriptor.strategy !== 'string') return null;
+  if (descriptor.strategy === 'getByLabel' && typeof descriptor.name === 'string') return page.getByLabel(descriptor.name, { exact: descriptor.exact !== false });
+  if (descriptor.strategy === 'getByRole' && typeof descriptor.role === 'string' && (descriptor.name === null || typeof descriptor.name === 'string')) return page.getByRole(descriptor.role, { name: descriptor.name ?? undefined, exact: descriptor.exact !== false });
+  if (descriptor.strategy === 'getByText' && typeof descriptor.text === 'string') return page.getByText(descriptor.text, { exact: descriptor.exact !== false });
+  if (descriptor.strategy === 'testId' && typeof descriptor.value === 'string') return page.getByTestId(descriptor.value);
+  if (descriptor.strategy === 'contenteditable' && descriptor.selector === '[contenteditable="true"]') return page.locator('[contenteditable="true"]');
+  if (descriptor.strategy === 'css' && ['[data-testid="media-upload"]', '[data-testid="media-gallery"]'].includes(descriptor.selector)) return page.locator(descriptor.selector);
+  return null;
 }
 
 export async function resolveCandidate(page, candidates) {
@@ -55,10 +81,10 @@ export async function resolveCandidate(page, candidates) {
   };
 }
 
-const role = (name, type) => candidate('getByRole', `${type}:${name}`, (page) => page.getByRole(type, { name, exact: true }), { expression: `page.getByRole("${type}", { name: ${JSON.stringify(name)}, exact: true })` });
-const label = (name) => candidate('getByLabel', name, (page) => page.getByLabel(name, { exact: true }));
-const text = (name, confidence = 'medium') => candidate('getByText', name, (page) => page.getByText(name, { exact: true }), { confidence, reason: 'Visible static value locator; not a generated CSS selector.' });
-const contentEditable = () => candidate('contenteditable', '[contenteditable="true"]', (page) => page.locator('[contenteditable="true"]'), { expression: 'page.locator(\'[contenteditable="true"]\')', reason: 'Stable semantic contenteditable locator uniquely matches the visible editor.' });
+const role = (name, type) => candidate('getByRole', `${type}:${name}`, (page) => page.getByRole(type, { name, exact: true }), { expression: `page.getByRole("${type}", { name: ${JSON.stringify(name)}, exact: true })`, locator: { strategy: 'getByRole', role: type, name, exact: true } });
+const label = (name) => candidate('getByLabel', name, (page) => page.getByLabel(name, { exact: true }), { locator: { strategy: 'getByLabel', name, exact: true } });
+const text = (name, confidence = 'medium') => candidate('getByText', name, (page) => page.getByText(name, { exact: true }), { confidence, reason: 'Visible static value locator; not a generated CSS selector.', locator: { strategy: 'getByText', text: name, exact: true } });
+const contentEditable = () => candidate('contenteditable', '[contenteditable="true"]', (page) => page.locator('[contenteditable="true"]'), { expression: 'page.locator(\'[contenteditable="true"]\')', reason: 'Stable semantic contenteditable locator uniquely matches the visible editor.', locator: { strategy: 'contenteditable', selector: '[contenteditable="true"]' } });
 
 export function fieldCandidates(field, manifest = {}) {
   switch (field) {
@@ -90,7 +116,7 @@ export function fieldCandidates(field, manifest = {}) {
 export function mediaCandidates({ fixture = false } = {}) {
   if (!fixture) return [];
   return [
-    candidate('testId', 'media-gallery', (page) => page.getByTestId('media-gallery'), { expression: 'page.getByTestId("media-gallery")' }),
+    candidate('testId', 'media-gallery', (page) => page.getByTestId('media-gallery'), { expression: 'page.getByTestId("media-gallery")', locator: { strategy: 'testId', value: 'media-gallery' } }),
     candidate('css', '[data-testid="media-gallery"]', (page) => page.locator('[data-testid="media-gallery"]')),
   ];
 }

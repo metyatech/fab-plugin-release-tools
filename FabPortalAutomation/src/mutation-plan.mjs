@@ -1,4 +1,4 @@
-import { fieldCandidates, resolveCandidate } from './locators.mjs';
+import { resolveLocatorDescriptor } from './locators.mjs';
 
 const SUPPORTED_MUTATIONS = new Set(['text', 'richText', 'combobox', 'boolean', 'upload']);
 
@@ -16,7 +16,7 @@ export function buildMutationPlan(comparison, manifestInfo) {
   for (const field of comparison.fields) {
     if (field.classification !== 'MISMATCH') continue;
     const fieldName = field.manifestJsonPath;
-    const type = mutationType(fieldName);
+    const type = field.writeTarget?.mutationType ?? mutationType(fieldName);
     if (!field.writeTarget || !SUPPORTED_MUTATIONS.has(type)) {
       blockers.push(`${fieldName} differs but has no approved writable locator.`);
       continue;
@@ -29,11 +29,27 @@ export function buildMutationPlan(comparison, manifestInfo) {
     const desired = packageMatch
       ? manifestInfo.manifest.packages[Number(packageMatch[1])].projectFileLink
       : fieldName === 'technicalInformationFile' ? manifestInfo.technicalInformationText : manifestInfo.manifest[fieldName];
-    plan.push({ fieldName, view: field.writeTarget.view ?? field.view ?? 'listing', currentNormalizedValue: field.currentNormalizedValue, desiredNormalizedValue: desired, locatorStrategy: field.writeTarget.strategy, locatorExpression: field.writeTarget.expression, mutationType: type, checkedValue: field.writeTarget.checkedValue });
+    plan.push({ fieldName, view: field.writeTarget.view ?? field.view ?? 'listing', currentNormalizedValue: field.currentNormalizedValue, desiredNormalizedValue: desired, locator: field.writeTarget.locator ?? null, locatorStrategy: field.writeTarget.strategy, locatorExpression: field.writeTarget.expression, mutationType: type, checkedValue: field.writeTarget.checkedValue });
   }
-  const keys = plan.map((entry) => `${entry.view}:${entry.locatorStrategy}:${entry.locatorExpression}`);
+  const keys = plan.map((entry) => `${entry.view}:${JSON.stringify(entry.locator)}`);
   if (new Set(keys).size !== keys.length) blockers.push('Mutation plan contains duplicate target locators.');
   return { plan, blockers };
+}
+
+async function resolveExactWritableTarget(page, item) {
+  const locator = resolveLocatorDescriptor(page, item.locator);
+  if (!locator) return { ok: false, failures: [`${item.fieldName}: approved locator descriptor is missing or unsupported.`] };
+  const count = await locator.count();
+  const visibleIndexes = [];
+  for (let index = 0; index < count; index += 1) {
+    if (await locator.nth(index).isVisible().catch(() => false)) visibleIndexes.push(index);
+  }
+  if (visibleIndexes.length !== 1) return { ok: false, failures: [`${item.fieldName}: approved locator visible match count is ${visibleIndexes.length}.`] };
+  const target = locator.nth(visibleIndexes[0]);
+  const disabled = await target.isDisabled().catch(() => false);
+  if (disabled) return { ok: false, failures: [`${item.fieldName}: approved locator is disabled.`] };
+  if (item.mutationType !== 'upload' && !await target.isEditable().catch(() => false)) return { ok: false, failures: [`${item.fieldName}: approved locator is not writable.`] };
+  return { ok: true, locator: target };
 }
 
 export async function preflightMutationPlan(page, plan, manifest) {
@@ -41,26 +57,12 @@ export async function preflightMutationPlan(page, plan, manifest) {
   const failures = [];
   const resolvedTargets = [];
   for (const item of plan) {
-    const candidates = item.fieldName === 'media'
-      ? [{ strategy: 'testId', expression: 'page.getByTestId("media-upload")', create: (currentPage) => currentPage.getByTestId('media-upload'), confidence: 'high', reason: 'Controlled empty gallery upload target.' }]
-      : fieldCandidates(item.fieldName.startsWith('packages[') ? 'projectFileLink' : item.fieldName, manifest);
-    const resolved = await resolveCandidate(page, candidates);
-    const key = `${resolved.candidate?.strategy}:${resolved.candidate?.expression}`;
+    const key = `${item.view ?? 'listing'}:${JSON.stringify(item.locator)}`;
     if (checked.has(key)) failures.push(`${item.fieldName}: duplicate locator target.`);
     checked.add(key);
-    const count = await resolved.locator.count();
-    if (count !== 1) failures.push(`${item.fieldName}: locator match count is ${count}.`);
-    if (count === 1) {
-      const visible = await resolved.locator.isVisible().catch(() => false);
-      if (!visible) failures.push(`${item.fieldName}: control is not visible in the expected ${item.view ?? 'listing'} view.`);
-      let disabled = false;
-      let editable = false;
-      try { disabled = await resolved.locator.isDisabled(); } catch { /* static controls are not writable */ }
-      try { editable = await resolved.locator.isEditable(); } catch { /* static controls are not writable */ }
-      if (disabled) failures.push(`${item.fieldName}: control is disabled.`);
-      if (!editable && item.mutationType !== 'upload') failures.push(`${item.fieldName}: control is not writable.`);
-      resolvedTargets.push({ item, locator: resolved.locator, resolved });
-    }
+    const resolved = await resolveExactWritableTarget(page, item);
+    if (!resolved.ok) failures.push(...resolved.failures);
+    else resolvedTargets.push({ item, locator: resolved.locator });
   }
   return { ok: failures.length === 0, failures, targets: resolvedTargets };
 }
@@ -74,8 +76,11 @@ async function selectExactOption(page, desired) {
 
 export async function executeMutationPlan(page, preflight, manifestInfo, { setPhase = null, assertView = null } = {}) {
   const executed = [];
-  for (const { item, locator } of preflight.targets) {
+  for (const { item } of preflight.targets) {
     await assertView?.(item.view ?? 'listing');
+    const exact = await resolveExactWritableTarget(page, item);
+    if (!exact.ok) throw new Error(`Execution target validation failed: ${exact.failures.join(' ')}`);
+    const locator = exact.locator;
     setPhase?.(item.mutationType === 'upload' ? 'media-upload' : 'field-update');
     const packageMatch = item.fieldName.match(/^packages\[(\d+)\]\.projectFileLink$/);
     const desired = packageMatch
@@ -96,7 +101,7 @@ export async function executeMutationPlan(page, preflight, manifestInfo, { setPh
         }
       } else if (item.mutationType === 'upload') {
         const files = manifestInfo.mediaFiles.map((file) => file.path);
-        await page.getByTestId('media-upload').setInputFiles(files);
+        await locator.setInputFiles(files);
       }
     } finally {
       setPhase?.('stage');

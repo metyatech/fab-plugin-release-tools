@@ -9,7 +9,7 @@ export function fieldView(field) {
 
 function writeTargetFor(field, view, target) {
   if (!target || fieldView(field) !== view) return null;
-  return { ...target, view };
+  return { ...target, view, locator: target.locator ?? null };
 }
 
 function normalizeText(value) {
@@ -102,7 +102,7 @@ async function compareTextField(page, manifest, field, labelName = field, option
   const current = value.value || value.placeholder;
   const state = semanticState(current, desired, options);
   const target = value.visible && value.editable && !value.disabled && resolved.metadata?.unique
-    ? writeTargetFor(field, options.view ?? 'listing', { strategy: resolved.candidate.strategy, expression: resolved.candidate.expression, field })
+    ? writeTargetFor(field, options.view ?? 'listing', { strategy: resolved.candidate.strategy, expression: resolved.candidate.expression, field, locator: resolved.candidate.locator })
     : null;
   return fieldResult({ manifestJsonPath: field, portalLabel: labelName, desired, current, state, resolved, editableControlAvailable: value.editable && !value.disabled, notes: value.count === 1 ? '' : 'No unique readable portal control was found.', writeTarget: target });
 }
@@ -111,7 +111,7 @@ async function compareCategory(page, manifest, view = 'listing') {
   const { resolved, value } = await locateField(page, 'category', manifest);
   const current = value.visible ? value.value || value.placeholder || '' : '';
   const state = semanticState(current, manifest.category);
-  const target = value.visible && value.editable && !value.disabled ? writeTargetFor('category', view, { strategy: resolved.candidate.strategy, expression: resolved.candidate.expression, field: 'category', mutationType: 'combobox' }) : null;
+  const target = value.visible && value.editable && !value.disabled ? writeTargetFor('category', view, { strategy: resolved.candidate.strategy, expression: resolved.candidate.expression, field: 'category', mutationType: 'combobox', locator: resolved.candidate.locator }) : null;
   return fieldResult({ manifestJsonPath: 'category', portalLabel: 'Category *', desired: manifest.category, current, state, resolved, editableControlAvailable: value.visible && value.editable && !value.disabled, notes: value.value ? '' : 'Category is exposed through the read-only combobox placeholder.', writeTarget: target });
 }
 
@@ -135,7 +135,7 @@ async function compareBoolean(page, manifest, field, labelName, desired, options
   let current = !value.visible || value.checked === null ? null : (value.checked ? options.checkedValue : !options.checkedValue);
   if (current === null && value.value) current = options.readText?.(value.value);
   const state = current === null ? 'NOT_VISIBLE' : current === desired ? 'MATCH' : 'MISMATCH';
-  const target = value.visible && value.editable && !value.disabled ? writeTargetFor(field, options.view ?? 'listing', { strategy: resolved.candidate.strategy, expression: resolved.candidate.expression, field, mutationType: 'boolean', checkedValue: options.checkedValue }) : null;
+  const target = value.visible && value.editable && !value.disabled ? writeTargetFor(field, options.view ?? 'listing', { strategy: resolved.candidate.strategy, expression: resolved.candidate.expression, field, mutationType: 'boolean', checkedValue: options.checkedValue, locator: resolved.candidate.locator }) : null;
   return fieldResult({ manifestJsonPath: field, portalLabel: labelName, desired, current, state, resolved, editableControlAvailable: value.visible && value.editable && !value.disabled, notes: current === null ? 'Boolean state was not safely readable.' : '', writeTarget: target });
 }
 
@@ -145,7 +145,7 @@ async function comparePriceField(page, manifest, field, labelName, view = 'listi
   const current = value.visible ? value.value || value.placeholder : null;
   const state = comparePriceClassification(current, desired);
   const target = value.visible && value.editable && !value.disabled && resolved.metadata?.unique
-    ? writeTargetFor(field, view, { strategy: resolved.candidate.strategy, expression: resolved.candidate.expression, field })
+    ? writeTargetFor(field, view, { strategy: resolved.candidate.strategy, expression: resolved.candidate.expression, field, locator: resolved.candidate.locator })
     : null;
   return fieldResult({ manifestJsonPath: field, portalLabel: labelName, desired, current, state, resolved, editableControlAvailable: value.visible && value.editable && !value.disabled, notes: state === 'MISMATCH' && current ? 'Portal price was readable but did not normalize to the manifest USD cents value.' : '', writeTarget: target });
 }
@@ -174,7 +174,7 @@ async function compareMedia(page, manifest, view = 'listing') {
   if (existing === 'empty') {
     const current = [];
     const state = manifest.media.length === 0 ? 'MATCH' : 'MISMATCH';
-    return fieldResult({ manifestJsonPath: 'media', portalLabel: 'Media', desired: manifest.media.map((item) => ({ order: item.order, role: item.role })), current, state, resolved, editableControlAvailable: true, notes: 'Empty gallery; controlled upload is safe only for a new empty gallery.', writeTarget: state === 'MISMATCH' ? writeTargetFor('media', view, { strategy: 'testId', expression: 'page.getByTestId("media-upload")', field: 'media', mutationType: 'upload' }) : null });
+    return fieldResult({ manifestJsonPath: 'media', portalLabel: 'Media', desired: manifest.media.map((item) => ({ order: item.order, role: item.role })), current, state, resolved, editableControlAvailable: true, notes: 'Empty gallery; controlled upload is safe only for a new empty gallery.', writeTarget: state === 'MISMATCH' ? writeTargetFor('media', view, { strategy: 'testId', expression: 'page.getByTestId("media-upload")', field: 'media', mutationType: 'upload', locator: { strategy: 'testId', value: 'media-upload' } }) : null });
   }
   if (existing === 'known' || existing === 'uploaded') {
     const desiredOrder = manifest.media.map((item) => `${item.order}:${item.role}`).join(',');
@@ -194,8 +194,13 @@ async function compareLicense(page, manifest) {
 
 async function visibleContentEditor(page) {
   const locator = page.locator('[contenteditable="true"]');
-  if (await locator.count() !== 1 || !await locator.isVisible().catch(() => false)) return null;
-  return { locator, text: await locator.innerText().catch(() => '') };
+  const visibleIndexes = [];
+  for (let index = 0; index < await locator.count(); index += 1) {
+    if (await locator.nth(index).isVisible().catch(() => false)) visibleIndexes.push(index);
+  }
+  if (visibleIndexes.length !== 1) return null;
+  const visible = locator.nth(visibleIndexes[0]);
+  return { locator: visible, text: await visible.innerText().catch(() => '') };
 }
 
 async function isFormatView(page) {
@@ -242,7 +247,7 @@ async function compareTechnicalInformation(page, manifestInfo, view = 'listing')
   const editable = await editor.locator.isEditable().catch(() => false);
   const disabled = await editor.locator.isDisabled().catch(() => false);
   const writeTarget = editable && !disabled
-    ? writeTargetFor('technicalInformationFile', view, { strategy: 'contenteditable', expression: 'page.locator(\'[contenteditable="true"]\')', field: 'technicalInformationFile' })
+    ? writeTargetFor('technicalInformationFile', view, { strategy: 'contenteditable', expression: 'page.locator(\'[contenteditable="true"]\')', field: 'technicalInformationFile', locator: { strategy: 'contenteditable', selector: '[contenteditable="true"]' } })
     : null;
   return fieldResult({ manifestJsonPath: 'technicalInformationFile', portalLabel: 'Technical Information', desired, current, state, resolved: contentEditorResolution(), editableControlAvailable: editable && !disabled, notes: 'Read from the visible Technical details contenteditable editor; the manifest file path remains provenance only.', writeTarget });
 }
@@ -366,7 +371,7 @@ export async function compareManifest(page, manifestInfo, { view = 'listing' } =
       current = await link.count() === 1 && await link.isVisible().catch(() => false) ? pkg.projectFileLink : null;
     }
     const editable = resolved.metadata?.unique ? await readLocator(resolved.locator) : null;
-    fields.push(fieldResult({ manifestJsonPath: field, portalLabel: 'Project file', desired: pkg.projectFileLink, current, state: semanticState(current, pkg.projectFileLink), resolved, editableControlAvailable: Boolean(editable?.editable && !editable.disabled), notes: current ? '' : 'Project File Link is not visible in the current format section.', writeTarget: editable?.editable && !editable.disabled ? writeTargetFor(field, view, { strategy: resolved.candidate.strategy, expression: resolved.candidate.expression, field }) : null }));
+    fields.push(fieldResult({ manifestJsonPath: field, portalLabel: 'Project file', desired: pkg.projectFileLink, current, state: semanticState(current, pkg.projectFileLink), resolved, editableControlAvailable: Boolean(editable?.editable && !editable.disabled), notes: current ? '' : 'Project File Link is not visible in the current format section.', writeTarget: editable?.editable && !editable.disabled ? writeTargetFor(field, view, { strategy: resolved.candidate.strategy, expression: resolved.candidate.expression, field, locator: resolved.candidate.locator }) : null }));
   }
   for (const field of fields) field.view = view;
   return summarizeComparison(fields);

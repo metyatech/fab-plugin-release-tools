@@ -52,7 +52,7 @@ function pageMarkup(state, listingId) {
     <section aria-label="Technical details">
       <p>Documentation: ${html(state.documentationUrl)}</p>
       <p>Support: ${html(state.supportUrl)}</p>
-      <div aria-label="Technical Information" contenteditable="true">${html(state.technicalInformationText)}</div>
+      <div ${state.technicalInformationNoLabel ? '' : 'aria-label="Technical Information" '}contenteditable="true">${html(state.technicalInformationText)}</div>
     </section>
     <section data-testid="media-gallery" data-existing="${html(state.mediaExisting)}" data-order="${html(state.mediaOrder ?? '')}" data-upload-order="${html(initialStateMediaOrder(state))}">${html(state.mediaExisting === 'existing' ? 'Existing media' : state.mediaExisting === 'known' || state.mediaExisting === 'uploaded' ? '001 thumbnail 002 gallery' : 'Empty gallery')}</section>
     <input type="file" data-testid="media-upload" multiple>`;
@@ -66,7 +66,7 @@ function pageMarkup(state, listingId) {
     const syncFormatState = () => {
       const project = document.querySelector('[aria-label="Project File Link"]');
       if (project) window.fixtureProjectFileLink = project.value;
-      const technical = document.querySelector('[aria-label="Technical Information"]');
+      const technical = formatView.querySelector('[contenteditable="true"]');
       if (technical) window.fixtureTechnicalInformationText = technical.innerText;
     };
     const setView = (view) => {
