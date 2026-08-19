@@ -107,7 +107,9 @@ function ConvertTo-FabProductStringArray {
         [object]$Object,
 
         [Parameter(Mandatory)]
-        [string]$Name
+        [string]$Name,
+
+        [switch]$AllowEmpty
     )
 
     $property = $Object.PSObject.Properties[$Name]
@@ -116,7 +118,8 @@ function ConvertTo-FabProductStringArray {
         throw "Listing field '$Name' must be an array."
     }
     $values = @($property.Value | ForEach-Object { [string]$_ })
-    if ($values.Count -eq 0 -or @($values | Where-Object { [string]::IsNullOrWhiteSpace($_) }).Count -gt 0) {
+    if (($values.Count -eq 0 -and -not $AllowEmpty) -or
+        @($values | Where-Object { [string]::IsNullOrWhiteSpace($_) }).Count -gt 0) {
         throw "Listing field '$Name' must contain non-blank values."
     }
     return $values
@@ -314,7 +317,7 @@ function Import-FabProductListing {
             'promotional_content', 'forum_post')) {
         [void](Assert-FabProductListingBoolean -Object $listing -Name $name)
     }
-    $subcategory = @(ConvertTo-FabProductStringArray -Object $listing -Name 'subcategory')
+    $subcategory = @(ConvertTo-FabProductStringArray -Object $listing -Name 'subcategory' -AllowEmpty)
     $tags = @(ConvertTo-FabProductStringArray -Object $listing -Name 'tags_ordered')
     $tagSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($tag in $tags) {

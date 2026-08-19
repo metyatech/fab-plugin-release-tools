@@ -83,6 +83,9 @@ The product repository must also contain `FabListingFields.json` unless
 [FabListingFields.schema.json](FabListingFields.schema.json). It contains the
 listing copy, prices, booleans, ordered tags, per-engine metadata, and ordered
 PNG/JPEG media. Existing listing files may retain additional useful metadata.
+The required `subcategory` property is always an array: use `[]` when Fab has
+no distinct subcategory below the selected category, or list the actual
+subcategory values when Fab exposes them.
 The engine versions, platforms, documentation URL, and support URL are
 cross-checked against `FabPluginRelease.json`; media files must be regular
 files below the plugin root. The first media file is the thumbnail and all

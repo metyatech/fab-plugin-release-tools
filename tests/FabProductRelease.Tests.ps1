@@ -380,6 +380,53 @@ public sealed class FabProductTestHttpMessageHandler : HttpMessageHandler
         @($manifest.packages | Where-Object { $null -ne $_.projectFileLink }) | Should -HaveCount 0
     }
 
+    It 'accepts an explicitly empty subcategory and preserves taxonomy levels in the manifest' {
+        $root = Join-Path $TestDrive 'EmptySubcategory'
+        $outputRoot = Join-Path $TestDrive 'EmptySubcategoryArtifacts'
+        Initialize-ProductFixture -Root $root -EngineVersions @('5.8') | Out-Null
+        $listingPath = Join-Path $root 'FabListingFields.json'
+        $listing = Get-Content -Raw -LiteralPath $listingPath | ConvertFrom-Json
+        $listing.product_type = 'Tools & Plugins'
+        $listing.category = 'Network & Multiplayer'
+        $listing.subcategory = @()
+        Write-ProductFixtureJson -Value $listing -Path $listingPath
+
+        Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot | Out-Null
+        $manifest = Get-Content -Raw -LiteralPath (
+            Join-Path $outputRoot 'TestPlugin\FabSubmission\FabPortalSubmission.json') | ConvertFrom-Json
+        $manifest.productType | Should -BeExactly 'Tools & Plugins'
+        $manifest.category | Should -BeExactly 'Network & Multiplayer'
+        @($manifest.subcategory) | Should -HaveCount 0
+    }
+
+    It 'accepts a non-empty subcategory without changing its value' {
+        $root = Join-Path $TestDrive 'NonEmptySubcategory'
+        $outputRoot = Join-Path $TestDrive 'NonEmptySubcategoryArtifacts'
+        Initialize-ProductFixture -Root $root -EngineVersions @('5.8') | Out-Null
+        Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot | Out-Null
+        $manifest = Get-Content -Raw -LiteralPath (
+            Join-Path $outputRoot 'TestPlugin\FabSubmission\FabPortalSubmission.json') | ConvertFrom-Json
+        @($manifest.subcategory) | Should -BeExactly @('Testing')
+    }
+
+    It 'rejects invalid subcategory arrays while preserving required-array validation' -ForEach @(
+        @{ Name = 'blank subcategory item'; Mutate = { param($listing) $listing.subcategory = @('   ') }; Pattern = '*non-blank*' },
+        @{ Name = 'missing subcategory'; Mutate = { param($listing) $listing.PSObject.Properties.Remove('subcategory') }; Pattern = '*schema.json*' },
+        @{ Name = 'empty tags_ordered'; Mutate = { param($listing) $listing.tags_ordered = @() }; Pattern = '*schema.json*' },
+        @{ Name = 'empty engine_versions'; Mutate = { param($listing) $listing.engine_versions = @() }; Pattern = '*schema.json*' },
+        @{ Name = 'empty platforms'; Mutate = { param($listing) $listing.platforms = @() }; Pattern = '*schema.json*' }) {
+        $root = Join-Path $TestDrive "InvalidEmptyArray-$Name"
+        $outputRoot = Join-Path $TestDrive "InvalidEmptyArrayArtifacts-$Name"
+        Initialize-ProductFixture -Root $root -EngineVersions @('5.8') | Out-Null
+        $listingPath = Join-Path $root 'FabListingFields.json'
+        $listing = Get-Content -Raw -LiteralPath $listingPath | ConvertFrom-Json
+        & $Mutate $listing
+        Write-ProductFixtureJson -Value $listing -Path $listingPath
+
+        { Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot } |
+            Should -Throw $Pattern
+    }
+
     It 'accepts the existing extended listing metadata without discarding it' {
         $root = Join-Path $TestDrive 'ExtendedListing'
         $outputRoot = Join-Path $TestDrive 'ExtendedListingArtifacts'
