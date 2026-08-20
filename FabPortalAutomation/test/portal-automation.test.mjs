@@ -9,6 +9,7 @@ import { installNetworkGuard } from '../src/network-guard.mjs';
 import { compareManifest, comparePlatformClassification, comparePriceClassification } from '../src/comparison.mjs';
 import { detectManualBlock, mergeListingAndFormatComparisons, runPortalAutomation, selectExistingTargetPage } from '../src/portal.mjs';
 import { parseArgs } from '../src/cli.mjs';
+import { classifyFabView, FAB_VIEW } from '../src/view-detection.mjs';
 import { startFixture } from './fixtures/server.mjs';
 import { fixtureState, makeManifest, makeManifestInfo, listingId } from './helpers.mjs';
 
@@ -692,13 +693,55 @@ test('format view owns format controls and hides listing controls', async () => 
   const context = await browser.newContext();
   const page = await context.newPage();
   await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+  assert.equal(await classifyFabView(page), FAB_VIEW.LISTING_MAIN_VIEW);
   assert.equal(await page.getByLabel('Short description *', { exact: true }).isVisible(), true);
   assert.equal(await page.getByLabel('Project File Link', { exact: true }).isVisible(), false);
   await page.getByRole('button', { name: 'Unreal Engine', exact: true }).click();
+  assert.equal(await classifyFabView(page), FAB_VIEW.FORMAT_VIEW);
   assert.equal(await page.getByLabel('Short description *', { exact: true }).isVisible(), false);
   assert.equal(await page.getByLabel('Project File Link', { exact: true }).isVisible(), true);
   await context.close();
   await fixture.close();
+});
+
+test('Project Versions on the listing main view does not trigger Back to listings navigation', async () => {
+  const { result, fixture } = await scenario({ state: { mainProjectVersionsVisible: true } });
+  assert.equal(result.result, 'PASS');
+  assert.equal(result.hardNavigationCount, 0);
+  assert.equal(result.writeInteractionsPerformed, 0);
+  assert.equal(fixture.mutations.length, 0);
+});
+
+test('Back to listings is never accepted as the format back control', async () => {
+  const manifest = makeManifest();
+  const fixture = await startFixture(fixtureState(manifest, { mainProjectVersionsVisible: true }));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  try {
+    await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+    assert.equal(await page.getByRole('link', { name: 'Back to listings', exact: true }).getAttribute('href'), '/portal/listings');
+    assert.equal(await classifyFabView(page), FAB_VIEW.LISTING_MAIN_VIEW);
+    assert.equal(page.url(), `${fixture.origin}/portal/listings/${listingId}/edit`);
+  } finally {
+    await context.close();
+    await fixture.close();
+  }
+});
+
+test('format view without singular back uses the observed listing summary control', async () => {
+  const setup = await attachedRunSetup({ state: { omitFormatBack: true, formatListingSummaryVisible: true, formatTitleVisible: true } });
+  try {
+    await setup.page.getByRole('button', { name: 'Unreal Engine', exact: true }).click();
+    assert.equal(await classifyFabView(setup.page), FAB_VIEW.FORMAT_VIEW);
+    const result = await runPortalAutomation({ manifestInfo: setup.info, mode: setup.mode, saveDraftAuthorized: setup.saveDraftAuthorized, origin: setup.fixture.origin, page: setup.page, context: setup.context, manualInteraction: setup.manualInteraction });
+    assert.equal(result.result, 'PASS');
+    assert.equal(result.hardNavigationCount, 0);
+    assert.equal(result.writeInteractionsPerformed, 0);
+    assert.equal(setup.fixture.mutations.length, 0);
+  } finally {
+    await setup.context.close();
+    await setup.fixture.close();
+  }
 });
 
 test('format evidence merges documentation and support when the listing view is unresolved', () => {

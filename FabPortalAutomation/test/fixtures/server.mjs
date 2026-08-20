@@ -28,6 +28,7 @@ function pageMarkup(state, listingId) {
     <label>Category *<input role="combobox" aria-label="Category selection" value="${html(state.category)}"></label>
     <label>Tags *<input aria-label="Tags *" value="${html(state.tags[0] ?? '')}" readonly></label>
     <button type="button" data-testid="included-format">Unreal Engine</button>
+    ${state.mainProjectVersionsVisible ? '<h2>Project Versions*</h2><a href="/portal/listings">Back to listings</a>' : ''}
     ${radio('Standard License (Free or Paid)', true)}
     <label>Personal price *<input aria-label="Personal price *" value="${html(state.personalPriceUsd)}"></label>
     <label>Professional price *<input aria-label="Professional price *" value="${html(state.professionalPriceUsd)}"></label>
@@ -44,8 +45,11 @@ function pageMarkup(state, listingId) {
     ${unrelatedDialog}
     ${confirmationDialog}`;
   const formatControls = `
-    <button type="button" aria-label="Back to listing">Back to listing</button>
+    ${state.omitFormatBack ? '' : '<button type="button" aria-label="Back to listing">Back to listing</button>'}
+    ${state.formatListingSummaryVisible ? `<button type="button" data-testid="format-listing-summary">${html(state.title)} Tools &amp; Plugins From $29.99</button>` : ''}
+    ${state.formatTitleVisible ? `<span data-testid="format-listing-title">${html(state.title)}</span>` : ''}
     <h2>Unreal Engine</h2>
+    <h2>Manage format</h2>
     <h3>Project Versions*</h3>
     ${state.engineVersions.map((version) => `<div>UE_${html(version)}</div>`).join('')}
     <button type="button" aria-label="Remove ${html(state.platformDisplay ?? 'Windows')}">Remove ${html(state.platformDisplay ?? 'Windows')}</button>
@@ -104,7 +108,8 @@ function pageMarkup(state, listingId) {
       mediaOrder: document.querySelector('[data-testid="media-gallery"]')?.dataset.order ?? ''
     });
     document.querySelector('[data-testid="included-format"]').addEventListener('click', () => setView('format'));
-    document.querySelector('[aria-label="Back to listing"]').addEventListener('click', () => setView('listing'));
+    document.querySelector('[aria-label="Back to listing"]')?.addEventListener('click', () => setView('listing'));
+    document.querySelector('[data-testid="format-listing-summary"]')?.addEventListener('click', () => setView('listing'));
     document.querySelector('[data-testid="save"]').addEventListener('click', () => { syncFormatState(); if (${JSON.stringify(Boolean(state.challengeAfterSave))}) revealChallenge(); fetch('/api/save', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload()) }); });
     const submitRequest = async () => {
       const response = await fetch(${JSON.stringify(state.submitRequestPath ?? '/api/submit')}, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) });

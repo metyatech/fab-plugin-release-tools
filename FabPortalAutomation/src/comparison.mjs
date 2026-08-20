@@ -1,4 +1,5 @@
 import { fieldCandidates, mediaCandidates, resolveCandidate } from './locators.mjs';
+import { isFormatView } from './view-detection.mjs';
 
 export const COMPARISON_STATES = ['MATCH', 'MISMATCH', 'NOT_VISIBLE', 'NOT_DISCOVERED', 'NOT_APPLICABLE'];
 const FORMAT_OWNED_FIELDS = new Set(['engineVersions', 'platforms', 'technicalInformationFile', 'media']);
@@ -201,11 +202,6 @@ async function visibleContentEditor(page) {
   if (visibleIndexes.length !== 1) return null;
   const visible = locator.nth(visibleIndexes[0]);
   return { locator: visible, text: await visible.innerText().catch(() => '') };
-}
-
-async function isFormatView(page) {
-  const heading = page.getByRole('heading', { name: 'Project Versions*', exact: true });
-  return await heading.count() === 1 && await heading.isVisible().catch(() => false);
 }
 
 function contentEditorResolution() {

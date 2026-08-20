@@ -4,6 +4,7 @@ import { buildMutationPlan, executeMutationPlan, preflightMutationPlan } from '.
 import { createStdinManualInteraction, DEFAULT_MANUAL_CHALLENGE_MAX_CYCLES, normalizeManualInteractionDecision } from './manual-handoff.mjs';
 import { installNetworkGuard } from './network-guard.mjs';
 import { dangerousActionCandidates, listingEditUrl, resolveCandidate, saveCandidates, submitCandidates } from './locators.mjs';
+import { classifyFabView, isFormatView } from './view-detection.mjs';
 
 const REVIEW_LOCKED = new Set(['pending approval', 'pending publication', 'approved', 'live']);
 const KNOWN_STATUSES = ['Pending approval', 'Pending Publication', 'Changes needed', 'Draft', 'Approved', 'Live'];
@@ -241,9 +242,7 @@ async function reloadWithDiagnostics(page, options, diagnostics) {
 async function ensureTarget(page, manifest, origin, { passive = false, diagnostics = null, initial = false } = {}) {
   if (passive) return ensurePassiveTarget(page, manifest, origin);
   const expected = listingEditUrl(manifest.listingId, origin);
-  const formatView = page.getByRole('heading', { name: 'Project Versions*', exact: true });
-  const formatViewVisible = await formatView.count() > 0 && await formatView.first().isVisible().catch(() => false);
-  if (!pageMatchesTargetListing(page, manifest, origin) || formatViewVisible) await hardNavigate(page, expected, { waitUntil: 'domcontentloaded' }, diagnostics, initial);
+  if (!pageMatchesTargetListing(page, manifest, origin)) await hardNavigate(page, expected, { waitUntil: 'domcontentloaded' }, diagnostics, initial);
   await detectManualBlock(page);
   await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => undefined);
   await detectManualBlock(page);
@@ -311,19 +310,37 @@ async function isVisibleUnique(locator) {
   return await locator.isVisible().catch(() => false);
 }
 
+function listingSummaryLocator(page, manifest) {
+  const escapedTitle = String(manifest.title).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return page.getByRole('button', { name: new RegExp(`^${escapedTitle}(?:\\s|$)`), exact: false });
+}
+
+async function navigateToListingMain(page, manifest, guard) {
+  const candidates = [
+    { locator: page.getByRole('button', { name: 'Back to listing', exact: true }), reason: 'Back to listing' },
+    { locator: listingSummaryLocator(page, manifest), reason: 'listing summary' },
+  ];
+  let selected = null;
+  for (const candidate of candidates) {
+    if (await isVisibleUnique(candidate.locator)) {
+      selected = candidate;
+      break;
+    }
+  }
+  if (!selected) throw new Error('MANUAL ACTION REQUIRED: Fab format view is open but no unique read-only listing-main navigation control is available. Do not navigate automatically.');
+  await detectManualBlock(page);
+  const beforeMutations = guard?.summary().networkMutationRequestsObserved ?? 0;
+  await selected.locator.click();
+  await detectManualBlock(page);
+  const afterMutations = guard?.summary().networkMutationRequestsObserved ?? beforeMutations;
+  if (afterMutations > beforeMutations) throw new Error(`Read-only ${selected.reason} navigation caused a network mutation; discovery was aborted safely.`);
+}
+
 async function ensureListingView(page, manifest, origin, guard = null, { passive = false, diagnostics = null } = {}) {
   if (passive) {
     await ensureTarget(page, manifest, origin, { passive: true, diagnostics });
-    const formatHeading = page.getByRole('heading', { name: 'Project Versions*', exact: true });
-    if (await isVisibleUnique(formatHeading)) {
-      const back = page.getByRole('button', { name: 'Back to listing', exact: true });
-      if (!await isVisibleUnique(back)) throw new Error('MANUAL ACTION REQUIRED: Fab format view is open but no unique Back to listing control is available. Do not navigate automatically.');
-      await detectManualBlock(page);
-      const beforeMutations = guard?.summary().networkMutationRequestsObserved ?? 0;
-      await back.click();
-      await detectManualBlock(page);
-      const afterMutations = guard?.summary().networkMutationRequestsObserved ?? beforeMutations;
-      if (afterMutations > beforeMutations) throw new Error('Read-only listing navigation caused a network mutation; discovery was aborted safely.');
+    if (await isFormatView(page)) {
+      await navigateToListingMain(page, manifest, guard);
       await ensureTarget(page, manifest, origin, { passive: true, diagnostics });
     }
     if (!await isVisibleUnique(page.getByRole('button', { name: manifest.includedFormat, exact: true }))) {
@@ -331,19 +348,9 @@ async function ensureListingView(page, manifest, origin, guard = null, { passive
     }
     return;
   }
-  const formatHeading = page.getByRole('heading', { name: 'Project Versions*', exact: true });
   const listingControl = page.getByRole('button', { name: manifest.includedFormat, exact: true });
-  if (await isVisibleUnique(formatHeading)) {
-    const back = page.getByRole('button', { name: 'Back to listing', exact: true });
-    if (await isVisibleUnique(back)) {
-      await detectManualBlock(page);
-      const beforeMutations = guard?.summary().networkMutationRequestsObserved ?? 0;
-      await back.click();
-      await detectManualBlock(page);
-      const afterMutations = guard?.summary().networkMutationRequestsObserved ?? beforeMutations;
-      if (afterMutations > beforeMutations) throw new Error('Read-only listing navigation caused a network mutation; discovery was aborted safely.');
-    }
-    else await hardNavigate(page, listingEditUrl(manifest.listingId, origin), { waitUntil: 'domcontentloaded' }, diagnostics);
+  if (await isFormatView(page)) {
+    await navigateToListingMain(page, manifest, guard);
   } else if (!await isVisibleUnique(listingControl)) {
     await hardNavigate(page, listingEditUrl(manifest.listingId, origin), { waitUntil: 'domcontentloaded' }, diagnostics);
   }
@@ -366,8 +373,7 @@ async function ensureFormatView(page, manifest, origin, guard, options = {}) {
   if (afterMutations > beforeMutations) throw new Error('Read-only format navigation caused a network mutation; discovery was aborted safely.');
   await waitForFormatView(page, manifest);
   await detectManualBlock(page);
-  const formatHeading = page.getByRole('heading', { name: 'Project Versions*', exact: true });
-  if (!await isVisibleUnique(formatHeading)) throw new Error('Fab Unreal Engine format view could not be proven after navigation.');
+  if (!await isFormatView(page)) throw new Error('Fab Unreal Engine format view could not be proven after navigation.');
 }
 
 async function waitForFormatView(page, manifest) {
@@ -376,6 +382,7 @@ async function waitForFormatView(page, manifest) {
   const deadline = Date.now() + 15000;
   while (Date.now() < deadline) {
     await detectManualBlock(page);
+    if (await isFormatView(page)) return;
     const engineVersion = page.getByText(/^UE_[0-9]+(?:\.[0-9]+)+$/, { exact: false });
     const formatHeading = page.getByRole('heading', { name: 'Project Versions*', exact: true });
     const platformChip = page.getByRole('button', { name: /^Remove (?:Windows|Win64|Linux|Mac(?: OS)?|macOS)$/ });
@@ -527,10 +534,10 @@ function writeReadiness(listingStatus, comparison, manifest) {
 
 async function assertView(page, view, manifest) {
   if (view === 'format') {
-    if (!await isVisibleUnique(page.getByRole('heading', { name: 'Project Versions*', exact: true }))) throw new Error('Format mutation attempted while the listing view was active.');
+    if (!await isFormatView(page)) throw new Error('Format mutation attempted while the listing view was active.');
     return;
   }
-  if (!await isVisibleUnique(page.getByRole('button', { name: manifest.includedFormat, exact: true }))) throw new Error('Listing mutation attempted while the format view was active.');
+  if (await classifyFabView(page) !== 'listing') throw new Error('Listing mutation attempted while the format view was active.');
 }
 
 async function preflightMutationViews(page, plan, manifestInfo, origin, guard, diagnostics) {
