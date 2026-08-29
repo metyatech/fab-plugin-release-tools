@@ -5,6 +5,10 @@ Keep a Changelog and the project uses Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-08-29
+
+- Added `DeveloperTool` as a supported Fab submission code-module type.
+
 ## [0.4.0] - 2026-08-14
 
 - Added independent Fab submission metadata schema and preflight validation.

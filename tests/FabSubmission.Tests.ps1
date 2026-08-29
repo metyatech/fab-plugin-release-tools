@@ -16,7 +16,11 @@ Describe 'Fab submission preflight' {
 
                 [switch]$OtherPluginLocation,
 
-                [switch]$NetworkReplicated
+                [switch]$NetworkReplicated,
+
+                [string]$DescriptorModuleType = 'Runtime',
+
+                [string]$MetadataModuleType = 'Runtime'
             )
 
             [System.IO.Directory]::CreateDirectory((Join-Path $Root 'Config')) | Out-Null
@@ -41,7 +45,7 @@ Describe 'Fab submission preflight' {
                 (Join-Path $Root 'Source\TestPlugin\TestPlugin.cpp'),
                 "// Copyright (c) 2026 metyatech. All rights reserved.`n$location`n")
             [System.IO.File]::WriteAllText((Join-Path $Root 'README.md'), '# Test Plugin')
-            [System.IO.File]::WriteAllText((Join-Path $Root 'TestPlugin.uplugin'), @'
+            [System.IO.File]::WriteAllText((Join-Path $Root 'TestPlugin.uplugin'), @"
 {
   "FileVersion": 3,
   "Version": 1,
@@ -49,9 +53,9 @@ Describe 'Fab submission preflight' {
   "FriendlyName": "Test Plugin",
   "Description": "Fixture",
   "Category": "Tools",
-  "Modules": [{ "Name": "TestPlugin", "Type": "Runtime" }]
+  "Modules": [{ "Name": "TestPlugin", "Type": "$DescriptorModuleType" }]
 }
-'@)
+"@)
             [System.IO.File]::WriteAllText((Join-Path $Root 'FabPluginRelease.json'), @'
 {
   "schemaVersion": 1,
@@ -75,13 +79,13 @@ Describe 'Fab submission preflight' {
   "buildLogFailPatterns": []
 }
 '@)
-            [System.IO.File]::WriteAllText((Join-Path $Root 'FabSubmissionMetadata.json'), @'
+            [System.IO.File]::WriteAllText((Join-Path $Root 'FabSubmissionMetadata.json'), @"
 {
   "schemaVersion": 1,
   "product": "Test Plugin",
   "technicalInformation": {
     "features": ["Loads test content."],
-    "codeModules": [{ "name": "TestPlugin", "type": "Runtime", "description": "Runtime fixture module." }],
+    "codeModules": [{ "name": "TestPlugin", "type": "$MetadataModuleType", "description": "Fixture module." }],
     "numberOfBlueprints": 0,
     "numberOfCppClasses": 1,
     "networkReplicated": false,
@@ -96,7 +100,7 @@ Describe 'Fab submission preflight' {
     "additionalNotes": "Fixture metadata."
   }
 }
-'@)
+"@)
             $metadataPath = Join-Path $Root 'FabSubmissionMetadata.json'
             $metadata = Get-Content -Raw -LiteralPath $metadataPath | ConvertFrom-Json
             if ($NetworkReplicated) { $metadata.technicalInformation.networkReplicated = $true }
@@ -117,6 +121,30 @@ Describe 'Fab submission preflight' {
         $result.ExitCode | Should -Be 0 -Because $result.Output
         $result.Output | Should -Match 'FAB SUBMISSION CHECK: PASS'
         Test-Path (Join-Path $PSScriptRoot '..\artifacts\TestPlugin\submission\FabTechnicalInformation.txt') | Should -BeTrue
+    }
+
+    It 'accepts a DeveloperTool module when descriptor and metadata match' {
+        $root = Join-Path $TestDrive 'DeveloperToolMatch'
+        Initialize-SubmissionFixture -Root $root -DescriptorModuleType 'DeveloperTool' -MetadataModuleType 'DeveloperTool'
+        $result = Invoke-SubmissionFixture -Root $root
+        $result.ExitCode | Should -Be 0 -Because $result.Output
+        $result.Output | Should -Match 'FAB SUBMISSION CHECK: PASS'
+    }
+
+    It 'rejects a DeveloperTool descriptor with Runtime metadata' {
+        $root = Join-Path $TestDrive 'DeveloperToolMismatch'
+        Initialize-SubmissionFixture -Root $root -DescriptorModuleType 'DeveloperTool' -MetadataModuleType 'Runtime'
+        $result = Invoke-SubmissionFixture -Root $root
+        $result.ExitCode | Should -Be 1
+        $result.Output | Should -Match 'does not match descriptor module'
+    }
+
+    It 'rejects an unsupported module type during schema validation' {
+        $root = Join-Path $TestDrive 'UnsupportedModuleType'
+        Initialize-SubmissionFixture -Root $root -DescriptorModuleType 'DeveloperTool' -MetadataModuleType 'Unsupported'
+        $result = Invoke-SubmissionFixture -Root $root
+        $result.ExitCode | Should -Be 1
+        $result.Output | Should -Match '(?i)schema'
     }
 
     It 'fails an explicit plugin-location hardcode' {
