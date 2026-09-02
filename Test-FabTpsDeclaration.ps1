@@ -5,6 +5,8 @@ param(
     [Parameter(Mandatory)]
     [string]$PluginPath,
 
+    [string]$ListingFieldsPath,
+
     [string]$OutputDirectory
 )
 
@@ -250,9 +252,22 @@ function Assert-TpsBuildInfo {
         [object]$BuildInfo,
 
         [Parameter(Mandatory)]
-        [string]$NoticePath
+        [string]$NoticePath,
+
+        [switch]$RequireAssimpEvidence
     )
 
+    if ($RequireAssimpEvidence) {
+        foreach ($name in @(
+                'Version', 'SourceRepository', 'SourceTag', 'SourceCommit',
+                'Architecture', 'DistributedThirdPartyNoticeFile', 'CMakeOptions')) {
+            $property = $BuildInfo.PSObject.Properties[$name]
+            if ($null -eq $property -or $null -eq $property.Value -or
+                [string]::IsNullOrWhiteSpace([string]$property.Value)) {
+                throw "Assimp BUILD-INFO.json must contain '$name'."
+            }
+        }
+    }
     foreach ($field in @(
             @{ Declaration = 'version'; Build = 'Version' },
             @{ Declaration = 'source_repository_url'; Build = 'SourceRepository' },
@@ -281,8 +296,11 @@ function Assert-TpsBuildInfo {
         [string]$BuildInfo.Architecture -cne 'x64') {
         throw 'BUILD-INFO.json architecture contradicts Win64 declaration platform.'
     }
-    $sharedOption = @($BuildInfo.CMakeOptions | Where-Object { [string]$_.Name -ceq 'BUILD_SHARED_LIBS' }) |
-        Select-Object -First 1
+    $sharedOptions = @($BuildInfo.CMakeOptions | Where-Object { [string]$_.Name -ceq 'BUILD_SHARED_LIBS' })
+    if ($RequireAssimpEvidence -and $sharedOptions.Count -ne 1) {
+        throw 'Assimp BUILD-INFO.json must contain exactly one BUILD_SHARED_LIBS option.'
+    }
+    $sharedOption = $sharedOptions | Select-Object -First 1
     if ($null -ne $sharedOption) {
         $expected = if ([string]$Declaration.linkage -ceq 'dynamic') { 'ON' } else { 'OFF' }
         if ([string]$sharedOption.Value -cne $expected) {
@@ -297,11 +315,16 @@ function Assert-TpsIntegration {
         [object]$Declaration,
 
         [Parameter(Mandatory)]
-        [string]$NoticePath
+        [string]$NoticePath,
+
+        [switch]$RequireAssimpEvidence
     )
 
     $buildScriptPath = Join-Path (Split-Path -Parent $NoticePath) 'assimp.Build.cs'
     if (-not [System.IO.File]::Exists($buildScriptPath)) {
+        if ($RequireAssimpEvidence) {
+            throw 'Assimp declaration requires assimp.Build.cs beside distributed_notice_file.'
+        }
         return
     }
     $buildScript = [System.IO.File]::ReadAllText($buildScriptPath)
@@ -309,9 +332,12 @@ function Assert-TpsIntegration {
         $buildScript -notmatch 'UnrealTargetPlatform\.Win64') {
         throw 'assimp.Build.cs does not enforce the declared Win64 platform.'
     }
-    if ([string]$Declaration.linkage -ceq 'dynamic' -and
-        ($buildScript -notmatch 'PublicDelayLoadDLLs' -or $buildScript -notmatch 'RuntimeDependencies')) {
-        throw 'assimp.Build.cs does not describe the declared dynamic linkage.'
+    if ($RequireAssimpEvidence -and [string]$Declaration.linkage -ceq 'dynamic') {
+        foreach ($member in @('PublicAdditionalLibraries', 'PublicDelayLoadDLLs', 'RuntimeDependencies')) {
+            if ($buildScript -notmatch [regex]::Escape($member)) {
+                throw "assimp.Build.cs does not describe dynamic linkage member '$member'."
+            }
+        }
     }
 }
 
@@ -395,7 +421,12 @@ try {
     Assert-TpsSchema -JsonText $declarationsJson.Text -SchemaPath $schemaPath -JsonPath $declarationsPath
     $declarations = $declarationsJson.Object
 
-    $listingPath = Join-Path $resolvedPluginPath 'FabListingFields.json'
+    $listingPath = if ([string]::IsNullOrWhiteSpace($ListingFieldsPath)) {
+        Join-Path $resolvedPluginPath 'FabListingFields.json'
+    }
+    else {
+        [System.IO.Path]::GetFullPath($ListingFieldsPath)
+    }
     $listingJson = Get-TpsJson -Path $listingPath -Name 'FabListingFields.json'
     Assert-TpsSchema -JsonText $listingJson.Text -SchemaPath $listingSchemaPath -JsonPath $listingPath
     $listing = $listingJson.Object
@@ -419,6 +450,7 @@ try {
 
     $artifactDeclarations = [System.Collections.Generic.List[object]]::new()
     foreach ($declaration in @($declarations.declarations)) {
+        $isAssimp = [string]$declaration.software_name -match '(?i)assimp'
         $noticePath = Resolve-TpsPluginFile -PluginRoot $resolvedPluginPath `
             -RelativePath ([string]$declaration.distributed_notice_file)
         if (-not [System.IO.File]::Exists($noticePath)) {
@@ -428,10 +460,15 @@ try {
         Assert-TpsDependency -Declaration $declaration -Metadata $metadata
         Assert-TpsNotice -Declaration $declaration -NoticePath $noticePath
         $buildInfo = Get-TpsBuildInfo -NoticePath $noticePath
-        if ($null -ne $buildInfo) {
-            Assert-TpsBuildInfo -Declaration $declaration -BuildInfo $buildInfo -NoticePath $noticePath
+        if ($isAssimp -and $null -eq $buildInfo) {
+            throw 'Assimp declaration requires BUILD-INFO.json beside distributed_notice_file.'
         }
-        Assert-TpsIntegration -Declaration $declaration -NoticePath $noticePath
+        if ($null -ne $buildInfo) {
+            Assert-TpsBuildInfo -Declaration $declaration -BuildInfo $buildInfo -NoticePath $noticePath `
+                -RequireAssimpEvidence:$isAssimp
+        }
+        Assert-TpsIntegration -Declaration $declaration -NoticePath $noticePath `
+            -RequireAssimpEvidence:$isAssimp
         [void]$artifactDeclarations.Add((ConvertTo-TpsArtifactDeclaration -Declaration $declaration))
     }
 

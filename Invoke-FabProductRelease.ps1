@@ -528,6 +528,61 @@ function Invoke-FabProductSubmissionValidation {
     }
 }
 
+function Invoke-FabProductTpsValidation {
+    param(
+        [Parameter(Mandatory)]
+        [string]$PluginRoot,
+
+        [Parameter(Mandatory)]
+        [string]$ListingFieldsPath,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath
+    )
+
+    $pwshPath = (Get-Command pwsh -ErrorAction Stop).Source
+    $scriptPath = Join-Path $PSScriptRoot 'Test-FabTpsDeclaration.ps1'
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $pwshPath
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    foreach ($argument in @(
+            '-NoProfile', '-NonInteractive', '-File', $scriptPath,
+            '-PluginPath', $PluginRoot,
+            '-ListingFieldsPath', $ListingFieldsPath,
+            '-OutputDirectory', $OutputPath)) {
+        [void]$startInfo.ArgumentList.Add($argument)
+    }
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    try {
+        [void]$process.Start()
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        [System.Threading.Tasks.Task]::WaitAll(@($stdoutTask, $stderrTask))
+        $output = [string]::Join("`n", @($stdoutTask.Result, $stderrTask.Result)).Trim()
+        if ($process.ExitCode -ne 0) {
+            throw "TPS declaration validation failed for $PluginRoot. $output"
+        }
+        foreach ($name in @('FabTpsSubmission.txt', 'FabTpsSubmission.json')) {
+            $path = Join-Path $OutputPath $name
+            if (-not [System.IO.File]::Exists($path)) {
+                throw "TPS declaration validation did not produce $name."
+            }
+        }
+        return [pscustomobject]@{
+            OutputPath = $OutputPath
+            Output     = $output
+        }
+    }
+    finally {
+        $process.Dispose()
+    }
+}
+
 function Get-FabProductReleaseArtifact {
     param(
         [Parameter(Mandatory)]
@@ -1526,7 +1581,9 @@ function Write-FabProductChecklist {
         [object]$ProjectLinks,
 
         [Parameter(Mandatory)]
-        [bool]$PortalReady
+        [bool]$PortalReady,
+
+        [bool]$TpsValidationEnabled
     )
 
     $lines = [System.Collections.Generic.List[string]]::new()
@@ -1539,6 +1596,10 @@ function Write-FabProductChecklist {
     $lines.Add('PASS - technical information consistency')
     $lines.Add("PASS - media integrity ($($Media.Count) ordered file(s))")
     $lines.Add('PASS - manifest integrity')
+    if ($TpsValidationEnabled) {
+        $lines.Add('PASS - TPS declaration data validation')
+        $lines.Add('PASS - TPS submission artifacts generation')
+    }
     foreach ($version in $EngineVersions) {
         if ($ProjectLinks.Contains($version)) {
             $lines.Add("PASS - public Project File Link verified for UE$version")
@@ -1554,6 +1615,9 @@ function Write-FabProductChecklist {
     $lines.Add('Future browser automation / Fab human review:')
     if (-not $PortalReady) {
         $lines.Add('- Resolve the pending Project File Links before starting portal automation.')
+    }
+    if ($TpsValidationEnabled) {
+        $lines.Add('- Review submission/FabTpsSubmission.txt and manually complete the TPS Formstack declaration.')
     }
     $lines.Add('- Enter or confirm listing content, pricing, availability, and portal declarations.')
     $lines.Add('- Complete Fab human review and publish the listing.')
@@ -1619,7 +1683,15 @@ function Invoke-FabProductReleaseCore {
     [System.IO.Directory]::CreateDirectory($stagingRoot) | Out-Null
     $releaseResults = [System.Collections.Generic.List[object]]::new()
     $submissionOutputs = [System.Collections.Generic.List[string]]::new()
+    $tpsValidationEnabled = [System.IO.File]::Exists((Join-Path $resolvedPluginPath 'FabTpsDeclarations.json'))
     try {
+        $tpsValidationOutput = $null
+        if ($tpsValidationEnabled) {
+            $tpsValidationOutput = Join-Path $validationRoot 'tps'
+            [System.IO.Directory]::CreateDirectory($tpsValidationOutput) | Out-Null
+            [void](Invoke-FabProductTpsValidation -PluginRoot $resolvedPluginPath `
+                -ListingFieldsPath $listingPath -OutputPath $tpsValidationOutput)
+        }
         foreach ($engineVersion in $engineVersions) {
             $versionOutput = Join-Path $releasesRoot "UE$engineVersion"
             try {
@@ -1664,6 +1736,14 @@ function Invoke-FabProductReleaseCore {
             }
         }
         Write-FabProductTextFile -Path (Join-Path $submissionRoot 'FabTechnicalInformation.txt') -Text $technicalText
+        if ($tpsValidationEnabled) {
+            foreach ($name in @('FabTpsSubmission.txt', 'FabTpsSubmission.json')) {
+                [System.IO.File]::Copy(
+                    (Join-Path $tpsValidationOutput $name),
+                    (Join-Path $submissionRoot $name),
+                    $true)
+            }
+        }
         $mediaManifest = @(Copy-FabProductMedia -Media @($listing.Media) -BundleRoot $stagingRoot)
         $packageManifest = @(Copy-FabProductPackage -Releases $releaseResults.ToArray() `
             -BundleRoot $stagingRoot -ProjectFileLinks $projectFileLinks)
@@ -1705,7 +1785,8 @@ function Invoke-FabProductReleaseCore {
             -Text (($manifest | ConvertTo-Json -Depth 100) + [Environment]::NewLine)
         Write-FabProductChecklist -Path (Join-Path $stagingRoot 'SubmissionChecklist.txt') `
             -EngineVersions $engineVersions -Media @($listing.Media) `
-            -ProjectLinks $projectFileLinks -PortalReady $projectLinkState.Verified
+            -ProjectLinks $projectFileLinks -PortalReady $projectLinkState.Verified `
+            -TpsValidationEnabled:$tpsValidationEnabled
 
         $backupBundle = "$publicBundle.__previous_$([guid]::NewGuid().ToString('N'))"
         $hadPreviousBundle = [System.IO.Directory]::Exists($publicBundle)

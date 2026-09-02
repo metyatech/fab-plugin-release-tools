@@ -54,6 +54,16 @@ submission-sheet generation are automated; the legal declaration itself and
 Formstack/Fab input or submit remain manual. This validator does not determine
 legal compliance or whether a declaration is legally sufficient.
 
+The standalone `Test-FabTpsDeclaration.ps1` command remains available. The
+product-level `Invoke-FabProductRelease.ps1` command automatically validates and
+generates the same TPS artifacts when the product root contains
+`FabTpsDeclarations.json`, then includes them in the final
+`FabSubmission/submission/` bundle. `FabTpsSubmission.txt` is a review and copy
+aid for the manual TPS declaration; it is not guaranteed to match every
+current Formstack field one-for-one, to be legally sufficient, or to be
+accepted by Fab. TPS is intentionally outside `FabPortalSubmission.json` and
+`FabPortalAutomation`; actual Formstack input and Submit remain manual.
+
 ## Requirements
 
 - Windows 10 or Windows 11

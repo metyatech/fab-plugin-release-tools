@@ -138,13 +138,67 @@ Describe 'Fab TPS declaration management' {
                 [System.Text.UTF8Encoding]::new($false))
         }
 
+        function Initialize-AssimpTpsFixture {
+            param(
+                [Parameter(Mandatory)]
+                [string]$Root
+            )
+
+            Initialize-TpsFixture -Root $Root
+            $noticeDirectory = Join-Path $Root 'Source\ThirdParty\assimp'
+            [System.IO.Directory]::CreateDirectory($noticeDirectory) | Out-Null
+            $declarationsPath = Join-Path $Root 'FabTpsDeclarations.json'
+            $declarations = Get-Content -Raw $declarationsPath | ConvertFrom-Json
+            $declaration = $declarations.declarations[0]
+            $declaration.software_name = 'Open Asset Import Library (assimp)'
+            $declaration.version = '6.0.5'
+            $declaration.vendor = 'assimp team'
+            $declaration.homepage_url = 'https://www.assimp.org/'
+            $declaration.source_repository_url = 'https://github.com/assimp/assimp'
+            $declaration.source_tag = 'v6.0.5'
+            $declaration.source_commit = '392a658f9c271be965271f45e7521a1b80ea4392'
+            $declaration.license = 'BSD-3-Clause'
+            $declaration.license_url = 'https://github.com/assimp/assimp/blob/v6.0.5/LICENSE'
+            $declaration.distributed_notice_file = 'Source/ThirdParty/assimp/assimp.tps'
+            $declaration.purpose = 'Fixture runtime mesh import.'
+            $declaration.why_required = 'The fixture module uses Assimp.'
+            $declaration.additional_information = 'Fixture Assimp build evidence.'
+            Write-TpsFixtureJson -Value $declarations -Path $declarationsPath
+
+            $metadataPath = Join-Path $Root 'FabSubmissionMetadata.json'
+            $metadata = Get-Content -Raw $metadataPath | ConvertFrom-Json
+            $metadata.technicalInformation.dependencies = @('Bundled Assimp 6.0.5')
+            Write-TpsFixtureJson -Value $metadata -Path $metadataPath
+
+            $buildInfo = [ordered]@{
+                Version                         = '6.0.5'
+                SourceRepository               = 'https://github.com/assimp/assimp.git'
+                SourceTag                      = 'v6.0.5'
+                SourceCommit                   = '392a658f9c271be965271f45e7521a1b80ea4392'
+                Architecture                   = 'x64'
+                DistributedThirdPartyNoticeFile = 'assimp.tps'
+                CMakeOptions                   = @([ordered]@{ Name = 'BUILD_SHARED_LIBS'; Value = 'ON' })
+            }
+            Write-TpsFixtureJson -Value $buildInfo -Path (Join-Path $noticeDirectory 'BUILD-INFO.json')
+            [System.IO.File]::WriteAllText(
+                (Join-Path $noticeDirectory 'assimp.Build.cs'),
+                'if (Target.Platform != UnrealTargetPlatform.Win64) {} PublicAdditionalLibraries.Add("assimp.lib"); PublicDelayLoadDLLs.Add("assimp.dll"); RuntimeDependencies.Add("assimp.dll");',
+                [System.Text.UTF8Encoding]::new($false))
+            [System.IO.File]::WriteAllText(
+                (Join-Path $noticeDirectory 'assimp.tps'),
+                '<TpsData><Name>assimp</Name><Eula>https://github.com/assimp/assimp/blob/v6.0.5/LICENSE</Eula><AdditionalInfo><Name>assimp</Name><Version>6.0.5</Version><Url>https://github.com/assimp/assimp/releases/tag/v6.0.5</Url><License>BSD-3-Clause</License></AdditionalInfo></TpsData>',
+                [System.Text.UTF8Encoding]::new($false))
+        }
+
         function Invoke-TpsFixture {
             param(
                 [Parameter(Mandatory)]
                 [string]$PluginRoot,
 
                 [Parameter(Mandatory)]
-                [string]$OutputRoot
+                [string]$OutputRoot,
+
+                [string]$ListingFieldsPath
             )
 
             $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
@@ -158,6 +212,10 @@ Describe 'Fab TPS declaration management' {
                     '-PluginPath', $PluginRoot,
                     '-OutputDirectory', $OutputRoot)) {
                 [void]$startInfo.ArgumentList.Add($argument)
+            }
+            if (-not [string]::IsNullOrWhiteSpace($ListingFieldsPath)) {
+                [void]$startInfo.ArgumentList.Add('-ListingFieldsPath')
+                [void]$startInfo.ArgumentList.Add($ListingFieldsPath)
             }
             $process = [System.Diagnostics.Process]::new()
             $process.StartInfo = $startInfo
@@ -227,6 +285,143 @@ Additional information: Built as a shared library for the fixture.
 "@ -replace "`r`n", "`n"
         $expectedText += "`n"
         (Get-Content -Raw $textPath) | Should -BeExactly $expectedText
+    }
+
+    It 'takes generated product identity from a custom listing fields file' {
+        $pluginRoot = Join-Path $TestDrive 'CustomListingPlugin'
+        $outputRoot = Join-Path $TestDrive 'CustomListingOutput'
+        $listingPath = Join-Path $TestDrive 'CustomListingFields.json'
+        Initialize-TpsFixture -Root $pluginRoot
+        $listing = Get-Content -Raw (Join-Path $pluginRoot 'FabListingFields.json') | ConvertFrom-Json
+        $listing.product = 'Custom TPS Product'
+        $listing.version = '8.7.6'
+        $listing.listing_id = '42e5c3b5-36c3-4a91-ba59-8101812e62c3'
+        Write-TpsFixtureJson -Value $listing -Path $listingPath
+        $metadata = Get-Content -Raw (Join-Path $pluginRoot 'FabSubmissionMetadata.json') | ConvertFrom-Json
+        $metadata.product = 'Custom TPS Product'
+        Write-TpsFixtureJson -Value $metadata -Path (Join-Path $pluginRoot 'FabSubmissionMetadata.json')
+
+        $result = Invoke-TpsFixture -PluginRoot $pluginRoot -OutputRoot $outputRoot `
+            -ListingFieldsPath $listingPath
+
+        $result.ExitCode | Should -Be 0 -Because $result.Error
+        $artifact = Get-Content -Raw (Join-Path $outputRoot 'FabTpsSubmission.json') | ConvertFrom-Json
+        $artifact.product | Should -BeExactly 'Custom TPS Product'
+        $artifact.version | Should -BeExactly '8.7.6'
+        $artifact.listing_id | Should -BeExactly '42e5c3b5-36c3-4a91-ba59-8101812e62c3'
+    }
+
+    It 'keeps generic declarations compatible without Assimp evidence files' {
+        $pluginRoot = Join-Path $TestDrive 'GenericWithoutEvidence'
+        $outputRoot = Join-Path $TestDrive 'GenericWithoutEvidenceOutput'
+        Initialize-TpsFixture -Root $pluginRoot
+        [System.IO.File]::Delete((Join-Path $pluginRoot 'Source\ThirdParty\test\BUILD-INFO.json'))
+        [System.IO.File]::Delete((Join-Path $pluginRoot 'Source\ThirdParty\test\assimp.Build.cs'))
+
+        $result = Invoke-TpsFixture -PluginRoot $pluginRoot -OutputRoot $outputRoot
+
+        $result.ExitCode | Should -Be 0 -Because $result.Error
+        (Join-Path $outputRoot 'FabTpsSubmission.txt') | Should -Exist
+        (Join-Path $outputRoot 'FabTpsSubmission.json') | Should -Exist
+    }
+
+    It 'rejects missing or contradictory Assimp evidence' -ForEach @(
+        @{ Name = 'missing BUILD-INFO.json'; Change = {
+                param($root)
+                [System.IO.File]::Delete((Join-Path $root 'Source\ThirdParty\assimp\BUILD-INFO.json'))
+            } },
+        @{ Name = 'BUILD-INFO Version mismatch'; Change = {
+                param($root)
+                $path = Join-Path $root 'Source\ThirdParty\assimp\BUILD-INFO.json'
+                $json = Get-Content -Raw $path | ConvertFrom-Json
+                $json.Version = '6.0.4'
+                Write-TpsFixtureJson -Value $json -Path $path
+            } },
+        @{ Name = 'SourceTag mismatch'; Change = {
+                param($root)
+                $path = Join-Path $root 'Source\ThirdParty\assimp\BUILD-INFO.json'
+                $json = Get-Content -Raw $path | ConvertFrom-Json
+                $json.SourceTag = 'v6.0.4'
+                Write-TpsFixtureJson -Value $json -Path $path
+            } },
+        @{ Name = 'SourceCommit mismatch'; Change = {
+                param($root)
+                $path = Join-Path $root 'Source\ThirdParty\assimp\BUILD-INFO.json'
+                $json = Get-Content -Raw $path | ConvertFrom-Json
+                $json.SourceCommit = 'a' * 40
+                Write-TpsFixtureJson -Value $json -Path $path
+            } },
+        @{ Name = 'missing BUILD_SHARED_LIBS'; Change = {
+                param($root)
+                $path = Join-Path $root 'Source\ThirdParty\assimp\BUILD-INFO.json'
+                $json = Get-Content -Raw $path | ConvertFrom-Json
+                $json.CMakeOptions = @()
+                Write-TpsFixtureJson -Value $json -Path $path
+            } },
+        @{ Name = 'BUILD_SHARED_LIBS OFF with dynamic linkage'; Change = {
+                param($root)
+                $path = Join-Path $root 'Source\ThirdParty\assimp\BUILD-INFO.json'
+                $json = Get-Content -Raw $path | ConvertFrom-Json
+                $json.CMakeOptions[0].Value = 'OFF'
+                Write-TpsFixtureJson -Value $json -Path $path
+            } },
+        @{ Name = 'missing assimp.Build.cs'; Change = {
+                param($root)
+                [System.IO.File]::Delete((Join-Path $root 'Source\ThirdParty\assimp\assimp.Build.cs'))
+            } },
+        @{ Name = 'missing PublicAdditionalLibraries'; Change = {
+                param($root)
+                $path = Join-Path $root 'Source\ThirdParty\assimp\assimp.Build.cs'
+                $text = Get-Content -Raw $path
+                [System.IO.File]::WriteAllText($path, $text.Replace('PublicAdditionalLibraries.Add("assimp.lib");', ''))
+            } },
+        @{ Name = 'missing PublicDelayLoadDLLs'; Change = {
+                param($root)
+                $path = Join-Path $root 'Source\ThirdParty\assimp\assimp.Build.cs'
+                $text = Get-Content -Raw $path
+                [System.IO.File]::WriteAllText($path, $text.Replace('PublicDelayLoadDLLs.Add("assimp.dll");', ''))
+            } },
+        @{ Name = 'missing RuntimeDependencies'; Change = {
+                param($root)
+                $path = Join-Path $root 'Source\ThirdParty\assimp\assimp.Build.cs'
+                $text = Get-Content -Raw $path
+                [System.IO.File]::WriteAllText($path, $text.Replace('RuntimeDependencies.Add("assimp.dll");', ''))
+            } },
+        @{ Name = 'assimp.tps Version mismatch'; Change = {
+                param($root)
+                $path = Join-Path $root 'Source\ThirdParty\assimp\assimp.tps'
+                $text = Get-Content -Raw $path
+                [System.IO.File]::WriteAllText($path, $text.Replace('6.0.5', '6.0.4'))
+            } },
+        @{ Name = 'assimp.tps License mismatch'; Change = {
+                param($root)
+                $path = Join-Path $root 'Source\ThirdParty\assimp\assimp.tps'
+                $text = Get-Content -Raw $path
+                [System.IO.File]::WriteAllText($path, $text.Replace('BSD-3-Clause', 'MIT'))
+            } },
+        @{ Name = 'assimp.tps Eula mismatch'; Change = {
+                param($root)
+                $path = Join-Path $root 'Source\ThirdParty\assimp\assimp.tps'
+                $text = Get-Content -Raw $path
+                [System.IO.File]::WriteAllText($path, $text.Replace('blob/v6.0.5/LICENSE', 'blob/v6.0.4/LICENSE'))
+            } },
+        @{ Name = 'descriptor platform mismatch'; Change = {
+                param($root)
+                $path = Join-Path $root 'TpsFixture.uplugin'
+                $json = Get-Content -Raw $path | ConvertFrom-Json
+                $json.SupportedTargetPlatforms = @('Linux')
+                Write-TpsFixtureJson -Value $json -Path $path
+            } }
+    ) {
+        $pluginRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString())
+        $outputRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString())
+        Initialize-AssimpTpsFixture -Root $pluginRoot
+        & $Change $pluginRoot
+
+        $result = Invoke-TpsFixture -PluginRoot $pluginRoot -OutputRoot $outputRoot
+
+        $result.ExitCode | Should -Be 1 -Because $result.Output
+        $result.Output | Should -Match 'FAB TPS DECLARATION: FAIL'
     }
 
     It 'rejects non-HTTPS URLs, platform conflicts, missing notices, and dependency conflicts' -ForEach @(

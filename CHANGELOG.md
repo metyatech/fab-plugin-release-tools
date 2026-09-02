@@ -5,6 +5,11 @@ Keep a Changelog and the project uses Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-02
+
+- Added canonical Fab TPS declaration validation and submission artifact
+  generation to the product release workflow.
+
 ## [0.4.1] - 2026-08-29
 
 - Added `DeveloperTool` as a supported Fab submission code-module type.

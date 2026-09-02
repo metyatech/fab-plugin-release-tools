@@ -185,10 +185,19 @@ public sealed class FabProductTestHttpMessageHandler : HttpMessageHandler
                 [string]$PluginRoot,
 
                 [Parameter(Mandatory)]
-                [string]$OutputRoot
+                [string]$OutputRoot,
+
+                [string]$ListingFieldsPath
             )
 
-            return Invoke-FabProductReleaseCore -PluginPath $PluginRoot -OutputDirectory $OutputRoot
+            $arguments = @{
+                PluginPath      = $PluginRoot
+                OutputDirectory = $OutputRoot
+            }
+            if (-not [string]::IsNullOrWhiteSpace($ListingFieldsPath)) {
+                $arguments.ListingFieldsPath = $ListingFieldsPath
+            }
+            return Invoke-FabProductReleaseCore @arguments
         }
     }
 
@@ -196,8 +205,11 @@ public sealed class FabProductTestHttpMessageHandler : HttpMessageHandler
         $script:ProductReleaseInvocations = [System.Collections.Generic.List[string]]::new()
         $script:ProductReleaseOutputPaths = [System.Collections.Generic.List[string]]::new()
         $script:ProductSubmissionInvocations = [System.Collections.Generic.List[string]]::new()
+        $script:ProductTpsInvocations = [System.Collections.Generic.List[string]]::new()
+        $script:ProductPhaseEvents = [System.Collections.Generic.List[string]]::new()
         $script:ProductReleaseFailureVersion = $null
         $script:ProductSubmissionFailureVersion = $null
+        $script:ProductTpsFailure = $false
         Mock -CommandName Invoke-FabProductVersionRelease -MockWith {
             param(
                 [string]$EngineVersion,
@@ -205,6 +217,7 @@ public sealed class FabProductTestHttpMessageHandler : HttpMessageHandler
             )
             $script:ProductReleaseInvocations.Add($EngineVersion)
             $script:ProductReleaseOutputPaths.Add($OutputPath)
+            $script:ProductPhaseEvents.Add("release-$EngineVersion")
             if ($EngineVersion -ceq $script:ProductReleaseFailureVersion) {
                 throw "intentional release failure for UE$EngineVersion"
             }
@@ -226,6 +239,27 @@ public sealed class FabProductTestHttpMessageHandler : HttpMessageHandler
                 "Product: Test Plugin`n")
             return [pscustomobject]@{ OutputPath = $OutputPath; Output = 'FAB SUBMISSION CHECK: PASS' }
         }
+        Mock -CommandName Invoke-FabProductTpsValidation -MockWith {
+            param(
+                [string]$PluginRoot,
+                [string]$ListingFieldsPath,
+                [string]$OutputPath
+            )
+            [void]$PluginRoot
+            $script:ProductTpsInvocations.Add($ListingFieldsPath)
+            $script:ProductPhaseEvents.Add('tps')
+            if ($script:ProductTpsFailure) {
+                throw 'intentional TPS validation failure'
+            }
+            [System.IO.Directory]::CreateDirectory($OutputPath) | Out-Null
+            [System.IO.File]::WriteAllText(
+                (Join-Path $OutputPath 'FabTpsSubmission.txt'),
+                "TPS text from $ListingFieldsPath`n")
+            [System.IO.File]::WriteAllText(
+                (Join-Path $OutputPath 'FabTpsSubmission.json'),
+                "{`"sourceListingFieldsPath`":`"$ListingFieldsPath`"}`n")
+            return [pscustomobject]@{ OutputPath = $OutputPath; Output = 'FAB TPS DECLARATION: PASS' }
+        }
     }
 
     It 'loads Invoke-FabPluginRelease from this repository module after dot-sourcing' {
@@ -242,6 +276,7 @@ public sealed class FabProductTestHttpMessageHandler : HttpMessageHandler
         Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot | Out-Null
         @($script:ProductReleaseInvocations) | Should -HaveCount 3
         @($script:ProductReleaseInvocations | Sort-Object) | Should -Be @('5.10', '5.8', '5.9')
+        @($script:ProductTpsInvocations) | Should -HaveCount 0
     }
 
     It 'orders Unreal minor versions numerically, including 5.9 before 5.10' {
@@ -313,6 +348,78 @@ public sealed class FabProductTestHttpMessageHandler : HttpMessageHandler
         { Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot } |
             Should -Throw '*intentional submission failure*'
         (Join-Path $outputRoot 'TestPlugin\FabSubmission') | Should -Not -Exist
+    }
+
+    It 'runs TPS validation once before the first engine release when declarations exist' {
+        $root = Join-Path $TestDrive 'TpsBeforeBuild'
+        $outputRoot = Join-Path $TestDrive 'TpsBeforeBuildArtifacts'
+        Initialize-ProductFixture -Root $root -EngineVersions @('5.8', '5.9') | Out-Null
+        Write-ProductFixtureJson -Value ([ordered]@{
+                schema_version = 1
+                declarations   = @([ordered]@{ software_name = 'Fixture TPS' })
+            }) -Path (Join-Path $root 'FabTpsDeclarations.json')
+
+        Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot | Out-Null
+
+        @($script:ProductTpsInvocations) | Should -HaveCount 1
+        @($script:ProductPhaseEvents) | Should -BeExactly @('tps', 'release-5.8', 'release-5.9')
+    }
+
+    It 'fails before any engine release when TPS validation fails' {
+        $root = Join-Path $TestDrive 'TpsFailureBeforeBuild'
+        $outputRoot = Join-Path $TestDrive 'TpsFailureBeforeBuildArtifacts'
+        Initialize-ProductFixture -Root $root | Out-Null
+        Write-ProductFixtureJson -Value ([ordered]@{
+                schema_version = 1
+                declarations   = @([ordered]@{ software_name = 'Fixture TPS' })
+            }) -Path (Join-Path $root 'FabTpsDeclarations.json')
+        $script:ProductTpsFailure = $true
+
+        { Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot } |
+            Should -Throw '*intentional TPS validation failure*'
+        @($script:ProductReleaseInvocations) | Should -HaveCount 0
+        (Join-Path $outputRoot 'TestPlugin\FabSubmission') | Should -Not -Exist
+    }
+
+    It 'copies TPS artifacts into the final bundle and records manual checklist work' {
+        $root = Join-Path $TestDrive 'TpsBundle'
+        $outputRoot = Join-Path $TestDrive 'TpsBundleArtifacts'
+        Initialize-ProductFixture -Root $root | Out-Null
+        Write-ProductFixtureJson -Value ([ordered]@{
+                schema_version = 1
+                declarations   = @([ordered]@{ software_name = 'Fixture TPS' })
+            }) -Path (Join-Path $root 'FabTpsDeclarations.json')
+
+        Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot | Out-Null
+
+        $bundleRoot = Join-Path $outputRoot 'TestPlugin\FabSubmission'
+        $textPath = Join-Path $bundleRoot 'submission\FabTpsSubmission.txt'
+        $jsonPath = Join-Path $bundleRoot 'submission\FabTpsSubmission.json'
+        $textPath | Should -Exist
+        $jsonPath | Should -Exist
+        (Get-Content -Raw $textPath) | Should -Match 'TPS text from'
+        (Get-Content -Raw $jsonPath) | Should -Match 'sourceListingFieldsPath'
+        $checklist = Get-Content -Raw (Join-Path $bundleRoot 'SubmissionChecklist.txt')
+        $checklist | Should -Match 'PASS - TPS declaration data validation'
+        $checklist | Should -Match 'PASS - TPS submission artifacts generation'
+        $checklist | Should -Match 'Review submission/FabTpsSubmission.txt and manually complete the TPS Formstack declaration.'
+    }
+
+    It 'passes the product release listing path unchanged to TPS validation' {
+        $root = Join-Path $TestDrive 'TpsCustomListing'
+        $outputRoot = Join-Path $TestDrive 'TpsCustomListingArtifacts'
+        $listingPath = Join-Path $TestDrive 'CustomListingFields.json'
+        Initialize-ProductFixture -Root $root | Out-Null
+        Copy-Item -LiteralPath (Join-Path $root 'FabListingFields.json') -Destination $listingPath
+        Write-ProductFixtureJson -Value ([ordered]@{
+                schema_version = 1
+                declarations   = @([ordered]@{ software_name = 'Fixture TPS' })
+            }) -Path (Join-Path $root 'FabTpsDeclarations.json')
+
+        Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot `
+            -ListingFieldsPath $listingPath | Out-Null
+
+        @($script:ProductTpsInvocations) | Should -BeExactly ([System.IO.Path]::GetFullPath($listingPath))
     }
 
     It 'rejects listing/configuration mismatches' -ForEach @(
