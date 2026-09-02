@@ -263,7 +263,9 @@ function Assert-TpsBuildInfo {
                 'Architecture', 'DistributedThirdPartyNoticeFile', 'CMakeOptions')) {
             $property = $BuildInfo.PSObject.Properties[$name]
             if ($null -eq $property -or $null -eq $property.Value -or
-                [string]::IsNullOrWhiteSpace([string]$property.Value)) {
+                ($name -ceq 'CMakeOptions' -and @($property.Value).Count -eq 0) -or
+                ($name -cne 'CMakeOptions' -and
+                [string]::IsNullOrWhiteSpace([string]$property.Value))) {
                 throw "Assimp BUILD-INFO.json must contain '$name'."
             }
         }
