@@ -31,6 +31,29 @@ standalone license-related files as Review Required warnings and reports `.tps`
 Third Party Software metadata separately; it never changes the meaning of
 `thirdPartyLicenseSets` or fails a package solely because a license file exists.
 
+## Fab TPS declarations
+
+Third-party software data is kept in the product repository's root
+`FabTpsDeclarations.json`, validated by
+[FabTpsDeclarations.schema.json](FabTpsDeclarations.schema.json). Product name,
+product version, and Fab listing ID are resolved from the canonical
+`FabListingFields.json` during generation rather than duplicated in the TPS
+source data. The validator also checks declaration URLs, platforms, notice-file
+paths, Assimp/TPS metadata when present, build metadata when present, and
+obvious dependency contradictions in `FabSubmissionMetadata.json`:
+
+```powershell
+pwsh .\Test-FabTpsDeclaration.ps1 `
+  -PluginPath ..\RuntimeAssetImportPlugin
+```
+
+On success it writes `FabTpsSubmission.txt` for copy/paste into the Epic TPS
+form and `FabTpsSubmission.json` as a structured artifact for future tooling,
+under `artifacts/<PluginName>/submission/`. Data management, validation, and
+submission-sheet generation are automated; the legal declaration itself and
+Formstack/Fab input or submit remain manual. This validator does not determine
+legal compliance or whether a declaration is legally sufficient.
+
 ## Requirements
 
 - Windows 10 or Windows 11
