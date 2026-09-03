@@ -1390,10 +1390,71 @@ test('verify with no product format reports safe bootstrap without mutation', as
   assert.equal(result.formatBootstrapAvailable, true);
   assert.equal(result.formatBootstrapInvoked, false);
   assert.equal(result.formatBootstrapCreated, false);
+  assert.equal(result.formatBootstrapFormatCount, 0);
+  assert.equal(result.formatInventorySource, 'prefetched-listing-data');
+  assert.equal(result.formatInventoryStatus, 'known');
   assert.equal(result.writeReady, true);
   assert.deepEqual(result.writeBlockers, []);
   assert.equal(result.network.networkMutationRequestsObserved, 0);
   assert.equal(fixture.mutations.length, 0);
+});
+
+test('prefetched format inventory rejects missing, malformed, and wrong-listing evidence', async () => {
+  for (const state of [
+    { prefetchedAssetFormats: 'missing' },
+    { prefetchedAssetFormats: {} },
+    { prefetchedListingId: '22222222-2222-4222-8222-222222222222' },
+  ]) {
+    const { result, fixture } = await scenario({ state });
+    assert.equal(result.result, 'FAIL');
+    assert.equal(result.formatBootstrapFormatCount, null);
+    assert.equal(result.formatBootstrapRequired, false);
+    assert.equal(result.formatBootstrapAvailable, false);
+    assert.equal(result.formatInventorySource, 'prefetched-listing-data');
+    assert.equal(result.formatInventoryStatus, 'unknown');
+    assert.equal(fixture.mutations.length, 0);
+    assert.match(result.formatBootstrapBlockers.join(' '), /prefetched listing format inventory is unknown/i);
+  }
+});
+
+test('DOM and prefetched format inventory disagreement fails closed', async () => {
+  const { result, fixture } = await scenario({ state: { productFormats: [], prefetchedAssetFormats: [{ assetFormatType: { code: 'unreal-engine', name: 'Unreal Engine' } }] } });
+  assert.equal(result.result, 'FAIL');
+  assert.equal(result.formatBootstrapFormatCount, 1);
+  assert.equal(result.formatBootstrapRequired, false);
+  assert.equal(result.formatBootstrapAvailable, false);
+  assert.equal(fixture.mutations.length, 0);
+  assert.match(result.formatBootstrapBlockers.join(' '), /DOM and prefetched format inventory disagree/i);
+});
+
+test('client-side prerequisite staging can reveal a format control without server mutation', async () => {
+  const manifest = makeManifest({ productType: 'Tools & Plugins' });
+  const fixture = await startFixture(fixtureState(manifest, {
+    productType: 'Other',
+    productTypeOptions: ['Other', 'Tools & Plugins'],
+    productFormats: [],
+    hideFormatInventory: true,
+    revealFormatAfterField: 'Product type *',
+  }));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const guard = installNetworkGuard(context, { mode: 'verify' });
+  try {
+    await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+    const productType = page.getByRole('combobox', { name: 'Product type *', exact: true });
+    await productType.selectOption({ label: 'Tools & Plugins' });
+    await page.waitForTimeout(50);
+    assert.equal(await page.getByRole('button', { name: 'Add new format', exact: true }).count(), 1);
+    assert.equal(guard.summary().networkMutationRequestsObserved, 0);
+    await page.reload();
+    assert.equal(await page.getByRole('combobox', { name: 'Product type *', exact: true }).inputValue(), 'Other');
+    assert.equal(await page.getByRole('button', { name: 'Add new format', exact: true }).count(), 0);
+    assert.equal(fixture.mutations.length, 0);
+  } finally {
+    await guard.dispose();
+    await context.close();
+    await fixture.close();
+  }
 });
 
 test('verify with ambiguous Add new format controls fails closed', async () => {

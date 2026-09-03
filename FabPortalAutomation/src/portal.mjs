@@ -720,6 +720,9 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     formatBootstrapCreated: false,
     formatBootstrapFormatCount: null,
     formatBootstrapBlockers: [],
+    formatInventorySource: null,
+    formatInventoryStatus: 'unknown',
+    formatInventoryReason: null,
     selectedPageUrl: page?.url() ?? null,
     targetPageSelectionReason,
     initialNavigationPerformed: false,
@@ -792,6 +795,9 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     result.formatBootstrapAvailable = bootstrap.available;
     result.formatBootstrapFormatCount = bootstrap.formatCount;
     result.formatBootstrapBlockers = bootstrap.blockers;
+    result.formatInventorySource = bootstrap.inventorySource;
+    result.formatInventoryStatus = bootstrap.inventoryStatus;
+    result.formatInventoryReason = bootstrap.inventoryReason;
     if (bootstrap.blockers.length > 0) result.blockers.push(...bootstrap.blockers);
     if (bootstrap.required && mode !== 'verify') {
       if (!bootstrap.available) throw new Error(`Format bootstrap blocked: ${bootstrap.blockers.join(' ')}`);

@@ -19,9 +19,15 @@ function pageMarkup(state, listingId) {
     ? `<div data-status-value>${html(state.status)}</div>`
     : `<div data-testid="listing-status" data-status-value>${html(state.status)}</div>`;
   const productFormats = state.productFormats ?? [{ name: 'Unreal Engine' }];
+  const prefetchedFormats = state.prefetchedAssetFormats === 'missing'
+    ? undefined
+    : state.prefetchedAssetFormats ?? productFormats.map((format) => ({ assetFormatType: { code: format.code ?? format.name.toLowerCase().replaceAll(' ', '-'), name: format.name } }));
+  const prefetchedListing = { uid: listingId, ...(prefetchedFormats === undefined ? {} : { assetFormats: prefetchedFormats }) };
+  const prefetchedKey = state.prefetchedListingId ?? listingId;
+  const prefetchedData = JSON.stringify({ [`/i/portal/listings/${prefetchedKey}`]: prefetchedListing }).replaceAll('<', '\\u003c');
   const addFormatButtons = Array.from({ length: state.addFormatButtonCount ?? 1 }, () => '<button type="button" aria-label="Add new format">Add new format</button>').join('');
   const formatChoices = Array.from({ length: state.formatChoiceCount ?? 1 }, () => '<button type="button" role="option" aria-label="Unreal Engine">Unreal Engine</button>').join('');
-  const formatInventory = `<section aria-label="Included Files" data-testid="product-formats" data-format-count="${productFormats.length}"><h2>Included Files</h2>${productFormats.map((format) => `<button type="button" data-format-name="${html(format.name)}">${html(format.name)}</button>`).join('')}${addFormatButtons}</section>`;
+  const formatInventory = `<section aria-label="Included Files" data-testid="product-formats" data-format-count="${productFormats.length}"${state.hideFormatInventory ? ' hidden' : ''}><h2>Included Files</h2>${productFormats.map((format) => `<button type="button" data-format-name="${html(format.name)}">${html(format.name)}</button>`).join('')}${addFormatButtons}</section>`;
   const formatChooser = `<div role="dialog" aria-label="Add new format" hidden><h2>Add new format</h2>${formatChoices}</div>`;
   const listingControls = `
     <h1>${html(state.title)}</h1>
@@ -29,7 +35,7 @@ function pageMarkup(state, listingId) {
     <label>Title *<input aria-label="Title *" value="${html(state.title)}" ${state.disableFields?.includes('title') ? 'disabled' : ''}></label>
     <label>Short description *<input aria-label="Short description *" value="${html(state.shortDescription)}" ${state.disableFields?.includes('shortDescription') ? 'disabled' : ''}></label>
     <label>Description *<div role="textbox" aria-label="Description *" contenteditable="true">${html(state.longDescription)}</div></label>
-    <label>Product type *<select aria-label="Product type *"><option selected>${html(state.productType)}</option></select></label>
+    <label>Product type *<select aria-label="Product type *">${(state.productTypeOptions ?? [state.productType]).map((option) => `<option${option === state.productType ? ' selected' : ''}>${html(option)}</option>`).join('')}</select></label>
     <label>Category *<input role="combobox" aria-label="Category selection" value="${html(state.category)}"></label>
     <label>Tags *<input aria-label="Tags *" value="${html(state.tags[0] ?? '')}" readonly></label>
     ${formatInventory}
@@ -67,6 +73,7 @@ function pageMarkup(state, listingId) {
     <section data-testid="media-gallery" data-existing="${html(state.mediaExisting)}" data-order="${html(state.mediaOrder ?? '')}" data-upload-order="${html(initialStateMediaOrder(state))}">${html(state.mediaExisting === 'existing' ? 'Existing media' : state.mediaExisting === 'known' || state.mediaExisting === 'uploaded' ? '001 thumbnail 002 gallery' : 'Empty gallery')}</section>
     <input type="file" data-testid="media-upload" multiple>`;
   return `<!doctype html><html><head><title>Fab fixture</title></head><body>
+  <script id="js-json-data-prefetched-data" type="application/json">${prefetchedData}</script>
   <main id="listing-view">${listingControls}</main>
   <main id="format-view" hidden>${formatControls}</main>
   ${challengeMarkup}
@@ -157,6 +164,9 @@ function pageMarkup(state, listingId) {
       document.getElementById(toggle.getAttribute('aria-controls')).hidden = false;
     }));
     document.querySelector('[data-testid="media-upload"]').addEventListener('change', () => { const gallery = document.querySelector('[data-testid="media-gallery"]'); gallery.dataset.existing = 'uploaded'; gallery.dataset.order = gallery.dataset.uploadOrder; gallery.textContent = '001 thumbnail 002 gallery'; });
+    const revealFormatAfterField = ${JSON.stringify(state.revealFormatAfterField ?? null)};
+    if (revealFormatAfterField) document.querySelectorAll('input,select,[contenteditable="true"]').forEach((control) => control.addEventListener('input', () => { if (control.getAttribute('aria-label') === revealFormatAfterField) document.querySelector('[data-testid="product-formats"]')?.removeAttribute('hidden'); }));
+    if (revealFormatAfterField) document.querySelectorAll('select').forEach((control) => control.addEventListener('change', () => { if (control.getAttribute('aria-label') === revealFormatAfterField) document.querySelector('[data-testid="product-formats"]')?.removeAttribute('hidden'); }));
   </script>
   </body></html>`;
 }

@@ -351,8 +351,13 @@ mismatch; it does not imply write readiness. The run report records
 critical fields would block a future write.
 
 For a new Draft listing with zero product formats, Verify performs a
-read-only inventory check and reports `formatBootstrapRequired` and
-`formatBootstrapAvailable`; it never creates a format. With explicit
+read-only inventory check. When Fab exposes its normal
+`js-json-data-prefetched-data` payload, the exact listing UUID and
+`assetFormats` array are used as the `prefetched-listing-data` evidence source;
+missing, malformed, mismatched, or contradictory data remains unknown and
+fails closed. Verify reports `formatBootstrapRequired`, the proven
+`formatBootstrapFormatCount`, and `formatBootstrapAvailable`; it never creates
+a format. With explicit
 `-SaveDraft` authorization, the portal automation may create exactly one
 supported `Unreal Engine` product format when the listing UUID, title, Draft
 status, empty format inventory, Add new format control, chooser choice, and

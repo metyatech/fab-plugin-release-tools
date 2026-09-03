@@ -39,6 +39,47 @@ function formatChoice(page) {
   };
 }
 
+const PREFETCHED_DATA_SELECTOR = '#js-json-data-prefetched-data';
+
+export async function readPrefetchedFormatInventory(page, listingId) {
+  return page.evaluate(({ selector, expectedListingId }) => {
+    const source = document.querySelector(selector);
+    if (!source) return { status: 'unknown', source: 'prefetched-listing-data', reason: 'Prefetched listing data script was not found.' };
+    let data;
+    try {
+      data = JSON.parse(source.textContent ?? '');
+    } catch {
+      return { status: 'unknown', source: 'prefetched-listing-data', reason: 'Prefetched listing data was not valid JSON.' };
+    }
+    const key = `/i/portal/listings/${expectedListingId}`;
+    const listing = data && typeof data === 'object' && !Array.isArray(data) ? data[key] : undefined;
+    if (!listing || typeof listing !== 'object' || Array.isArray(listing)) {
+      return { status: 'unknown', source: 'prefetched-listing-data', reason: 'The exact listing UUID was not present in prefetched data.' };
+    }
+    if (listing.uid !== expectedListingId) {
+      return { status: 'unknown', source: 'prefetched-listing-data', reason: 'Prefetched listing UUID did not exactly match the target UUID.' };
+    }
+    if (!Array.isArray(listing.assetFormats)) {
+      return { status: 'unknown', source: 'prefetched-listing-data', reason: 'Prefetched assetFormats was not a JSON array.' };
+    }
+    const identities = listing.assetFormats.map((format, index) => {
+      const type = format && typeof format === 'object' && !Array.isArray(format) ? format.assetFormatType : null;
+      if (!type || typeof type !== 'object' || Array.isArray(type) || typeof type.code !== 'string' || typeof type.name !== 'string' || !type.code.trim() || !type.name.trim()) {
+        return { status: 'unknown', index };
+      }
+      return { status: 'known', index, code: type.code, name: type.name };
+    });
+    return {
+      status: 'known',
+      source: 'prefetched-listing-data',
+      listingId: expectedListingId,
+      formatCount: listing.assetFormats.length,
+      identities,
+      identityStatus: identities.every((item) => item.status === 'known') ? 'known' : 'unknown',
+    };
+  }, { selector: PREFETCHED_DATA_SELECTOR, expectedListingId: listingId });
+}
+
 export function supportedBootstrapFormat(value) {
   return SUPPORTED_FORMATS.has(String(value ?? ''));
 }
@@ -51,6 +92,9 @@ export async function inspectFormatBootstrap(page, manifest, { guard = null, ope
     matchingFormatCount: 0,
     addControlCount: 0,
     choiceCount: 0,
+    inventorySource: null,
+    inventoryStatus: 'unknown',
+    inventoryReason: null,
     blockers: [],
     choice: null,
   };
@@ -59,15 +103,38 @@ export async function inspectFormatBootstrap(page, manifest, { guard = null, ope
     return result;
   }
 
-  const region = includedFilesRegion(page);
-  if (await region.count() !== 1 || !await region.isVisible().catch(() => false)) {
-    result.blockers.push('Included Files product format inventory is not uniquely visible.');
+  const prefetched = await readPrefetchedFormatInventory(page, manifest.listingId);
+  result.inventorySource = prefetched.source ?? null;
+  result.inventoryStatus = prefetched.status;
+  result.inventoryReason = prefetched.reason ?? null;
+  if (prefetched.status !== 'known') {
+    result.blockers.push(`Prefetched listing format inventory is unknown: ${prefetched.reason}`);
     return result;
   }
-  const formats = await productFormatButtons(page);
-  result.formatCount = formats.length;
-  const matching = await visibleCount(exactButton(page, manifest.includedFormat));
+  result.formatCount = prefetched.formatCount;
+  const region = includedFilesRegion(page);
+  const regionVisible = await region.count() === 1 && await region.isVisible().catch(() => false);
+  const formats = regionVisible ? await productFormatButtons(page) : [];
+  if (regionVisible && formats.length !== prefetched.formatCount) {
+    result.blockers.push(`DOM and prefetched format inventory disagree (${formats.length} vs ${prefetched.formatCount}).`);
+    return result;
+  }
+  if (prefetched.identityStatus !== 'known') {
+    result.blockers.push('At least one prefetched product format identity was not strictly readable.');
+    return result;
+  }
+  const prefetchedMatching = prefetched.identities.filter((item) => item.name === manifest.includedFormat);
+  const matching = regionVisible ? await visibleCount(exactButton(page, manifest.includedFormat)) : prefetchedMatching;
   result.matchingFormatCount = matching.length;
+  if (regionVisible) {
+    const domNames = [];
+    for (const format of formats) domNames.push((await format.innerText().catch(() => '')).trim());
+    const prefetchedNames = prefetched.identities.map((item) => item.name);
+    if (JSON.stringify(domNames) !== JSON.stringify(prefetchedNames)) {
+      result.blockers.push('DOM and prefetched product format identities disagree.');
+      return result;
+    }
+  }
   result.required = matching.length === 0;
   if (matching.length > 1) {
     result.blockers.push(`Multiple ${manifest.includedFormat} product formats are visible.`);
@@ -80,6 +147,10 @@ export async function inspectFormatBootstrap(page, manifest, { guard = null, ope
   }
   if (result.formatCount !== 0) {
     result.blockers.push(`A non-${manifest.includedFormat} product format already exists; bootstrap is fail-closed.`);
+    return result;
+  }
+  if (!regionVisible) {
+    result.blockers.push('Included Files product format inventory is not uniquely visible.');
     return result;
   }
   const add = await visibleCount(exactButton(page, 'Add new format'));
