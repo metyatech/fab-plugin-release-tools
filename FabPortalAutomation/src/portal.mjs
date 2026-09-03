@@ -5,6 +5,7 @@ import { createStdinManualInteraction, DEFAULT_MANUAL_CHALLENGE_MAX_CYCLES, norm
 import { installNetworkGuard } from './network-guard.mjs';
 import { dangerousActionCandidates, listingEditUrl, resolveCandidate, saveCandidates, submitCandidates } from './locators.mjs';
 import { classifyFabView, isFormatView } from './view-detection.mjs';
+import { DEFERRED_FORMAT_FIELDS, executeFormatBootstrap, inspectFormatBootstrap } from './format-bootstrap.mjs';
 
 const REVIEW_LOCKED = new Set(['pending approval', 'pending publication', 'approved', 'live']);
 const KNOWN_STATUSES = ['Pending approval', 'Pending Publication', 'Changes needed', 'Draft', 'Approved', 'Live'];
@@ -343,9 +344,7 @@ async function ensureListingView(page, manifest, origin, guard = null, { passive
       await navigateToListingMain(page, manifest, guard);
       await ensureTarget(page, manifest, origin, { passive: true, diagnostics });
     }
-    if (!await isVisibleUnique(page.getByRole('button', { name: manifest.includedFormat, exact: true }))) {
-      throw new Error('MANUAL ACTION REQUIRED: the expected Fab listing main view could not be proven without navigation.');
-    }
+    if (await classifyFabView(page) !== 'listing') throw new Error('Fab listing main view could not be proven after passive attach.');
     return;
   }
   const listingControl = page.getByRole('button', { name: manifest.includedFormat, exact: true });
@@ -355,9 +354,7 @@ async function ensureListingView(page, manifest, origin, guard = null, { passive
     await hardNavigate(page, listingEditUrl(manifest.listingId, origin), { waitUntil: 'domcontentloaded' }, diagnostics);
   }
   await ensureTarget(page, manifest, origin, { diagnostics });
-  if (!await isVisibleUnique(page.getByRole('button', { name: manifest.includedFormat, exact: true }))) {
-    throw new Error('Fab listing main view could not be proven after navigation.');
-  }
+  if (await classifyFabView(page) !== 'listing') throw new Error('Fab listing main view could not be proven after navigation.');
 }
 
 async function ensureFormatView(page, manifest, origin, guard, options = {}) {
@@ -503,15 +500,17 @@ async function uniqueAction(page, candidates, actionName) {
   return resolved;
 }
 
-function criticalBlockers(comparison, manifest = null) {
+function criticalBlockers(comparison, manifest = null, { deferredFormatFields = new Set() } = {}) {
   const expected = new Set(CRITICAL_OWNED_FIELDS);
   if (manifest?.packages) for (const [index] of manifest.packages.entries()) expected.add(`packages[${index}].projectFileLink`);
   const fields = comparison.fields;
   const missing = [...expected]
+    .filter((path) => !deferredFormatFields.has(path))
     .filter((path) => !fields.some((field) => field.manifestJsonPath === path))
     .map((path) => `${path} is NOT_DISCOVERED.`);
   return [...missing, ...fields
     .filter((field) => CRITICAL_OWNED_FIELDS.has(field.manifestJsonPath) || /^packages\[\d+\]\.projectFileLink$/.test(field.manifestJsonPath))
+    .filter((field) => !deferredFormatFields.has(field.manifestJsonPath))
     .filter((field) => ['NOT_VISIBLE', 'NOT_DISCOVERED'].includes(field.classification) || (field.classification === 'MISMATCH' && !field.writeTarget))
     .map((field) => `${field.manifestJsonPath} is ${field.classification}${field.classification === 'MISMATCH' ? ' and has no approved writable locator' : ''}.`)];
 }
@@ -525,10 +524,10 @@ function manifestWriteBlockers(manifest) {
   return blockers;
 }
 
-function writeReadiness(listingStatus, comparison, manifest) {
+function writeReadiness(listingStatus, comparison, manifest, options = {}) {
   const blockers = manifestWriteBlockers(manifest);
   if (REVIEW_LOCKED.has(normalized(listingStatus).toLowerCase())) blockers.push(`Listing status ${listingStatus} is review-locked.`);
-  blockers.push(...criticalBlockers(comparison, manifest));
+  blockers.push(...criticalBlockers(comparison, manifest, options));
   return { writeReady: blockers.length === 0, writeBlockers: [...new Set(blockers)] };
 }
 
@@ -555,6 +554,18 @@ async function preflightMutationViews(page, plan, manifestInfo, origin, guard, d
     prepared.push({ ...group, preflight });
   }
   return { ok: failures.length === 0, failures, groups: prepared };
+}
+
+async function collectListingOnlyComparison(page, manifestInfo, origin, guard, diagnostics, { passive = false } = {}) {
+  await ensureListingView(page, manifestInfo.manifest, origin, guard, { passive, diagnostics });
+  const actions = await prepareReadOnlySections(page, guard);
+  return { comparison: await compareManifest(page, manifestInfo, { view: 'listing' }), readOnlyUiActions: actions };
+}
+
+function deferredFormatFieldSet(manifest) {
+  const fields = new Set(DEFERRED_FORMAT_FIELDS);
+  for (const [index] of manifest.packages.entries()) fields.add(`packages[${index}].projectFileLink`);
+  return fields;
 }
 
 function assertCompleteComparison(comparison, manifest) {
@@ -703,6 +714,12 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     readOnlyUiActions: [],
     writeReady: false,
     writeBlockers: [],
+    formatBootstrapRequired: false,
+    formatBootstrapAvailable: false,
+    formatBootstrapInvoked: false,
+    formatBootstrapCreated: false,
+    formatBootstrapFormatCount: null,
+    formatBootstrapBlockers: [],
     selectedPageUrl: page?.url() ?? null,
     targetPageSelectionReason,
     initialNavigationPerformed: false,
@@ -755,7 +772,7 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     page = initialRead.page;
     result.listingStatus = initialRead.value;
     result.dangerousActionsFound = await readDangerousActions(page);
-    const collectedResult = await withManualChallengeHandoff({
+    const bootstrapRun = await withManualChallengeHandoff({
       context,
       page,
       manifest: manifestInfo.manifest,
@@ -764,13 +781,78 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
       manualInteraction: interaction,
       maxCycles: maxManualChallengeCycles,
       diagnostics: result,
-      action: (candidatePage) => collectPortalComparison(candidatePage, manifestInfo, { guard, origin, passive: passiveAttach, diagnostics: result }),
+      action: async (candidatePage) => {
+        await ensureListingView(candidatePage, manifestInfo.manifest, origin, guard, { passive: passiveAttach, diagnostics: result });
+        return inspectFormatBootstrap(candidatePage, manifestInfo.manifest, { guard, openChooser: true });
+      },
     });
-    page = collectedResult.page;
-    const collected = collectedResult.value;
-    result.readOnlyUiActions.push(...collected.readOnlyUiActions);
-    result.comparison = collected.comparison;
-    ({ writeReady: result.writeReady, writeBlockers: result.writeBlockers } = writeReadiness(result.listingStatus, result.comparison, manifestInfo.manifest));
+    page = bootstrapRun.page;
+    const bootstrap = bootstrapRun.value;
+    result.formatBootstrapRequired = bootstrap.required;
+    result.formatBootstrapAvailable = bootstrap.available;
+    result.formatBootstrapFormatCount = bootstrap.formatCount;
+    result.formatBootstrapBlockers = bootstrap.blockers;
+    if (bootstrap.blockers.length > 0) result.blockers.push(...bootstrap.blockers);
+    if (bootstrap.required && mode !== 'verify') {
+      if (!bootstrap.available) throw new Error(`Format bootstrap blocked: ${bootstrap.blockers.join(' ')}`);
+      const createRun = await withManualChallengeHandoff({
+        context,
+        page,
+        manifest: manifestInfo.manifest,
+        origin,
+        result,
+        manualInteraction: interaction,
+        maxCycles: maxManualChallengeCycles,
+        diagnostics: result,
+        action: async (candidatePage) => executeFormatBootstrap(candidatePage, manifestInfo.manifest, bootstrap, {
+          guard,
+          onMutation: () => {
+            result.formatBootstrapInvoked = true;
+            result.writeInteractionsPerformed += 1;
+          },
+        }),
+      });
+      page = createRun.page;
+      result.formatBootstrapCreated = createRun.value.created;
+      result.formatBootstrapFormatCount = 1;
+      result.formatBootstrapAvailable = true;
+    }
+    if (bootstrap.required && mode === 'verify') {
+      const listingOnly = await withManualChallengeHandoff({
+        context,
+        page,
+        manifest: manifestInfo.manifest,
+        origin,
+        result,
+        manualInteraction: interaction,
+        maxCycles: maxManualChallengeCycles,
+        diagnostics: result,
+        action: (candidatePage) => collectListingOnlyComparison(candidatePage, manifestInfo, origin, guard, result, { passive: true }),
+      });
+      page = listingOnly.page;
+      result.readOnlyUiActions.push(...listingOnly.value.readOnlyUiActions);
+      result.comparison = listingOnly.value.comparison;
+      if (bootstrap.available) result.blockers.push('Unreal Engine product format is missing; a safe Save Draft bootstrap is available.');
+      else result.blockers.push('Unreal Engine product format is missing and safe bootstrap is unavailable.');
+      ({ writeReady: result.writeReady, writeBlockers: result.writeBlockers } = writeReadiness(result.listingStatus, result.comparison, manifestInfo.manifest, { deferredFormatFields: bootstrap.available ? deferredFormatFieldSet(manifestInfo.manifest) : new Set() }));
+    } else {
+      const collectedResult = await withManualChallengeHandoff({
+        context,
+        page,
+        manifest: manifestInfo.manifest,
+        origin,
+        result,
+        manualInteraction: interaction,
+        maxCycles: maxManualChallengeCycles,
+        diagnostics: result,
+        action: (candidatePage) => collectPortalComparison(candidatePage, manifestInfo, { guard, origin, passive: passiveAttach, diagnostics: result }),
+      });
+      page = collectedResult.page;
+      const collected = collectedResult.value;
+      result.readOnlyUiActions.push(...collected.readOnlyUiActions);
+      result.comparison = collected.comparison;
+      ({ writeReady: result.writeReady, writeBlockers: result.writeBlockers } = writeReadiness(result.listingStatus, result.comparison, manifestInfo.manifest));
+    }
     if (mode === 'verify') {
       if (result.comparison.mismatchCount > 0) result.blockers.push(`${result.comparison.mismatchCount} manifest mismatch(es).`);
       result.result = result.blockers.length === 0 ? 'PASS' : 'FAIL';
@@ -781,7 +863,7 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     result.plannedMutations = mutation.plan;
     result.blockers.push(...mutation.blockers);
     if (result.blockers.length > 0) throw new Error(result.blockers.join(' '));
-    if (mutation.plan.length === 0) {
+    if (mutation.plan.length === 0 && !result.formatBootstrapInvoked) {
       result.comparisonAfter = result.comparison;
     } else {
       const mutationRun = await withManualChallengeHandoff({

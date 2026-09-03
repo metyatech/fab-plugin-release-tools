@@ -350,6 +350,20 @@ mismatch; it does not imply write readiness. The run report records
 `writeReady` and `writeBlockers` when review-locked status or unresolved
 critical fields would block a future write.
 
+For a new Draft listing with zero product formats, Verify performs a
+read-only inventory check and reports `formatBootstrapRequired` and
+`formatBootstrapAvailable`; it never creates a format. With explicit
+`-SaveDraft` authorization, the portal automation may create exactly one
+supported `Unreal Engine` product format when the listing UUID, title, Draft
+status, empty format inventory, Add new format control, chooser choice, and
+final creation action are all uniquely proven. Existing exact Unreal Engine
+formats are reused on retry. Ambiguous, duplicate, or unrelated formats fail
+closed without mutation. Format creation uses its own narrowly allowlisted
+`format-create` network phase and does not broaden permissions for Submit,
+Publish, Delete, Cancel, or other unknown mutations. If a later preflight fails
+after format creation, the tool stops without Save, Submit, or destructive
+rollback and reports the partial state.
+
 Staging manifests with `portalReady: false` and unresolved package
 `projectFileLink: null` values are valid for read-only verification. They are
 never written to Fab; Save Draft and Submit for review require a manifest with

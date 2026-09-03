@@ -18,6 +18,11 @@ function pageMarkup(state, listingId) {
   const statusMarkup = state.statusRendering === 'plain-text'
     ? `<div data-status-value>${html(state.status)}</div>`
     : `<div data-testid="listing-status" data-status-value>${html(state.status)}</div>`;
+  const productFormats = state.productFormats ?? [{ name: 'Unreal Engine' }];
+  const addFormatButtons = Array.from({ length: state.addFormatButtonCount ?? 1 }, () => '<button type="button" aria-label="Add new format">Add new format</button>').join('');
+  const formatChoices = Array.from({ length: state.formatChoiceCount ?? 1 }, () => '<button type="button" role="option" aria-label="Unreal Engine">Unreal Engine</button>').join('');
+  const formatInventory = `<section aria-label="Included Files" data-testid="product-formats" data-format-count="${productFormats.length}"><h2>Included Files</h2>${productFormats.map((format) => `<button type="button" data-format-name="${html(format.name)}">${html(format.name)}</button>`).join('')}${addFormatButtons}</section>`;
+  const formatChooser = `<div role="dialog" aria-label="Add new format" hidden><h2>Add new format</h2>${formatChoices}</div>`;
   const listingControls = `
     <h1>${html(state.title)}</h1>
     ${statusMarkup}
@@ -27,7 +32,7 @@ function pageMarkup(state, listingId) {
     <label>Product type *<select aria-label="Product type *"><option selected>${html(state.productType)}</option></select></label>
     <label>Category *<input role="combobox" aria-label="Category selection" value="${html(state.category)}"></label>
     <label>Tags *<input aria-label="Tags *" value="${html(state.tags[0] ?? '')}" readonly></label>
-    <button type="button" data-testid="included-format">Unreal Engine</button>
+    ${formatInventory}
     ${state.mainProjectVersionsVisible ? '<h2>Project Versions*</h2><a href="/portal/listings">Back to listings</a>' : ''}
     ${radio('Standard License (Free or Paid)', true)}
     <label>Personal price *<input aria-label="Personal price *" value="${html(state.personalPriceUsd)}"></label>
@@ -43,7 +48,7 @@ function pageMarkup(state, listingId) {
     <button type="button" data-testid="submit">Submit for review</button>
     <button type="button" data-testid="cancel">Cancel submission</button>
     ${unrelatedDialog}
-    ${confirmationDialog}`;
+    ${confirmationDialog}${formatChooser}`;
   const formatControls = `
     ${state.omitFormatBack ? '' : '<button type="button" aria-label="Back to listing">Back to listing</button>'}
     ${state.formatListingSummaryVisible ? `<button type="button" data-testid="format-listing-summary">${html(state.title)} Tools &amp; Plugins From $29.99</button>` : ''}
@@ -107,7 +112,21 @@ function pageMarkup(state, listingId) {
       mediaExisting: document.querySelector('[data-testid="media-gallery"]')?.dataset.existing ?? 'existing',
       mediaOrder: document.querySelector('[data-testid="media-gallery"]')?.dataset.order ?? ''
     });
-    document.querySelector('[data-testid="included-format"]').addEventListener('click', () => setView('format'));
+    document.querySelectorAll('[data-format-name]').forEach((button) => button.addEventListener('click', () => setView('format')));
+    document.querySelectorAll('[aria-label="Add new format"]').forEach((button) => button.addEventListener('click', () => { document.querySelector('[role="dialog"][aria-label="Add new format"]').hidden = false; }));
+    document.querySelectorAll('[role="option"][aria-label="Unreal Engine"]').forEach((choice) => choice.addEventListener('click', async () => {
+      if (${JSON.stringify(Boolean(state.challengeAfterFormatCreate))}) revealChallenge();
+      await fetch(${JSON.stringify(state.formatCreateRequestPath ?? '/api/create-format')}, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Unreal Engine' }) });
+      const inventory = document.querySelector('[data-testid="product-formats"]');
+      inventory.dataset.formatCount = '1';
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.formatName = 'Unreal Engine';
+      button.textContent = 'Unreal Engine';
+      button.addEventListener('click', () => setView('format'));
+      inventory.insertBefore(button, inventory.querySelector('[aria-label="Add new format"]'));
+      document.querySelector('[role="dialog"][aria-label="Add new format"]').hidden = true;
+    }));
     document.querySelector('[aria-label="Back to listing"]')?.addEventListener('click', () => setView('listing'));
     document.querySelector('[data-testid="format-listing-summary"]')?.addEventListener('click', () => setView('listing'));
     document.querySelector('[data-testid="save"]').addEventListener('click', () => { syncFormatState(); if (${JSON.stringify(Boolean(state.challengeAfterSave))}) revealChallenge(); fetch('/api/save', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload()) }); });
@@ -175,6 +194,14 @@ export async function startFixture(initialState, { dropSaveFields = [], redirect
       mutations.push({ method: 'POST', pathname: url.pathname, body });
       for (const [key, value] of Object.entries(body)) if (!dropSaveFields.includes(key)) state[key] = value;
       if (state.challengeAfterSave) state.challengeVisible = true;
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end('{}');
+      return;
+    }
+    if (request.method === 'POST' && url.pathname === (state.formatCreateRequestPath ?? '/api/create-format')) {
+      const body = JSON.parse(await readBody(request) || '{}');
+      mutations.push({ method: 'POST', pathname: url.pathname, body });
+      if (body.name === 'Unreal Engine' && !(state.productFormats ?? []).some((format) => format.name === 'Unreal Engine')) state.productFormats = [...(state.productFormats ?? []), { name: 'Unreal Engine' }];
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end('{}');
       return;

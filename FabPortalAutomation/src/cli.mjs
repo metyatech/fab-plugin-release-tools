@@ -64,6 +64,7 @@ function emit(value, json) {
     process.stdout.write(`writeInteractionsPerformed=${value.writeInteractionsPerformed} Save=${value.saveInvoked} Submit=${value.submitInvoked}\n`);
     process.stdout.write(`submitAccepted=${value.submitAccepted} postSubmitStatus=${value.postSubmitStatus ?? 'null'}\n`);
     process.stdout.write(`writeReady=${value.writeReady} writeBlockers=${value.writeBlockers?.length ?? 0}\n`);
+    process.stdout.write(`formatBootstrapRequired=${value.formatBootstrapRequired} formatBootstrapAvailable=${value.formatBootstrapAvailable} formatBootstrapInvoked=${value.formatBootstrapInvoked} formatBootstrapCreated=${value.formatBootstrapCreated} formatCount=${value.formatBootstrapFormatCount ?? 'unknown'}\n`);
     process.stdout.write(`manualChallengeDetected=${value.manualChallengeDetected} manualChallengeHandoffCount=${value.manualChallengeHandoffCount} manualChallengeCompleted=${value.manualChallengeCompleted} manualChallengeCancelled=${value.manualChallengeCancelled}\n`);
     process.stdout.write(`automationHardNavigationCount=${value.automationHardNavigationCount} humanObservedNavigationCount=${value.humanObservedNavigationCount}\n`);
     process.stdout.write(`networkMutationRequestsObserved=${value.network?.networkMutationRequestsObserved ?? 0} networkMutationRequestsBlocked=${value.network?.networkMutationRequestsBlocked ?? 0}\n`);

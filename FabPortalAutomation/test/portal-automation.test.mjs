@@ -1382,3 +1382,146 @@ test('new empty media gallery uploads in manifest order', async () => {
   assert.deepEqual(result.executedMutations, ['media']);
   assert.equal(fixture.mutations[0].body.mediaOrder, '1:thumbnail,2:gallery');
 });
+
+test('verify with no product format reports safe bootstrap without mutation', async () => {
+  const { result, fixture } = await scenario({ state: { productFormats: [] } });
+  assert.equal(result.result, 'FAIL');
+  assert.equal(result.formatBootstrapRequired, true);
+  assert.equal(result.formatBootstrapAvailable, true);
+  assert.equal(result.formatBootstrapInvoked, false);
+  assert.equal(result.formatBootstrapCreated, false);
+  assert.equal(result.writeReady, true);
+  assert.deepEqual(result.writeBlockers, []);
+  assert.equal(result.network.networkMutationRequestsObserved, 0);
+  assert.equal(fixture.mutations.length, 0);
+});
+
+test('verify with ambiguous Add new format controls fails closed', async () => {
+  const { result, fixture } = await scenario({ state: { productFormats: [], addFormatButtonCount: 2 } });
+  assert.equal(result.result, 'FAIL');
+  assert.equal(result.formatBootstrapRequired, true);
+  assert.equal(result.formatBootstrapAvailable, false);
+  assert.equal(result.writeReady, false);
+  assert.equal(result.network.networkMutationRequestsObserved, 0);
+  assert.equal(fixture.mutations.length, 0);
+  assert.match(result.formatBootstrapBlockers.join(' '), /visible match count is 2/i);
+});
+
+test('save with no product format creates exactly one format and saves the draft', async () => {
+  const { result, fixture } = await scenario({ state: { productFormats: [] }, mode: 'save', saveDraftAuthorized: true });
+  assert.equal(result.result, 'PASS');
+  assert.equal(result.formatBootstrapRequired, true);
+  assert.equal(result.formatBootstrapAvailable, true);
+  assert.equal(result.formatBootstrapInvoked, true);
+  assert.equal(result.formatBootstrapCreated, true);
+  assert.equal(fixture.state.productFormats.filter((format) => format.name === 'Unreal Engine').length, 1);
+  assert.equal(fixture.mutations.filter((item) => item.pathname === '/api/create-format').length, 1);
+  assert.equal(fixture.mutations.filter((item) => item.pathname === '/api/save').length, 1);
+  assert.equal(result.saveInvoked, true);
+  assert.equal(result.submitInvoked, false);
+  assert.equal(result.comparisonAfter.counts.MISMATCH, 0);
+});
+
+test('existing exact Unreal Engine format is reused without bootstrap', async () => {
+  const { result, fixture } = await scenario();
+  assert.equal(result.result, 'PASS');
+  assert.equal(result.formatBootstrapRequired, false);
+  assert.equal(result.formatBootstrapInvoked, false);
+  assert.equal(fixture.mutations.length, 0);
+});
+
+test('duplicate Unreal Engine formats fail before mutation', async () => {
+  const { result, fixture } = await scenario({ state: { productFormats: [{ name: 'Unreal Engine' }, { name: 'Unreal Engine' }] } });
+  assert.equal(result.result, 'FAIL');
+  assert.equal(result.formatBootstrapAvailable, false);
+  assert.equal(result.writeReady, false);
+  assert.equal(fixture.mutations.length, 0);
+  assert.match(result.formatBootstrapBlockers.join(' '), /multiple Unreal Engine/i);
+});
+
+test('a wrong existing format blocks bootstrap without mutation', async () => {
+  const { result, fixture } = await scenario({ state: { productFormats: [{ name: 'Unity' }] } });
+  assert.equal(result.result, 'FAIL');
+  assert.equal(result.formatBootstrapRequired, true);
+  assert.equal(result.formatBootstrapAvailable, false);
+  assert.equal(fixture.mutations.length, 0);
+  assert.match(result.formatBootstrapBlockers.join(' '), /non-Unreal Engine/i);
+});
+
+test('ambiguous Unreal Engine choice fails closed before mutation', async () => {
+  const { result, fixture } = await scenario({ state: { productFormats: [], formatChoiceCount: 2 } });
+  assert.equal(result.result, 'FAIL');
+  assert.equal(result.formatBootstrapAvailable, false);
+  assert.equal(result.writeReady, false);
+  assert.equal(fixture.mutations.length, 0);
+  assert.match(result.formatBootstrapBlockers.join(' '), /choice visible match count is 2/i);
+});
+
+test('format-create mutation is blocked in verify mode', async () => {
+  const fixture = await startFixture(fixtureState(makeManifest(), { productFormats: [] }));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const guard = installNetworkGuard(context, { mode: 'verify' });
+  try {
+    await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+    await page.evaluate(() => fetch('/api/create-format', { method: 'POST' }).catch(() => undefined));
+    await page.waitForTimeout(50);
+    assert.equal(fixture.mutations.length, 0);
+    assert.equal(guard.summary().networkMutationRequestsObserved, 1);
+    assert.equal(guard.summary().networkMutationRequestsBlocked, 1);
+  } finally {
+    await guard.dispose();
+    await context.close();
+    await fixture.close();
+  }
+});
+
+test('exact format-create mutation is allowed only in format-create phase', async () => {
+  const fixture = await startFixture(fixtureState(makeManifest(), { productFormats: [] }));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const guard = installNetworkGuard(context, { mode: 'save' });
+  try {
+    await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+    await page.evaluate(() => fetch('/api/create-format', { method: 'POST' }).catch(() => undefined));
+    await page.waitForTimeout(50);
+    assert.equal(fixture.mutations.length, 0);
+    guard.setPhase('format-create');
+    await page.evaluate(() => fetch('/api/create-format', { method: 'POST' }));
+    await page.waitForTimeout(50);
+    assert.equal(fixture.mutations.length, 1);
+    assert.equal(guard.summary().networkMutationRequestsBlocked, 1);
+  } finally {
+    await guard.dispose();
+    await context.close();
+    await fixture.close();
+  }
+});
+
+test('unknown mutation during bootstrap is blocked and Save Draft is not invoked', async () => {
+  const { result, fixture } = await scenario({ state: { productFormats: [], formatCreateRequestPath: '/api/unexpected-format-write' }, mode: 'save', saveDraftAuthorized: true });
+  assert.equal(result.result, 'FAIL');
+  assert.equal(result.formatBootstrapInvoked, true);
+  assert.equal(result.formatBootstrapCreated, false);
+  assert.equal(result.saveInvoked, false);
+  assert.equal(fixture.mutations.length, 0);
+  assert.equal(result.network.networkMutationRequestsBlocked, 1);
+});
+
+test('format bootstrap requires explicit Save Draft authorization', async () => {
+  await assert.rejects(
+    () => scenario({ state: { productFormats: [] }, mode: 'save', saveDraftAuthorized: false }),
+    /explicit Save Draft authorization/i,
+  );
+});
+
+test('challenge after format bootstrap stops without Save or rollback', async () => {
+  const { result, fixture } = await scenario({ state: { productFormats: [], challengeAfterFormatCreate: true }, mode: 'save', saveDraftAuthorized: true });
+  assert.equal(result.result, 'FAIL');
+  assert.equal(result.formatBootstrapInvoked, true);
+  assert.equal(result.formatBootstrapCreated, true);
+  assert.equal(result.saveInvoked, false);
+  assert.equal(fixture.mutations.filter((item) => item.pathname === '/api/create-format').length, 1);
+  assert.equal(fixture.mutations.some((item) => item.pathname === '/api/save'), false);
+  assert.match(result.blockers.join(' '), /after Fab mutations were staged|Cloudflare/i);
+});

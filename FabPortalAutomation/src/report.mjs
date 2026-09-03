@@ -31,6 +31,11 @@ function markdown(result, comparison, after, network) {
 - Post-submit status: ${result.postSubmitStatus ?? 'null'}
 - Write ready: ${result.writeReady}
 - Write interactions: ${result.writeInteractionsPerformed}
+- Format bootstrap required: ${result.formatBootstrapRequired}
+- Format bootstrap available: ${result.formatBootstrapAvailable}
+- Format bootstrap invoked: ${result.formatBootstrapInvoked}
+- Format bootstrap created: ${result.formatBootstrapCreated}
+- Format bootstrap format count: ${result.formatBootstrapFormatCount ?? 'unknown'}
 - Passive attach: ${result.passiveAttach}
 - Selected page URL: ${result.selectedPageUrl ?? 'unknown'}
 - Target page selection: ${result.targetPageSelectionReason ?? 'unknown'}
@@ -86,6 +91,12 @@ export async function writeRunReport({ directory, result, comparison, comparison
     postSubmitStatus: result.postSubmitStatus,
     writeReady: result.writeReady,
     writeBlockers: result.writeBlockers,
+    formatBootstrapRequired: result.formatBootstrapRequired,
+    formatBootstrapAvailable: result.formatBootstrapAvailable,
+    formatBootstrapInvoked: result.formatBootstrapInvoked,
+    formatBootstrapCreated: result.formatBootstrapCreated,
+    formatBootstrapFormatCount: result.formatBootstrapFormatCount,
+    formatBootstrapBlockers: result.formatBootstrapBlockers,
     selectedPageUrl: result.selectedPageUrl,
     targetPageSelectionReason: result.targetPageSelectionReason,
     initialNavigationPerformed: result.initialNavigationPerformed,

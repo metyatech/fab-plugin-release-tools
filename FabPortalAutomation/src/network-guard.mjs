@@ -26,6 +26,9 @@ function graphqlOperation(request) {
 
 function classifyRequestIntent(url, method, graph) {
   const haystack = `${url.pathname} ${graph?.name ?? ''}`.toLowerCase();
+  // The fixture endpoint is intentionally local-only. Production Fab format
+  // creation must be admitted only after observing its exact request identity.
+  if (method === 'POST' && ['127.0.0.1', 'localhost'].includes(url.hostname) && url.pathname === '/api/create-format') return 'format-create';
   if (/(?:cancel|abort)/.test(haystack)) return 'cancel';
   if (method === 'DELETE' || /(?:delete|destroy)/.test(haystack)) return 'delete';
   if (/(?:unlist|unpublish)/.test(haystack)) return 'unlist';
@@ -47,6 +50,7 @@ function isMutation(method, graph, intent) {
 function phaseAllows(mode, phase, intent) {
   if (mode === 'verify') return false;
   if (intent === 'cancel' || intent === 'delete' || intent === 'unlist' || intent === 'publish') return false;
+  if (phase === 'format-create') return (mode === 'save' || mode === 'submit') && intent === 'format-create';
   if (phase === 'media-upload') return (mode === 'save' || mode === 'submit') && intent === 'media-upload';
   if (phase === 'field-update') return (mode === 'save' || mode === 'submit') && intent === 'save';
   if (mode === 'save') return phase === 'save' && intent === 'save';
