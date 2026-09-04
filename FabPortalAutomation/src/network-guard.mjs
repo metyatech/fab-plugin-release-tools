@@ -98,7 +98,9 @@ export function validateListingLicensePayload({ method, url, body }, expected) {
   const base = validateExactListingPayload({ method, url, body }, expected, 'Listing license prerequisite');
   if (!base.ok) return base;
   if (expected.licenseToken !== 'standard') return { ok: false, reason: 'Listing license prerequisite did not declare the exact standard license token.' };
-  if (!Array.isArray(expected.licensePayload)) return { ok: false, reason: 'Listing license prerequisite did not declare the observed license payload shape.' };
+  const explicitStandardPayload = expected.licensePayload === 'standard'
+    || (Array.isArray(expected.licensePayload) && expected.licensePayload.length === 1 && expected.licensePayload[0] === 'standard');
+  if (!explicitStandardPayload) return { ok: false, reason: 'Listing license prerequisite had no explicit standard-license identity in the observed payload contract.' };
   if (!sameJson(body.licenses, expected.licensePayload)) return { ok: false, reason: 'Listing license prerequisite license payload did not match the observed standard-license shape.' };
   for (const key of base.expectedKeys) {
     if (key !== 'licenses' && !sameJson(body[key], expected.unchanged[key])) return { ok: false, reason: `Listing license prerequisite sibling field changed unexpectedly: ${key}.` };

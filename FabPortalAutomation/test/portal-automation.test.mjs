@@ -368,7 +368,7 @@ function licenseContract(origin, overrides = {}) {
     origin,
     listingId,
     licenseToken: 'standard',
-    licensePayload: [],
+    licensePayload: ['standard'],
     payloadKeys: [...LISTING_PREREQUISITE_PAYLOAD_KEYS],
     unchanged: {
       category: prerequisiteCategoryId,
@@ -432,9 +432,10 @@ test('listing prerequisite validator admits only the exact observed Category pay
 
 test('listing license validator admits only the exact observed standard-license payload', () => {
   const contract = licenseContract('https://www.fab.com');
-  const valid = validateListingLicensePayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: prerequisitePayload() }, contract);
+  const valid = validateListingLicensePayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: prerequisitePayload({ licenses: ['standard'] }) }, contract);
   assert.deepEqual(valid, { ok: true });
   assert.equal(validateListingLicensePayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/33333333-3333-4333-8333-333333333333`, body: prerequisitePayload() }, contract).ok, false);
+  assert.equal(validateListingLicensePayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: prerequisitePayload({ licenses: [] }) }, contract).ok, false);
   assert.equal(validateListingLicensePayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: prerequisitePayload({ licenses: ['cc'] }) }, contract).ok, false);
   assert.equal(validateListingLicensePayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: { ...prerequisitePayload(), personal_price: 39.99 } }, contract).ok, false);
   assert.equal(validateListingLicensePayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: { ...prerequisitePayload(), description: 'unexpected' } }, contract).ok, false);
@@ -449,9 +450,9 @@ test('exact listing license autosave is blocked outside its dedicated save phase
   const guard = installNetworkGuard(context, { mode: 'save', listingLicense: contract });
   try {
     await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
-    await page.evaluate(({ id, payload }) => fetch(`/i/portal/listings/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }).catch(() => undefined), { id: listingId, payload: prerequisitePayload() });
+    await page.evaluate(({ id, payload }) => fetch(`/i/portal/listings/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }).catch(() => undefined), { id: listingId, payload: prerequisitePayload({ licenses: ['standard'] }) });
     guard.setPhase('listing-license-save');
-    await page.evaluate(({ id, payload }) => fetch(`/i/portal/listings/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }), { id: listingId, payload: prerequisitePayload() });
+    await page.evaluate(({ id, payload }) => fetch(`/i/portal/listings/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }), { id: listingId, payload: prerequisitePayload({ licenses: ['standard'] }) });
     const summary = guard.summary();
     assert.equal(summary.networkMutationRequestsObserved, 2);
     assert.equal(summary.networkMutationRequestsBlocked, 1);
@@ -472,7 +473,7 @@ test('listing license guard blocks phase mismatch, wrong value, sibling, and dan
   try {
     await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
     const send = (payload, path = `/i/portal/listings/${listingId}`, method = 'PATCH') => page.evaluate(({ path, method, payload }) => fetch(path, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }).catch(() => undefined), { path, method, payload });
-    await send(prerequisitePayload());
+    await send(prerequisitePayload({ licenses: ['standard'] }));
     guard.setPhase('listing-license-save');
     await send(prerequisitePayload({ licenses: ['cc'] }));
     await send(prerequisitePayload({ tags: ['unexpected'] }));
@@ -501,7 +502,7 @@ test('standard license helper clicks one exact radio and waits for the guarded P
       const radio = document.querySelector('input[aria-label="Standard License (Free or Paid)"]');
       radio.checked = false;
       radio.addEventListener('change', () => fetch(`/i/portal/listings/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }));
-    }, { id: listingId, payload: prerequisitePayload() });
+    }, { id: listingId, payload: prerequisitePayload({ licenses: ['standard'] }) });
     const result = await persistStandardLicense(page, { guard, contract });
     assert.equal(result.mutationCount, 1);
     assert.equal(result.responseStatus, 200);

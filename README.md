@@ -379,9 +379,10 @@ does not authorize format creation, Submit, Publish, Delete, or Cancel; an
 unexpected payload or phase fails closed.
 
 Standard-license persistence uses a separate `listing-license-save` phase.
-It admits only the exact target UUID, the observed `standard` radio selection
-and payload shape, and unchanged sibling fields. Price fields, unknown
-payloads, and generic listing updates remain blocked.
+It admits only the exact target UUID, an explicit `standard` identity in the
+observed payload shape, and unchanged sibling fields. Price fields, unknown
+payloads, and generic listing updates remain blocked; an empty `licenses`
+array is not sufficient evidence of a selected standard license.
 
 Staging manifests with `portalReady: false` and unresolved package
 `projectFileLink: null` values are valid for read-only verification. They are
