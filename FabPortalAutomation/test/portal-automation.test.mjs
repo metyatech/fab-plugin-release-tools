@@ -5,7 +5,8 @@ import path from 'node:path';
 import test from 'node:test';
 import { chromium } from 'playwright-core';
 import { buildMutationPlan, executeMutationPlan, preflightMutationPlan } from '../src/mutation-plan.mjs';
-import { installNetworkGuard } from '../src/network-guard.mjs';
+import { installNetworkGuard, validateListingPrerequisitePayload } from '../src/network-guard.mjs';
+import { inspectPrefetchedListingPrerequisite, LISTING_PREREQUISITE_PAYLOAD_KEYS } from '../src/listing-prerequisite.mjs';
 import { compareManifest, comparePlatformClassification, comparePriceClassification } from '../src/comparison.mjs';
 import { detectManualBlock, mergeListingAndFormatComparisons, runPortalAutomation, selectExistingTargetPage } from '../src/portal.mjs';
 import { parseArgs } from '../src/cli.mjs';
@@ -317,6 +318,184 @@ async function waitForPrompt(promptState) {
   while (!promptState.entered && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(promptState.entered, true, 'manual challenge prompt was not reached');
 }
+
+const prerequisiteCategoryId = '22222222-2222-4222-8222-222222222222';
+
+function prerequisiteContract(origin, overrides = {}) {
+  return {
+    origin,
+    listingId,
+    categoryId: prerequisiteCategoryId,
+    payloadKeys: [...LISTING_PREREQUISITE_PAYLOAD_KEYS],
+    unchanged: {
+      description: '',
+      has_promotional_content: false,
+      intellectual_property_confirmed: false,
+      is_ai_forbidden: false,
+      is_ai_generated: true,
+      licenses: [],
+      listing_type: 'tool-and-plugin',
+      seller_provided_maturity_rating: 'U18',
+      tags: [],
+      title: 'Fixture Product',
+      use_comment_thread: false,
+    },
+    ...overrides,
+  };
+}
+
+function prerequisitePayload(overrides = {}) {
+  return {
+    category: prerequisiteCategoryId,
+    description: '',
+    has_promotional_content: false,
+    intellectual_property_confirmed: false,
+    is_ai_forbidden: false,
+    is_ai_generated: true,
+    licenses: [],
+    listing_type: 'tool-and-plugin',
+    seller_provided_maturity_rating: 'U18',
+    tags: [],
+    title: 'Fixture Product',
+    use_comment_thread: false,
+    ...overrides,
+  };
+}
+
+test('prefetched listing prerequisite resolves an exact category identity', () => {
+  const data = {
+    [`/i/portal/listings/${listingId}`]: {
+      uid: listingId,
+      title: 'Fixture Product',
+      listingType: 'tool-and-plugin',
+      description: '',
+      hasPromotionalContent: false,
+      intellectualPropertyConfirmed: false,
+      isAiForbidden: false,
+      isAiGenerated: true,
+      licenses: [],
+      sellerProvidedMaturityRating: 'U18',
+      tags: [],
+      useCommentThread: false,
+      assetFormats: [],
+    },
+    '/i/taxonomy/categories/tree': { results: { 'tool-and-plugin': [{ uid: prerequisiteCategoryId, name: 'Engine Tools' }] } },
+  };
+  const result = inspectPrefetchedListingPrerequisite(data, { listingId, productType: 'Tools & Plugins', category: 'Engine Tools', title: 'Fixture Product' });
+  assert.equal(result.status, 'known');
+  assert.equal(result.categoryId, prerequisiteCategoryId);
+  assert.equal(result.source, 'prefetched-listing-data');
+});
+
+test('prefetched listing prerequisite fails closed for missing, malformed, or wrong-listing evidence', () => {
+  const options = { listingId, productType: 'Tools & Plugins', category: 'Engine Tools', title: 'Fixture Product' };
+  assert.equal(inspectPrefetchedListingPrerequisite({}, options).status, 'unknown');
+  assert.equal(inspectPrefetchedListingPrerequisite({ [`/i/portal/listings/${listingId}`]: null }, options).status, 'unknown');
+  assert.equal(inspectPrefetchedListingPrerequisite({ [`/i/portal/listings/${listingId}`]: { uid: '33333333-3333-4333-8333-333333333333' } }, options).status, 'unknown');
+});
+
+test('listing prerequisite validator admits only the exact observed Category payload', () => {
+  const contract = prerequisiteContract('https://www.fab.com');
+  const valid = validateListingPrerequisitePayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: prerequisitePayload() }, contract);
+  assert.deepEqual(valid, { ok: true });
+  assert.equal(validateListingPrerequisitePayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: prerequisitePayload({ category: '33333333-3333-4333-8333-333333333333' }) }, contract).ok, false);
+  assert.equal(validateListingPrerequisitePayload({ method: 'PATCH', url: 'https://www.fab.com/i/portal/listings/33333333-3333-4333-8333-333333333333', body: prerequisitePayload() }, contract).ok, false);
+  assert.equal(validateListingPrerequisitePayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: prerequisitePayload({ tags: ['unexpected'] }) }, contract).ok, false);
+  assert.equal(validateListingPrerequisitePayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: { ...prerequisitePayload(), unexpected: true } }, contract).ok, false);
+  assert.equal(validateListingPrerequisitePayload({ method: 'POST', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: prerequisitePayload() }, contract).ok, false);
+});
+
+test('listing prerequisite autosave is blocked in verify and stage phases', async () => {
+  const fixture = await startFixture(fixtureState(makeManifest()));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const contract = prerequisiteContract(fixture.origin);
+  const guard = installNetworkGuard(context, { mode: 'save', listingPrerequisite: contract });
+  try {
+    await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+    await page.evaluate(({ id, payload }) => fetch(`/i/portal/listings/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }).catch(() => undefined), { id: listingId, payload: prerequisitePayload() });
+    guard.setPhase('listing-prerequisite-save');
+    await page.evaluate(({ id, payload }) => fetch(`/i/portal/listings/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }), { id: listingId, payload: prerequisitePayload() });
+    const summary = guard.summary();
+    assert.equal(summary.networkMutationRequestsObserved, 2);
+    assert.equal(summary.networkMutationRequestsBlocked, 1);
+    assert.equal(summary.requests.filter((item) => item.intent === 'listing-prerequisite-save' && !item.blocked).length, 1);
+    assert.equal(fixture.mutations.length, 0);
+  } finally {
+    await guard.dispose();
+    await context.close();
+    await fixture.close();
+  }
+});
+
+test('exact listing prerequisite payload remains blocked in verify mode', async () => {
+  const fixture = await startFixture(fixtureState(makeManifest()));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const guard = installNetworkGuard(context, { mode: 'verify', listingPrerequisite: prerequisiteContract(fixture.origin) });
+  try {
+    await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+    await page.evaluate(({ id, payload }) => fetch(`/i/portal/listings/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }).catch(() => undefined), { id: listingId, payload: prerequisitePayload() });
+    assert.equal(guard.summary().networkMutationRequestsBlocked, 1);
+    assert.equal(fixture.mutations.length, 0);
+  } finally {
+    await guard.dispose();
+    await context.close();
+    await fixture.close();
+  }
+});
+
+test('listing prerequisite validator blocks wrong phase, wrong sibling, and unknown shape without server mutation', async () => {
+  const fixture = await startFixture(fixtureState(makeManifest()));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const guard = installNetworkGuard(context, { mode: 'save', listingPrerequisite: prerequisiteContract(fixture.origin) });
+  try {
+    await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+    await page.evaluate(({ id, payload }) => fetch(`/i/portal/listings/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }).catch(() => undefined), { id: listingId, payload: prerequisitePayload({ description: 'unexpected' }) });
+    const summary = guard.summary();
+    assert.equal(summary.networkMutationRequestsObserved, 1);
+    assert.equal(summary.networkMutationRequestsBlocked, 1);
+    assert.match(summary.requests.find((item) => item.method === 'PATCH')?.validationReason ?? '', /sibling field changed/i);
+    assert.equal(fixture.mutations.length, 0);
+  } finally {
+    await guard.dispose();
+    await context.close();
+    await fixture.close();
+  }
+});
+
+test('category mutation resolves the observed Fab treeitem choice exactly', async () => {
+  const manifest = makeManifest({ category: 'Engine Tools' });
+  const fixture = await startFixture(fixtureState(manifest, { category: '' }));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const info = await makeManifestInfo(manifest);
+  try {
+    await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+    await page.evaluate(() => {
+      const input = document.querySelector('[aria-label="Category selection"]');
+      const choice = document.createElement('div');
+      choice.setAttribute('role', 'treeitem');
+      choice.textContent = 'Engine Tools';
+      choice.addEventListener('click', () => { input.value = 'Engine Tools'; });
+      document.body.append(choice);
+    });
+    const item = {
+      fieldName: 'category',
+      view: 'listing',
+      mutationType: 'combobox',
+      locator: { strategy: 'getByRole', role: 'combobox', name: 'Category selection', exact: true },
+    };
+    const executed = await executeMutationPlan(page, { ok: true, targets: [{ item }] }, info);
+    assert.deepEqual(executed, ['category']);
+    assert.equal(await page.getByLabel('Category selection').inputValue(), 'Engine Tools');
+    assert.equal(fixture.mutations.length, 0);
+  } finally {
+    await context.close();
+    await fixture.close();
+  }
+});
 
 test('startup Cloudflare challenge pauses without browser operations until human confirmation', async () => {
   const manifest = makeManifest();

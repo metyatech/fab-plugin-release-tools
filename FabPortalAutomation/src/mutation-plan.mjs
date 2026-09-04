@@ -67,14 +67,16 @@ export async function preflightMutationPlan(page, plan, manifest) {
   return { ok: failures.length === 0, failures, targets: resolvedTargets };
 }
 
-async function selectExactOption(page, desired) {
-  const options = page.getByRole('option', { name: String(desired), exact: true });
+async function selectExactOption(page, desired, fieldName) {
+  const options = fieldName === 'category'
+    ? page.getByRole('treeitem', { name: String(desired), exact: true })
+    : page.getByRole('option', { name: String(desired), exact: true });
   const count = await options.count();
   if (count !== 1) throw new Error(`Expected exactly one option named ${desired}; found ${count}.`);
   await options.click();
 }
 
-export async function executeMutationPlan(page, preflight, manifestInfo, { setPhase = null, assertView = null, beforeMutation = null, onMutationExecuted = null } = {}) {
+export async function executeMutationPlan(page, preflight, manifestInfo, { setPhase = null, assertView = null, beforeMutation = null, onMutationExecuted = null, phaseFor = null } = {}) {
   const executed = [];
   for (const { item } of preflight.targets) {
     await assertView?.(item.view ?? 'listing');
@@ -82,7 +84,7 @@ export async function executeMutationPlan(page, preflight, manifestInfo, { setPh
     const exact = await resolveExactWritableTarget(page, item);
     if (!exact.ok) throw new Error(`Execution target validation failed: ${exact.failures.join(' ')}`);
     const locator = exact.locator;
-    setPhase?.(item.mutationType === 'upload' ? 'media-upload' : 'field-update');
+    setPhase?.(phaseFor?.(item) ?? (item.mutationType === 'upload' ? 'media-upload' : 'field-update'));
     const packageMatch = item.fieldName.match(/^packages\[(\d+)\]\.projectFileLink$/);
     const desired = packageMatch
       ? manifestInfo.manifest.packages[Number(packageMatch[1])].projectFileLink
@@ -91,7 +93,7 @@ export async function executeMutationPlan(page, preflight, manifestInfo, { setPh
       if (item.mutationType === 'text' || item.mutationType === 'richText') await locator.fill(String(desired));
       else if (item.mutationType === 'combobox') {
         await locator.click();
-        await selectExactOption(page, desired);
+        await selectExactOption(page, desired, item.fieldName);
       } else if (item.mutationType === 'boolean') {
         const checked = await locator.isChecked();
         const checkedValue = item.checkedValue ?? true;

@@ -50,6 +50,7 @@ function isMutation(method, graph, intent) {
 function phaseAllows(mode, phase, intent) {
   if (mode === 'verify') return false;
   if (intent === 'cancel' || intent === 'delete' || intent === 'unlist' || intent === 'publish') return false;
+  if (phase === 'listing-prerequisite-save') return mode === 'save' && intent === 'listing-prerequisite-save';
   if (phase === 'format-create') return (mode === 'save' || mode === 'submit') && intent === 'format-create';
   if (phase === 'media-upload') return (mode === 'save' || mode === 'submit') && intent === 'media-upload';
   if (phase === 'field-update') return (mode === 'save' || mode === 'submit') && intent === 'save';
@@ -58,7 +59,35 @@ function phaseAllows(mode, phase, intent) {
   return false;
 }
 
-export function installNetworkGuard(context, { mode = 'verify' } = {}) {
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value && typeof value === 'object') return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
+  return JSON.stringify(value);
+}
+
+function sameJson(left, right) {
+  return canonicalJson(left) === canonicalJson(right);
+}
+
+export function validateListingPrerequisitePayload({ method, url, body }, expected) {
+  if (!expected || typeof expected !== 'object') return { ok: false, reason: 'No listing prerequisite contract was configured.' };
+  if (String(method).toUpperCase() !== 'PATCH') return { ok: false, reason: 'Listing prerequisite persistence requires PATCH.' };
+  let parsedUrl;
+  try { parsedUrl = new URL(url); } catch { return { ok: false, reason: 'Listing prerequisite URL was invalid.' }; }
+  if (parsedUrl.origin !== expected.origin) return { ok: false, reason: 'Listing prerequisite origin did not match the expected Fab origin.' };
+  if (parsedUrl.pathname !== `/i/portal/listings/${expected.listingId}`) return { ok: false, reason: 'Listing prerequisite pathname did not match the target listing UUID.' };
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return { ok: false, reason: 'Listing prerequisite payload was not a JSON object.' };
+  const keys = Object.keys(body).sort();
+  const expectedKeys = [...expected.payloadKeys].sort();
+  if (JSON.stringify(keys) !== JSON.stringify(expectedKeys)) return { ok: false, reason: 'Listing prerequisite payload keys were not exact.' };
+  if (body.category !== expected.categoryId) return { ok: false, reason: 'Listing prerequisite category identity did not match the expected category.' };
+  for (const key of expectedKeys) {
+    if (key !== 'category' && !sameJson(body[key], expected.unchanged[key])) return { ok: false, reason: `Listing prerequisite sibling field changed unexpectedly: ${key}.` };
+  }
+  return { ok: true };
+}
+
+export function installNetworkGuard(context, { mode = 'verify', listingPrerequisite = null } = {}) {
   const effectiveMode = mode === 'write' ? 'save' : mode;
   const state = { mode: effectiveMode, phase: 'stage', phaseHistory: ['stage'], requests: [], observed: 0, blocked: 0 };
   const handler = async (route) => {
@@ -66,7 +95,16 @@ export function installNetworkGuard(context, { mode = 'verify' } = {}) {
     const method = request.method().toUpperCase();
     const url = new URL(request.url());
     const graph = graphqlOperation(request);
-    const intent = classifyRequestIntent(url, method, graph);
+    let intent = classifyRequestIntent(url, method, graph);
+    let validationReason = null;
+    if (method === 'PATCH' && listingPrerequisite) {
+      const postData = request.postData();
+      let body = null;
+      try { body = postData ? JSON.parse(postData) : null; } catch { /* validation below fails closed */ }
+      const validation = validateListingPrerequisitePayload({ method, url: request.url(), body }, listingPrerequisite);
+      if (validation.ok) intent = 'listing-prerequisite-save';
+      else validationReason = validation.reason;
+    }
     const fabRequest = url.hostname === 'www.fab.com' || url.hostname.endsWith('.fab.com') || url.hostname === '127.0.0.1' || url.hostname === 'localhost';
     const mutation = isMutation(method, graph, intent);
     const block = mutation && (!fabRequest || !phaseAllows(effectiveMode, state.phase, intent));
@@ -82,6 +120,7 @@ export function installNetworkGuard(context, { mode = 'verify' } = {}) {
         mutation,
         phase: state.phase,
         blocked: block,
+        ...(validationReason ? { validationReason } : {}),
       });
     }
     if (block) {

@@ -369,6 +369,15 @@ Publish, Delete, Cancel, or other unknown mutations. If a later preflight fails
 after format creation, the tool stops without Save, Submit, or destructive
 rollback and reports the partial state.
 
+Some new listings expose no format controls until a listing prerequisite has
+been persisted. The observed Fab Category autosave is supported only through
+the dedicated `listing-prerequisite-save` phase: the target UUID, exact
+category identity, listing type, title, complete payload key set, and every
+non-category sibling value must match the prefetched listing snapshot. Verify
+always blocks it, and no generic listing PATCH is admitted. This narrow path
+does not authorize format creation, Submit, Publish, Delete, or Cancel; an
+unexpected payload or phase fails closed.
+
 Staging manifests with `portalReady: false` and unresolved package
 `projectFileLink: null` values are valid for read-only verification. They are
 never written to Fab; Save Draft and Submit for review require a manifest with
