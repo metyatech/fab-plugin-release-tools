@@ -1,3 +1,5 @@
+import { acquireResponsiveViewportLease } from './responsive-viewport.mjs';
+
 const SUPPORTED_FORMATS = new Set(['Unreal Engine']);
 
 function visibleCount(locator) {
@@ -16,6 +18,15 @@ function exactButton(page, name) {
 
 function includedFilesRegion(page) {
   return page.getByRole('region', { name: 'Included Files', exact: true });
+}
+
+async function formatNavigationMounted(page, manifest, formatCount) {
+  const region = includedFilesRegion(page);
+  if (await region.count() === 1 && await region.isVisible().catch(() => false)) return true;
+  const control = formatCount === 0
+    ? exactButton(page, 'Add new format')
+    : exactButton(page, manifest.includedFormat);
+  return (await visibleCount(control)).length > 0;
 }
 
 async function productFormatButtons(page) {
@@ -84,7 +95,7 @@ export function supportedBootstrapFormat(value) {
   return SUPPORTED_FORMATS.has(String(value ?? ''));
 }
 
-export async function inspectFormatBootstrap(page, manifest, { guard = null, openChooser = true } = {}) {
+export async function inspectFormatBootstrap(page, manifest, { guard = null, openChooser = true, closeChooser = false, viewportLease = null, holdViewportLease = false, portalViewport = null } = {}) {
   const result = {
     required: false,
     available: false,
@@ -112,81 +123,95 @@ export async function inspectFormatBootstrap(page, manifest, { guard = null, ope
     return result;
   }
   result.formatCount = prefetched.formatCount;
-  const region = includedFilesRegion(page);
-  const regionVisible = await region.count() === 1 && await region.isVisible().catch(() => false);
-  const formats = regionVisible ? await productFormatButtons(page) : [];
-  if (regionVisible && formats.length !== prefetched.formatCount) {
-    result.blockers.push(`DOM and prefetched format inventory disagree (${formats.length} vs ${prefetched.formatCount}).`);
-    return result;
-  }
-  if (prefetched.identityStatus !== 'known') {
-    result.blockers.push('At least one prefetched product format identity was not strictly readable.');
-    return result;
-  }
-  const prefetchedMatching = prefetched.identities.filter((item) => item.name === manifest.includedFormat);
-  const matching = regionVisible ? await visibleCount(exactButton(page, manifest.includedFormat)) : prefetchedMatching;
-  result.matchingFormatCount = matching.length;
-  if (regionVisible) {
-    const domNames = [];
-    for (const format of formats) domNames.push((await format.innerText().catch(() => '')).trim());
-    const prefetchedNames = prefetched.identities.map((item) => item.name);
-    if (JSON.stringify(domNames) !== JSON.stringify(prefetchedNames)) {
-      result.blockers.push('DOM and prefetched product format identities disagree.');
+  const viewportEvidence = portalViewport ?? {};
+  const lease = viewportLease ?? await acquireResponsiveViewportLease(page, {
+    diagnostics: viewportEvidence,
+    isMounted: () => formatNavigationMounted(page, manifest, prefetched.formatCount),
+  });
+  Object.defineProperty(result, 'viewportLease', { value: lease, enumerable: false, configurable: true });
+  try {
+    const region = includedFilesRegion(page);
+    const regionVisible = await region.count() === 1 && await region.isVisible().catch(() => false);
+    const formats = regionVisible ? await productFormatButtons(page) : [];
+    if (regionVisible && formats.length !== prefetched.formatCount) {
+      result.blockers.push(`DOM and prefetched format inventory disagree (${formats.length} vs ${prefetched.formatCount}).`);
       return result;
     }
-  }
-  result.required = matching.length === 0;
-  if (matching.length > 1) {
-    result.blockers.push(`Multiple ${manifest.includedFormat} product formats are visible.`);
+    if (prefetched.identityStatus !== 'known') {
+      result.blockers.push('At least one prefetched product format identity was not strictly readable.');
+      return result;
+    }
+    const matching = await visibleCount(exactButton(page, manifest.includedFormat));
+    result.matchingFormatCount = matching.length;
+    if (regionVisible) {
+      const domNames = [];
+      for (const format of formats) domNames.push((await format.innerText().catch(() => '')).trim());
+      const prefetchedNames = prefetched.identities.map((item) => item.name);
+      if (JSON.stringify(domNames) !== JSON.stringify(prefetchedNames)) {
+        result.blockers.push('DOM and prefetched product format identities disagree.');
+        return result;
+      }
+    }
+    result.required = matching.length === 0;
+    if (matching.length > 1) {
+      result.blockers.push(`Multiple ${manifest.includedFormat} product formats are visible.`);
+      return result;
+    }
+    if (!result.required) {
+      if (result.formatCount !== 1) result.blockers.push(`Expected exactly one product format, found ${result.formatCount}.`);
+      else result.available = true;
+      return result;
+    }
+    if (result.formatCount !== 0) {
+      result.blockers.push(`A non-${manifest.includedFormat} product format already exists; bootstrap is fail-closed.`);
+      return result;
+    }
+    const add = await visibleCount(exactButton(page, 'Add new format'));
+    result.addControlCount = add.length;
+    if (add.length !== 1) {
+      result.blockers.push(`Add new format control visible match count is ${add.length}.`);
+      return result;
+    }
+    if (!openChooser) {
+      result.blockers.push('Unreal Engine choice was not inspected.');
+      return result;
+    }
+    const before = guard?.summary().networkMutationRequestsObserved ?? 0;
+    try {
+      await add[0].click();
+      await page.waitForTimeout(100);
+    } catch (error) {
+      result.blockers.push(`Add new format chooser could not be opened: ${error instanceof Error ? error.message : String(error)}`);
+      return result;
+    }
+    const after = guard?.summary().networkMutationRequestsObserved ?? before;
+    if (after > before) {
+      result.blockers.push('Opening Add new format caused a network mutation; read-only bootstrap inspection was blocked.');
+      return result;
+    }
+    const choice = formatChoice(page);
+    const options = await visibleCount(choice.options);
+    const buttons = options.length === 0 ? await visibleCount(choice.buttons) : [];
+    result.choiceCount = options.length + buttons.length;
+    if (result.choiceCount !== 1) {
+      result.blockers.push(`Unreal Engine choice visible match count is ${result.choiceCount}.`);
+      return result;
+    }
+    result.choice = options.length === 1 ? options[0] : buttons[0];
+    result.available = true;
     return result;
-  }
-  if (!result.required) {
-    if (result.formatCount !== 1) result.blockers.push(`Expected exactly one product format, found ${result.formatCount}.`);
-    else result.available = true;
-    return result;
-  }
-  if (result.formatCount !== 0) {
-    result.blockers.push(`A non-${manifest.includedFormat} product format already exists; bootstrap is fail-closed.`);
-    return result;
-  }
-  if (!regionVisible) {
-    result.blockers.push('Included Files product format inventory is not uniquely visible.');
-    return result;
-  }
-  const add = await visibleCount(exactButton(page, 'Add new format'));
-  result.addControlCount = add.length;
-  if (add.length !== 1) {
-    result.blockers.push(`Add new format control visible match count is ${add.length}.`);
-    return result;
-  }
-  if (!openChooser) {
-    result.blockers.push('Unreal Engine choice was not inspected.');
-    return result;
-  }
-  const before = guard?.summary().networkMutationRequestsObserved ?? 0;
-  try {
-    await add[0].click();
-    await page.waitForTimeout(100);
   } catch (error) {
-    result.blockers.push(`Add new format chooser could not be opened: ${error instanceof Error ? error.message : String(error)}`);
-    return result;
+    if (holdViewportLease) await lease.release().catch(() => undefined);
+    throw error;
+  } finally {
+    if (closeChooser) {
+      const dialog = page.getByRole('dialog', { name: /add (?:new )?format/i });
+      if (await dialog.count() === 1 && await dialog.isVisible().catch(() => false)) {
+        await page.keyboard.press('Escape').catch(() => undefined);
+      }
+    }
+    if (!holdViewportLease) await lease.release();
   }
-  const after = guard?.summary().networkMutationRequestsObserved ?? before;
-  if (after > before) {
-    result.blockers.push('Opening Add new format caused a network mutation; read-only bootstrap inspection was blocked.');
-    return result;
-  }
-  const choice = formatChoice(page);
-  const options = await visibleCount(choice.options);
-  const buttons = options.length === 0 ? await visibleCount(choice.buttons) : [];
-  result.choiceCount = options.length + buttons.length;
-  if (result.choiceCount !== 1) {
-    result.blockers.push(`Unreal Engine choice visible match count is ${result.choiceCount}.`);
-    return result;
-  }
-  result.choice = options.length === 1 ? options[0] : buttons[0];
-  result.available = true;
-  return result;
 }
 
 export async function executeFormatBootstrap(page, manifest, inspection, { guard, onMutation = null } = {}) {

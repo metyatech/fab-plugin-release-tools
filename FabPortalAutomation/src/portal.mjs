@@ -723,6 +723,14 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     formatInventorySource: null,
     formatInventoryStatus: 'unknown',
     formatInventoryReason: null,
+    portalViewport: {
+      originalWidth: null,
+      originalHeight: null,
+      temporaryWideViewportUsed: false,
+      observationWidth: null,
+      observationHeight: null,
+      restored: false,
+    },
     selectedPageUrl: page?.url() ?? null,
     targetPageSelectionReason,
     initialNavigationPerformed: false,
@@ -737,6 +745,7 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     passiveAttach,
   };
   const navigationDiagnostics = createNavigationDiagnostics(context, result);
+  let responsiveViewportLease = null;
   Object.defineProperty(result, 'navigationDiagnostics', { value: navigationDiagnostics, enumerable: false, configurable: true });
   Object.defineProperty(result, 'page', { value: page, enumerable: false, configurable: true });
   Object.defineProperty(result, 'browser', { value: browser, enumerable: false, configurable: true });
@@ -786,11 +795,18 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
       diagnostics: result,
       action: async (candidatePage) => {
         await ensureListingView(candidatePage, manifestInfo.manifest, origin, guard, { passive: passiveAttach, diagnostics: result });
-        return inspectFormatBootstrap(candidatePage, manifestInfo.manifest, { guard, openChooser: true });
+        return inspectFormatBootstrap(candidatePage, manifestInfo.manifest, {
+          guard,
+          openChooser: true,
+          closeChooser: mode === 'verify',
+          holdViewportLease: true,
+          portalViewport: result.portalViewport,
+        });
       },
     });
     page = bootstrapRun.page;
     const bootstrap = bootstrapRun.value;
+    responsiveViewportLease = bootstrap.viewportLease ?? null;
     result.formatBootstrapRequired = bootstrap.required;
     result.formatBootstrapAvailable = bootstrap.available;
     result.formatBootstrapFormatCount = bootstrap.formatCount;
@@ -996,6 +1012,15 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     if (error?.code === 'MANUAL_CHALLENGE_CANCELLED') result.result = 'MANUAL_CHALLENGE_CANCELLED';
     return result;
   } finally {
+    if (responsiveViewportLease) {
+      try {
+        await responsiveViewportLease.release();
+      } catch (error) {
+        result.portalViewport.restored = false;
+        result.blockers.push(error instanceof Error ? error.message : String(error));
+        result.result = 'FAIL';
+      }
+    }
     result.selectedPageUrl = page?.url() ?? result.selectedPageUrl;
     Object.defineProperty(result, 'page', { value: page, enumerable: false, configurable: true });
     result.network = guard.summary();

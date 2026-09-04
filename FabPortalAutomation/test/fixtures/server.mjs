@@ -27,7 +27,8 @@ function pageMarkup(state, listingId) {
   const prefetchedData = JSON.stringify({ [`/i/portal/listings/${prefetchedKey}`]: prefetchedListing }).replaceAll('<', '\\u003c');
   const addFormatButtons = Array.from({ length: state.addFormatButtonCount ?? 1 }, () => '<button type="button" aria-label="Add new format">Add new format</button>').join('');
   const formatChoices = Array.from({ length: state.formatChoiceCount ?? 1 }, () => '<button type="button" role="option" aria-label="Unreal Engine">Unreal Engine</button>').join('');
-  const formatInventory = `<section aria-label="Included Files" data-testid="product-formats" data-format-count="${productFormats.length}"${state.hideFormatInventory ? ' hidden' : ''}><h2>Included Files</h2>${productFormats.map((format) => `<button type="button" data-format-name="${html(format.name)}">${html(format.name)}</button>`).join('')}${addFormatButtons}</section>`;
+  const responsiveStyle = state.responsiveFormatNavigation ? '<style>[data-responsive-format-navigation]{display:block}@media (max-width: 1000px){[data-responsive-format-navigation]{display:none}}</style>' : '';
+  const formatInventory = `<section aria-label="Included Files" data-testid="product-formats" data-responsive-format-navigation="${state.responsiveFormatNavigation ? 'true' : 'false'}" data-format-count="${productFormats.length}"${state.hideFormatInventory ? ' hidden' : ''}><h2>Included Files</h2>${productFormats.map((format) => `<button type="button" data-format-name="${html(format.name)}">${html(format.name)}</button>`).join('')}${addFormatButtons}</section>`;
   const formatChooser = `<div role="dialog" aria-label="Add new format" hidden><h2>Add new format</h2>${formatChoices}</div>`;
   const listingControls = `
     <h1>${html(state.title)}</h1>
@@ -72,7 +73,7 @@ function pageMarkup(state, listingId) {
     </section>
     <section data-testid="media-gallery" data-existing="${html(state.mediaExisting)}" data-order="${html(state.mediaOrder ?? '')}" data-upload-order="${html(initialStateMediaOrder(state))}">${html(state.mediaExisting === 'existing' ? 'Existing media' : state.mediaExisting === 'known' || state.mediaExisting === 'uploaded' ? '001 thumbnail 002 gallery' : 'Empty gallery')}</section>
     <input type="file" data-testid="media-upload" multiple>`;
-  return `<!doctype html><html><head><title>Fab fixture</title></head><body>
+  return `<!doctype html><html><head><title>Fab fixture</title>${responsiveStyle}</head><body>
   <script id="js-json-data-prefetched-data" type="application/json">${prefetchedData}</script>
   <main id="listing-view">${listingControls}</main>
   <main id="format-view" hidden>${formatControls}</main>

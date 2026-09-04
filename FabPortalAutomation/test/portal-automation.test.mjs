@@ -26,13 +26,14 @@ test.after(async () => {
   await browser.close();
 });
 
-async function scenario({ manifest = makeManifest(), state = {}, fixtureOptions = {}, mode = 'verify', saveDraftAuthorized = false, mediaFiles = [], manualInteraction = null } = {}) {
+async function scenario({ manifest = makeManifest(), state = {}, fixtureOptions = {}, mode = 'verify', saveDraftAuthorized = false, mediaFiles = [], manualInteraction = null, viewport = null } = {}) {
   const fixture = await startFixture(fixtureState(manifest, state), fixtureOptions);
   const context = await browser.newContext();
   const page = await context.newPage();
   const info = await makeManifestInfo(manifest, { mediaFiles });
   try {
     await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+    if (viewport) await page.setViewportSize(viewport);
     const result = await runPortalAutomation({ manifestInfo: info, mode, saveDraftAuthorized, origin: fixture.origin, page, context, manualInteraction });
     return { result, fixture };
   } finally {
@@ -1825,6 +1826,85 @@ test('verify with no product format reports safe bootstrap without mutation', as
   assert.equal(result.writeReady, true);
   assert.deepEqual(result.writeBlockers, []);
   assert.equal(result.network.networkMutationRequestsObserved, 0);
+  assert.equal(fixture.mutations.length, 0);
+});
+
+test('responsive empty format navigation uses a temporary wide viewport and restores it', async () => {
+  const { result, fixture } = await scenario({
+    state: { productFormats: [], responsiveFormatNavigation: true },
+    viewport: { width: 929, height: 763 },
+  });
+  assert.equal(result.formatBootstrapRequired, true);
+  assert.equal(result.formatBootstrapAvailable, true);
+  assert.equal(result.formatBootstrapFormatCount, 0);
+  assert.equal(result.formatInventorySource, 'prefetched-listing-data');
+  assert.deepEqual(result.portalViewport, {
+    originalWidth: 929,
+    originalHeight: 763,
+    temporaryWideViewportUsed: true,
+    observationWidth: 1440,
+    observationHeight: 900,
+    restored: true,
+  });
+  assert.equal(result.network.networkMutationRequestsObserved, 0);
+  assert.equal(result.network.networkMutationRequestsBlocked, 0);
+  assert.equal(fixture.mutations.length, 0);
+});
+
+test('responsive format viewport restores after a post-observation failure', async () => {
+  const { result, fixture } = await scenario({
+    state: { productFormats: [], responsiveFormatNavigation: true, readOnlySections: ['Additional information'], readOnlySectionMutation: true },
+    viewport: { width: 929, height: 763 },
+  });
+  assert.equal(result.result, 'FAIL');
+  assert.equal(result.portalViewport.temporaryWideViewportUsed, true);
+  assert.equal(result.portalViewport.observationWidth, 1440);
+  assert.equal(result.portalViewport.observationHeight, 900);
+  assert.equal(result.portalViewport.restored, true);
+  assert.equal(result.network.networkMutationRequestsBlocked, 1);
+  assert.equal(fixture.mutations.length, 0);
+});
+
+test('responsive format navigation does not resize an already-wide viewport', async () => {
+  const { result, fixture } = await scenario({
+    state: { productFormats: [], responsiveFormatNavigation: true },
+    viewport: { width: 1440, height: 900 },
+  });
+  assert.equal(result.formatBootstrapAvailable, true);
+  assert.equal(result.portalViewport.temporaryWideViewportUsed, false);
+  assert.deepEqual(result.portalViewport, {
+    originalWidth: 1440,
+    originalHeight: 900,
+    temporaryWideViewportUsed: false,
+    observationWidth: 1440,
+    observationHeight: 900,
+    restored: true,
+  });
+  assert.equal(fixture.mutations.length, 0);
+});
+
+test('responsive format navigation remains fail-closed when wide layout has no Add new format control', async () => {
+  const { result, fixture } = await scenario({
+    state: { productFormats: [], responsiveFormatNavigation: true, addFormatButtonCount: 0 },
+    viewport: { width: 929, height: 763 },
+  });
+  assert.equal(result.formatBootstrapAvailable, false);
+  assert.match(result.formatBootstrapBlockers.join(' '), /Add new format control visible match count is 0/i);
+  assert.equal(result.portalViewport.temporaryWideViewportUsed, true);
+  assert.equal(result.portalViewport.restored, true);
+  assert.equal(fixture.mutations.length, 0);
+});
+
+test('responsive existing Unreal Engine format is reused after wide navigation fallback', async () => {
+  const { result, fixture } = await scenario({
+    state: { productFormats: [{ name: 'Unreal Engine' }], responsiveFormatNavigation: true },
+    viewport: { width: 929, height: 763 },
+  });
+  assert.equal(result.result, 'PASS');
+  assert.equal(result.formatBootstrapRequired, false);
+  assert.equal(result.formatBootstrapAvailable, true);
+  assert.equal(result.portalViewport.temporaryWideViewportUsed, true);
+  assert.equal(result.portalViewport.restored, true);
   assert.equal(fixture.mutations.length, 0);
 });
 

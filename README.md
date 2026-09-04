@@ -369,6 +369,14 @@ Publish, Delete, Cancel, or other unknown mutations. If a later preflight fails
 after format creation, the tool stops without Save, Submit, or destructive
 rollback and reports the partial state.
 
+Format navigation is observed independently from the prefetched inventory. If
+Fab's responsive layout does not mount EditionNav at the current viewport, the
+automation leases a bounded `1440x900` viewport only for observation, waits for
+the exact format navigation evidence, and restores the original dimensions in
+all exit paths. Verify remains mutation-free; the run report records the
+original, observation, and restored viewport values. A wide viewport alone
+never proves a format exists or authorizes format creation.
+
 Some new listings expose no format controls until a listing prerequisite has
 been persisted. The observed Fab Category autosave is supported only through
 the dedicated `listing-prerequisite-save` phase: the target UUID, exact

@@ -38,6 +38,10 @@ function markdown(result, comparison, after, network) {
 - Format bootstrap format count: ${result.formatBootstrapFormatCount ?? 'unknown'}
 - Format inventory source: ${result.formatInventorySource ?? 'unknown'}
 - Format inventory status: ${result.formatInventoryStatus ?? 'unknown'}
+- Responsive fallback used: ${result.portalViewport?.temporaryWideViewportUsed ?? false}
+- Original viewport: ${result.portalViewport?.originalWidth ?? 'unknown'}x${result.portalViewport?.originalHeight ?? 'unknown'}
+- Observation viewport: ${result.portalViewport?.observationWidth ?? 'unknown'}x${result.portalViewport?.observationHeight ?? 'unknown'}
+- Viewport restored: ${result.portalViewport?.restored ?? false}
 - Passive attach: ${result.passiveAttach}
 - Selected page URL: ${result.selectedPageUrl ?? 'unknown'}
 - Target page selection: ${result.targetPageSelectionReason ?? 'unknown'}
@@ -102,6 +106,7 @@ export async function writeRunReport({ directory, result, comparison, comparison
     formatInventorySource: result.formatInventorySource,
     formatInventoryStatus: result.formatInventoryStatus,
     formatInventoryReason: result.formatInventoryReason,
+    portalViewport: result.portalViewport,
     selectedPageUrl: result.selectedPageUrl,
     targetPageSelectionReason: result.targetPageSelectionReason,
     initialNavigationPerformed: result.initialNavigationPerformed,
