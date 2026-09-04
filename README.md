@@ -378,11 +378,17 @@ always blocks it, and no generic listing PATCH is admitted. This narrow path
 does not authorize format creation, Submit, Publish, Delete, or Cancel; an
 unexpected payload or phase fails closed.
 
-Standard-license persistence uses a separate `listing-license-save` phase.
-It admits only the exact target UUID, an explicit `standard` identity in the
-observed payload shape, and unchanged sibling fields. Price fields, unknown
-payloads, and generic listing updates remain blocked; an empty `licenses`
-array is not sufficient evidence of a selected standard license.
+Standard-license persistence uses separate guarded phases. A license-only
+payload is never treated as complete: an empty `licenses` array and partial
+Personal selection remain blocked. When Fab emits the observed three-step
+autosave sequence, `persistStandardLicensePricing` blocks those incomplete
+requests and admits exactly one final payload containing only the Personal and
+Professional `licenseId`/`priceTierId` entries selected from the manifest's
+exact USD price options. The `listing-license-pricing-save` phase still requires
+the exact target UUID, exact payload keys, exact tier identities, and unchanged
+sibling fields. Verify, generic listing updates, price changes outside this
+contract, and unknown payloads remain blocked; this path does not authorize
+format creation, Submit, Publish, Delete, or Cancel.
 
 Staging manifests with `portalReady: false` and unresolved package
 `projectFileLink: null` values are valid for read-only verification. They are

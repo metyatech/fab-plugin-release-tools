@@ -5,13 +5,13 @@ import path from 'node:path';
 import test from 'node:test';
 import { chromium } from 'playwright-core';
 import { buildMutationPlan, executeMutationPlan, preflightMutationPlan } from '../src/mutation-plan.mjs';
-import { installNetworkGuard, validateListingLicensePayload, validateListingPrerequisitePayload } from '../src/network-guard.mjs';
+import { installNetworkGuard, validateListingLicensePayload, validateListingLicensePricingPayload, validateListingPrerequisitePayload } from '../src/network-guard.mjs';
 import { inspectPrefetchedListingPrerequisite, LISTING_PREREQUISITE_PAYLOAD_KEYS } from '../src/listing-prerequisite.mjs';
 import { compareManifest, comparePlatformClassification, comparePriceClassification } from '../src/comparison.mjs';
 import { detectManualBlock, mergeListingAndFormatComparisons, runPortalAutomation, selectExistingTargetPage } from '../src/portal.mjs';
 import { parseArgs } from '../src/cli.mjs';
 import { classifyFabView, FAB_VIEW } from '../src/view-detection.mjs';
-import { persistStandardLicense } from '../src/listing-license.mjs';
+import { persistStandardLicense, persistStandardLicensePricing } from '../src/listing-license.mjs';
 import { startFixture } from './fixtures/server.mjs';
 import { fixtureState, makeManifest, makeManifestInfo, listingId } from './helpers.mjs';
 
@@ -387,6 +387,40 @@ function licenseContract(origin, overrides = {}) {
   };
 }
 
+const personalLicenseEntry = { licenseId: '33333333-3333-4333-8333-333333333336', priceTierId: 'personal_USD_3999' };
+const professionalLicenseEntry = { licenseId: '33333333-3333-4333-8333-333333333339', priceTierId: 'professional_USD_7999' };
+
+function licensePricingContract(origin, overrides = {}) {
+  return {
+    origin,
+    listingId,
+    licenseToken: 'standard',
+    currency: 'USD',
+    personalPriceUsd: 39.99,
+    professionalPriceUsd: 79.99,
+    licensePayload: [personalLicenseEntry, professionalLicenseEntry],
+    payloadKeys: [...LISTING_PREREQUISITE_PAYLOAD_KEYS],
+    unchanged: {
+      category: prerequisiteCategoryId,
+      description: '',
+      has_promotional_content: false,
+      intellectual_property_confirmed: false,
+      is_ai_forbidden: false,
+      is_ai_generated: true,
+      listing_type: 'tool-and-plugin',
+      seller_provided_maturity_rating: 'U18',
+      tags: [],
+      title: 'Fixture Product',
+      use_comment_thread: false,
+    },
+    ...overrides,
+  };
+}
+
+function licensePricingPayload(licenses, overrides = {}) {
+  return { ...prerequisitePayload({ licenses }), ...overrides };
+}
+
 test('prefetched listing prerequisite resolves an exact category identity', () => {
   const data = {
     [`/i/portal/listings/${listingId}`]: {
@@ -440,6 +474,86 @@ test('listing license validator admits only the exact observed standard-license 
   assert.equal(validateListingLicensePayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: { ...prerequisitePayload(), personal_price: 39.99 } }, contract).ok, false);
   assert.equal(validateListingLicensePayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: { ...prerequisitePayload(), description: 'unexpected' } }, contract).ok, false);
   assert.equal(validateListingLicensePayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: null }, contract).ok, false);
+});
+
+test('listing license pricing validator admits only the exact complete two-tier payload', () => {
+  const contract = licensePricingContract('https://www.fab.com');
+  const valid = validateListingLicensePricingPayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: licensePricingPayload(contract.licensePayload) }, contract);
+  assert.deepEqual(valid, { ok: true });
+  for (const licenses of [[], [personalLicenseEntry], [professionalLicenseEntry]]) {
+    assert.equal(validateListingLicensePricingPayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: licensePricingPayload(licenses) }, contract).ok, false);
+  }
+  assert.equal(validateListingLicensePricingPayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: licensePricingPayload([{ ...personalLicenseEntry, priceTierId: 'personal_USD_4999' }, professionalLicenseEntry]) }, contract).ok, false);
+  assert.equal(validateListingLicensePricingPayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: licensePricingPayload([personalLicenseEntry, { ...professionalLicenseEntry, priceTierId: 'professional_JPY_7999' }]) }, contract).ok, false);
+  assert.equal(validateListingLicensePricingPayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: licensePricingPayload(contract.licensePayload, { tags: ['unexpected'] }) }, contract).ok, false);
+  assert.equal(validateListingLicensePricingPayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: licensePricingPayload(contract.licensePayload, { personal_price: 39.99 }) }, contract).ok, false);
+  assert.equal(validateListingLicensePricingPayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/33333333-3333-4333-8333-333333333333`, body: licensePricingPayload(contract.licensePayload) }, contract).ok, false);
+  assert.equal(validateListingLicensePricingPayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: { ...licensePricingPayload(contract.licensePayload), licenses: [{ licenseId: personalLicenseEntry.licenseId, priceTierId: personalLicenseEntry.priceTierId, extra: true }, professionalLicenseEntry] } }, contract).ok, false);
+});
+
+test('complete license pricing is blocked in verify mode and incomplete requests never become allowed', async () => {
+  const fixture = await startFixture(fixtureState(makeManifest()));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const contract = licensePricingContract(fixture.origin);
+  const guard = installNetworkGuard(context, { mode: 'verify', listingLicensePricing: contract });
+  try {
+    await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+    const send = (licenses) => page.evaluate(({ id, licenses }) => fetch(`/i/portal/listings/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...window.__payload, licenses }) }).catch(() => undefined), { id: listingId, licenses });
+    await page.evaluate((payload) => { window.__payload = payload; }, licensePricingPayload([]));
+    await send([]);
+    await send([personalLicenseEntry]);
+    await send(contract.licensePayload);
+    const summary = guard.summary();
+    assert.equal(summary.networkMutationRequestsObserved, 3);
+    assert.equal(summary.networkMutationRequestsBlocked, 3);
+    assert.equal(summary.requests.some((item) => item.intent === 'listing-license-pricing-save' && !item.blocked), false);
+    assert.equal(fixture.mutations.length, 0);
+  } finally {
+    await guard.dispose();
+    await context.close();
+    await fixture.close();
+  }
+});
+
+test('standard license pricing helper blocks incomplete autosaves and allows one exact complete request', async () => {
+  const fixture = await startFixture(fixtureState(makeManifest()));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const contract = licensePricingContract(fixture.origin);
+  try {
+    await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+    await page.evaluate(({ id, contract }) => {
+      document.body.innerHTML = `
+        <label>Standard License (Free or Paid)<input type="radio" aria-label="Standard License (Free or Paid)" value="standard"></label>
+        <label>Personal price *<input aria-label="Personal price *" role="combobox" placeholder="Select Personal price"></label>
+        <label>Professional price *<input aria-label="Professional price *" role="combobox" placeholder="Select Professional price"></label>
+        <div id="personal-options" role="listbox" aria-label="Personal price" hidden><li role="option" data-value="personal_USD_3999">39.99 (USD)</li></div>
+        <div id="professional-options" role="listbox" aria-label="Professional price" hidden><li role="option" data-value="professional_USD_7999">79.99 (USD)</li></div>`;
+      const base = { category: '22222222-2222-4222-8222-222222222222', description: '', has_promotional_content: false, intellectual_property_confirmed: false, is_ai_forbidden: false, is_ai_generated: true, listing_type: 'tool-and-plugin', seller_provided_maturity_rating: 'U18', tags: [], title: 'Fixture Product', use_comment_thread: false };
+      const send = (licenses) => fetch(`/i/portal/listings/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...base, licenses }) }).catch(() => undefined);
+      const personal = document.querySelector('[aria-label="Personal price *"]');
+      const professional = document.querySelector('[aria-label="Professional price *"]');
+      const standard = document.querySelector('[aria-label="Standard License (Free or Paid)"]');
+      standard.addEventListener('change', () => send([]));
+      personal.addEventListener('click', () => { document.querySelector('#personal-options').hidden = false; });
+      professional.addEventListener('click', () => { document.querySelector('#professional-options').hidden = false; });
+      document.querySelector('#personal-options [role="option"]').addEventListener('click', (event) => { personal.placeholder = '39.99 (USD)'; document.querySelector('#personal-options').hidden = true; send([contract.licensePayload[0]]); });
+      document.querySelector('#professional-options [role="option"]').addEventListener('click', (event) => { professional.placeholder = '79.99 (USD)'; document.querySelector('#professional-options').hidden = true; send(contract.licensePayload); });
+    }, { id: listingId, contract });
+    const guard = installNetworkGuard(context, { mode: 'save', listingLicensePricing: contract });
+    const result = await persistStandardLicensePricing(page, { guard, contract });
+    assert.equal(result.mutationCount, 3);
+    assert.equal(result.allowedMutationCount, 1);
+    assert.equal(result.blockedMutationCount, 2);
+    assert.equal(result.responseStatus, 200);
+    assert.equal(fixture.mutations.length, 1);
+    assert.deepEqual(fixture.mutations[0].body.licenses, contract.licensePayload);
+    await guard.dispose();
+  } finally {
+    await context.close();
+    await fixture.close();
+  }
 });
 
 test('exact listing license autosave is blocked outside its dedicated save phase', async () => {

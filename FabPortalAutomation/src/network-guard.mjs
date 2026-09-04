@@ -52,6 +52,7 @@ function phaseAllows(mode, phase, intent) {
   if (intent === 'cancel' || intent === 'delete' || intent === 'unlist' || intent === 'publish') return false;
   if (phase === 'listing-prerequisite-save') return mode === 'save' && intent === 'listing-prerequisite-save';
   if (phase === 'listing-license-save') return mode === 'save' && intent === 'listing-license-save';
+  if (phase === 'listing-license-pricing-save') return mode === 'save' && intent === 'listing-license-pricing-save';
   if (phase === 'format-create') return (mode === 'save' || mode === 'submit') && intent === 'format-create';
   if (phase === 'media-upload') return (mode === 'save' || mode === 'submit') && intent === 'media-upload';
   if (phase === 'field-update') return (mode === 'save' || mode === 'submit') && intent === 'save';
@@ -68,6 +69,11 @@ function canonicalJson(value) {
 
 function sameJson(left, right) {
   return canonicalJson(left) === canonicalJson(right);
+}
+
+function exactObjectKeys(value, keys) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    && sameJson(Object.keys(value).sort(), [...keys].sort());
 }
 
 function validateExactListingPayload({ method, url, body }, expected, label) {
@@ -108,7 +114,24 @@ export function validateListingLicensePayload({ method, url, body }, expected) {
   return { ok: true };
 }
 
-export function installNetworkGuard(context, { mode = 'verify', listingPrerequisite = null, listingLicense = null } = {}) {
+export function validateListingLicensePricingPayload({ method, url, body }, expected) {
+  const base = validateExactListingPayload({ method, url, body }, expected, 'Listing license pricing prerequisite');
+  if (!base.ok) return base;
+  if (expected.licenseToken !== 'standard') return { ok: false, reason: 'Listing license pricing prerequisite did not declare the exact standard license token.' };
+  if (!Array.isArray(expected.licensePayload) || expected.licensePayload.length !== 2) return { ok: false, reason: 'Listing license pricing prerequisite did not declare exactly two expected license entries.' };
+  if (!Array.isArray(body.licenses) || body.licenses.length !== 2) return { ok: false, reason: 'Listing license pricing payload was not a complete two-entry license configuration.' };
+  if (body.licenses.some((item) => !exactObjectKeys(item, ['licenseId', 'priceTierId']))) return { ok: false, reason: 'Listing license pricing payload contained an unexpected license-entry shape.' };
+  const [personal, professional] = body.licenses;
+  const [expectedPersonal, expectedProfessional] = expected.licensePayload;
+  if (!sameJson(personal, expectedPersonal)) return { ok: false, reason: 'Listing license pricing Personal entry did not match the observed exact identity.' };
+  if (!sameJson(professional, expectedProfessional)) return { ok: false, reason: 'Listing license pricing Professional entry did not match the observed exact identity.' };
+  for (const key of base.expectedKeys) {
+    if (key !== 'licenses' && !sameJson(body[key], expected.unchanged[key])) return { ok: false, reason: `Listing license pricing sibling field changed unexpectedly: ${key}.` };
+  }
+  return { ok: true };
+}
+
+export function installNetworkGuard(context, { mode = 'verify', listingPrerequisite = null, listingLicense = null, listingLicensePricing = null } = {}) {
   const effectiveMode = mode === 'write' ? 'save' : mode;
   const state = { mode: effectiveMode, phase: 'stage', phaseHistory: ['stage'], requests: [], observed: 0, blocked: 0 };
   const handler = async (route) => {
@@ -118,14 +141,16 @@ export function installNetworkGuard(context, { mode = 'verify', listingPrerequis
     const graph = graphqlOperation(request);
     let intent = classifyRequestIntent(url, method, graph);
     let validationReason = null;
-    if (method === 'PATCH' && (listingLicense || listingPrerequisite)) {
+    if (method === 'PATCH' && (listingLicensePricing || listingLicense || listingPrerequisite)) {
       const postData = request.postData();
       let body = null;
       try { body = postData ? JSON.parse(postData) : null; } catch { /* validation below fails closed */ }
-      const validation = listingLicense
-        ? validateListingLicensePayload({ method, url: request.url(), body }, listingLicense)
-        : validateListingPrerequisitePayload({ method, url: request.url(), body }, listingPrerequisite);
-      if (validation.ok) intent = listingLicense ? 'listing-license-save' : 'listing-prerequisite-save';
+      const validation = listingLicensePricing
+        ? validateListingLicensePricingPayload({ method, url: request.url(), body }, listingLicensePricing)
+        : listingLicense
+          ? validateListingLicensePayload({ method, url: request.url(), body }, listingLicense)
+          : validateListingPrerequisitePayload({ method, url: request.url(), body }, listingPrerequisite);
+      if (validation.ok) intent = listingLicensePricing ? 'listing-license-pricing-save' : listingLicense ? 'listing-license-save' : 'listing-prerequisite-save';
       else validationReason = validation.reason;
     }
     const fabRequest = url.hostname === 'www.fab.com' || url.hostname.endsWith('.fab.com') || url.hostname === '127.0.0.1' || url.hostname === 'localhost';
