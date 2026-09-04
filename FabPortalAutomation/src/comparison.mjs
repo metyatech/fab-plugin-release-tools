@@ -188,7 +188,7 @@ async function compareMedia(page, manifest, view = 'listing') {
 
 async function compareLicense(page, manifest) {
   const { resolved, value } = await locateField(page, 'license', manifest);
-  const selected = !value.visible ? null : value.checked === true ? 'Standard License (Free or Paid)' : value.value;
+  const selected = value.visible && value.checked === true ? 'Standard License (Free or Paid)' : null;
   const state = selected && /standard license/i.test(selected) && /standard license/i.test(manifest.license) ? 'MATCH' : semanticState(selected, manifest.license);
   return fieldResult({ manifestJsonPath: 'license', portalLabel: 'Standard License (Free or Paid)', desired: manifest.license, current: selected, state, resolved, editableControlAvailable: value.visible && value.editable && !value.disabled, notes: selected ? '' : 'License selection was not safely readable.', writeTarget: null });
 }

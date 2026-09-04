@@ -503,6 +503,25 @@ test('category mutation resolves the observed Fab treeitem choice exactly', asyn
   }
 });
 
+test('unchecked license radio value is not treated as a selected license', async () => {
+  const manifest = makeManifest();
+  const fixture = await startFixture(fixtureState(manifest));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const info = await makeManifestInfo(manifest);
+  try {
+    await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+    await page.evaluate(() => { document.querySelector('input[aria-label="Standard License (Free or Paid)"]').checked = false; });
+    const comparison = await compareManifest(page, info, { view: 'listing' });
+    const license = comparison.fields.find((item) => item.manifestJsonPath === 'license');
+    assert.equal(license.currentVisibleValue, null);
+    assert.equal(license.classification, 'NOT_VISIBLE');
+  } finally {
+    await context.close();
+    await fixture.close();
+  }
+});
+
 test('startup Cloudflare challenge pauses without browser operations until human confirmation', async () => {
   const manifest = makeManifest();
   const fixture = await startFixture(fixtureState(manifest, { challengeVisible: true }));
