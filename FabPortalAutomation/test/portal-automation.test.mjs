@@ -487,8 +487,14 @@ test('category mutation resolves the observed Fab treeitem choice exactly', asyn
       mutationType: 'combobox',
       locator: { strategy: 'getByRole', role: 'combobox', name: 'Category selection', exact: true },
     };
-    const executed = await executeMutationPlan(page, { ok: true, targets: [{ item }] }, info);
+    const phases = [];
+    const executed = await executeMutationPlan(page, { ok: true, targets: [{ item }] }, info, {
+      setPhase: (phase) => phases.push(phase),
+      phaseFor: () => 'listing-prerequisite-save',
+      afterInteraction: async () => assert.equal(phases.at(-1), 'listing-prerequisite-save'),
+    });
     assert.deepEqual(executed, ['category']);
+    assert.deepEqual(phases, ['listing-prerequisite-save', 'stage']);
     assert.equal(await page.getByLabel('Category selection').inputValue(), 'Engine Tools');
     assert.equal(fixture.mutations.length, 0);
   } finally {

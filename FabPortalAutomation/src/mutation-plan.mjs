@@ -76,7 +76,7 @@ async function selectExactOption(page, desired, fieldName) {
   await options.click();
 }
 
-export async function executeMutationPlan(page, preflight, manifestInfo, { setPhase = null, assertView = null, beforeMutation = null, onMutationExecuted = null, phaseFor = null } = {}) {
+export async function executeMutationPlan(page, preflight, manifestInfo, { setPhase = null, assertView = null, beforeMutation = null, afterInteraction = null, onMutationExecuted = null, phaseFor = null } = {}) {
   const executed = [];
   for (const { item } of preflight.targets) {
     await assertView?.(item.view ?? 'listing');
@@ -106,6 +106,7 @@ export async function executeMutationPlan(page, preflight, manifestInfo, { setPh
         const files = manifestInfo.mediaFiles.map((file) => file.path);
         await locator.setInputFiles(files);
       }
+      await afterInteraction?.(item);
     } finally {
       setPhase?.('stage');
     }
