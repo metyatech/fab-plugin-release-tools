@@ -5,12 +5,13 @@ import path from 'node:path';
 import test from 'node:test';
 import { chromium } from 'playwright-core';
 import { buildMutationPlan, executeMutationPlan, preflightMutationPlan } from '../src/mutation-plan.mjs';
-import { installNetworkGuard, validateListingPrerequisitePayload } from '../src/network-guard.mjs';
+import { installNetworkGuard, validateListingLicensePayload, validateListingPrerequisitePayload } from '../src/network-guard.mjs';
 import { inspectPrefetchedListingPrerequisite, LISTING_PREREQUISITE_PAYLOAD_KEYS } from '../src/listing-prerequisite.mjs';
 import { compareManifest, comparePlatformClassification, comparePriceClassification } from '../src/comparison.mjs';
 import { detectManualBlock, mergeListingAndFormatComparisons, runPortalAutomation, selectExistingTargetPage } from '../src/portal.mjs';
 import { parseArgs } from '../src/cli.mjs';
 import { classifyFabView, FAB_VIEW } from '../src/view-detection.mjs';
+import { persistStandardLicense } from '../src/listing-license.mjs';
 import { startFixture } from './fixtures/server.mjs';
 import { fixtureState, makeManifest, makeManifestInfo, listingId } from './helpers.mjs';
 
@@ -362,6 +363,30 @@ function prerequisitePayload(overrides = {}) {
   };
 }
 
+function licenseContract(origin, overrides = {}) {
+  return {
+    origin,
+    listingId,
+    licenseToken: 'standard',
+    licensePayload: [],
+    payloadKeys: [...LISTING_PREREQUISITE_PAYLOAD_KEYS],
+    unchanged: {
+      category: prerequisiteCategoryId,
+      description: '',
+      has_promotional_content: false,
+      intellectual_property_confirmed: false,
+      is_ai_forbidden: false,
+      is_ai_generated: true,
+      listing_type: 'tool-and-plugin',
+      seller_provided_maturity_rating: 'U18',
+      tags: [],
+      title: 'Fixture Product',
+      use_comment_thread: false,
+    },
+    ...overrides,
+  };
+}
+
 test('prefetched listing prerequisite resolves an exact category identity', () => {
   const data = {
     [`/i/portal/listings/${listingId}`]: {
@@ -405,6 +430,91 @@ test('listing prerequisite validator admits only the exact observed Category pay
   assert.equal(validateListingPrerequisitePayload({ method: 'POST', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: prerequisitePayload() }, contract).ok, false);
 });
 
+test('listing license validator admits only the exact observed standard-license payload', () => {
+  const contract = licenseContract('https://www.fab.com');
+  const valid = validateListingLicensePayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: prerequisitePayload() }, contract);
+  assert.deepEqual(valid, { ok: true });
+  assert.equal(validateListingLicensePayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/33333333-3333-4333-8333-333333333333`, body: prerequisitePayload() }, contract).ok, false);
+  assert.equal(validateListingLicensePayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: prerequisitePayload({ licenses: ['cc'] }) }, contract).ok, false);
+  assert.equal(validateListingLicensePayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: { ...prerequisitePayload(), personal_price: 39.99 } }, contract).ok, false);
+  assert.equal(validateListingLicensePayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: { ...prerequisitePayload(), description: 'unexpected' } }, contract).ok, false);
+  assert.equal(validateListingLicensePayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: null }, contract).ok, false);
+});
+
+test('exact listing license autosave is blocked outside its dedicated save phase', async () => {
+  const fixture = await startFixture(fixtureState(makeManifest()));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const contract = licenseContract(fixture.origin);
+  const guard = installNetworkGuard(context, { mode: 'save', listingLicense: contract });
+  try {
+    await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+    await page.evaluate(({ id, payload }) => fetch(`/i/portal/listings/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }).catch(() => undefined), { id: listingId, payload: prerequisitePayload() });
+    guard.setPhase('listing-license-save');
+    await page.evaluate(({ id, payload }) => fetch(`/i/portal/listings/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }), { id: listingId, payload: prerequisitePayload() });
+    const summary = guard.summary();
+    assert.equal(summary.networkMutationRequestsObserved, 2);
+    assert.equal(summary.networkMutationRequestsBlocked, 1);
+    assert.equal(summary.requests.filter((item) => item.intent === 'listing-license-save' && !item.blocked).length, 1);
+    assert.equal(fixture.mutations.length, 1);
+  } finally {
+    await guard.dispose();
+    await context.close();
+    await fixture.close();
+  }
+});
+
+test('listing license guard blocks phase mismatch, wrong value, sibling, and dangerous mutations', async () => {
+  const fixture = await startFixture(fixtureState(makeManifest()));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const guard = installNetworkGuard(context, { mode: 'save', listingLicense: licenseContract(fixture.origin) });
+  try {
+    await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+    const send = (payload, path = `/i/portal/listings/${listingId}`, method = 'PATCH') => page.evaluate(({ path, method, payload }) => fetch(path, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }).catch(() => undefined), { path, method, payload });
+    await send(prerequisitePayload());
+    guard.setPhase('listing-license-save');
+    await send(prerequisitePayload({ licenses: ['cc'] }));
+    await send(prerequisitePayload({ tags: ['unexpected'] }));
+    await send(prerequisitePayload(), `/i/portal/listings/33333333-3333-4333-8333-333333333333`);
+    await send({ query: 'mutation Publish { publish { id } }', operationName: 'Publish' }, '/graphql', 'POST');
+    const summary = guard.summary();
+    assert.equal(summary.networkMutationRequestsObserved, 5);
+    assert.equal(summary.networkMutationRequestsBlocked, 5);
+    assert.equal(fixture.mutations.length, 0);
+  } finally {
+    await guard.dispose();
+    await context.close();
+    await fixture.close();
+  }
+});
+
+test('standard license helper clicks one exact radio and waits for the guarded PATCH', async () => {
+  const fixture = await startFixture(fixtureState(makeManifest()));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const contract = licenseContract(fixture.origin);
+  const guard = installNetworkGuard(context, { mode: 'save', listingLicense: contract });
+  try {
+    await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+    await page.evaluate(({ id, payload }) => {
+      const radio = document.querySelector('input[aria-label="Standard License (Free or Paid)"]');
+      radio.checked = false;
+      radio.addEventListener('change', () => fetch(`/i/portal/listings/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }));
+    }, { id: listingId, payload: prerequisitePayload() });
+    const result = await persistStandardLicense(page, { guard, contract });
+    assert.equal(result.mutationCount, 1);
+    assert.equal(result.responseStatus, 200);
+    assert.equal(result.requests.length, 1);
+    assert.equal(fixture.mutations.length, 1);
+    assert.equal(guard.summary().networkMutationRequestsBlocked, 0);
+  } finally {
+    await guard.dispose();
+    await context.close();
+    await fixture.close();
+  }
+});
+
 test('listing prerequisite autosave is blocked in verify and stage phases', async () => {
   const fixture = await startFixture(fixtureState(makeManifest()));
   const context = await browser.newContext();
@@ -420,7 +530,7 @@ test('listing prerequisite autosave is blocked in verify and stage phases', asyn
     assert.equal(summary.networkMutationRequestsObserved, 2);
     assert.equal(summary.networkMutationRequestsBlocked, 1);
     assert.equal(summary.requests.filter((item) => item.intent === 'listing-prerequisite-save' && !item.blocked).length, 1);
-    assert.equal(fixture.mutations.length, 0);
+    assert.equal(fixture.mutations.length, 1);
   } finally {
     await guard.dispose();
     await context.close();

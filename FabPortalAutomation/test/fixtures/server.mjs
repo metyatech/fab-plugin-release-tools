@@ -199,6 +199,13 @@ export async function startFixture(initialState, { dropSaveFields = [], redirect
       response.end(pageMarkup(state, listingId));
       return;
     }
+    if (request.method === 'PATCH' && url.pathname.startsWith('/i/portal/listings/')) {
+      const body = JSON.parse(await readBody(request) || '{}');
+      mutations.push({ method: 'PATCH', pathname: url.pathname, body });
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end('{}');
+      return;
+    }
     if (request.method === 'POST' && url.pathname === '/api/save') {
       const body = JSON.parse(await readBody(request) || '{}');
       mutations.push({ method: 'POST', pathname: url.pathname, body });

@@ -378,6 +378,11 @@ always blocks it, and no generic listing PATCH is admitted. This narrow path
 does not authorize format creation, Submit, Publish, Delete, or Cancel; an
 unexpected payload or phase fails closed.
 
+Standard-license persistence uses a separate `listing-license-save` phase.
+It admits only the exact target UUID, the observed `standard` radio selection
+and payload shape, and unchanged sibling fields. Price fields, unknown
+payloads, and generic listing updates remain blocked.
+
 Staging manifests with `portalReady: false` and unresolved package
 `projectFileLink: null` values are valid for read-only verification. They are
 never written to Fab; Save Draft and Submit for review require a manifest with
