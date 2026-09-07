@@ -1,6 +1,8 @@
 import { acquireResponsiveViewportLease } from './responsive-viewport.mjs';
 
 const SUPPORTED_FORMATS = new Set(['Unreal Engine']);
+const FORMAT_CHOOSER_TIMEOUT_MS = 30000;
+const FORMAT_CHOOSER_POLL_MS = 100;
 
 function visibleCount(locator) {
   return (async () => {
@@ -42,12 +44,61 @@ async function productFormatButtons(page) {
 }
 
 function formatChoice(page) {
-  const dialog = page.getByRole('dialog', { name: /add (?:new )?format/i });
   return {
-    dialog,
-    options: dialog.getByRole('option', { name: 'Unreal Engine', exact: true }),
-    buttons: dialog.getByRole('button', { name: 'Unreal Engine', exact: true }),
+    heading: page.getByRole('heading', { name: /(?:Choose a format|Add new format)/i }),
+    options: page.getByRole('option', { name: 'Unreal Engine', exact: true }),
+    buttons: page.getByRole('button', { name: 'Unreal Engine', exact: true }),
   };
+}
+
+async function readChooserState(page) {
+  const choice = formatChoice(page);
+  const options = await visibleCount(choice.options);
+  const buttons = options.length === 0 ? await visibleCount(choice.buttons) : [];
+  const state = await page.evaluate(() => {
+    const visible = (element) => Boolean(element?.getClientRects?.().length);
+    const text = (element) => (element?.innerText ?? '').trim();
+    const skeletons = Array.from(document.querySelectorAll('[aria-busy="true"], [class*="skeleton" i], [class*="animate-pulse" i]'))
+      .filter(visible);
+    const errors = Array.from(document.querySelectorAll('[role="alert"], [aria-live="assertive"], [data-state="error"]'))
+      .filter(visible)
+      .map(text)
+      .filter(Boolean);
+    const next = Array.from(document.querySelectorAll('button'))
+      .filter(visible)
+      .find((element) => /^Next$/i.test(text(element)));
+    return {
+      headingCount: Array.from(document.querySelectorAll('h1,h2,h3,[role="heading"]'))
+        .filter(visible)
+        .filter((element) => /^(?:Choose a format|Add new format)$/i.test(text(element))).length,
+      skeletonCount: skeletons.length,
+      nextEnabled: next ? !next.disabled : null,
+      errors: errors.slice(0, 5),
+    };
+  });
+  return {
+    ...state,
+    optionCount: options.length + buttons.length,
+    options,
+    buttons,
+  };
+}
+
+export async function waitForFormatChooserReady(page, { timeoutMs = FORMAT_CHOOSER_TIMEOUT_MS, pollMs = FORMAT_CHOOSER_POLL_MS } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  while (Date.now() <= deadline) {
+    last = await readChooserState(page);
+    if (last.errors.length > 0) return { ready: false, reason: 'error', ...last };
+    if (last.headingCount === 1 && last.skeletonCount === 0 && last.optionCount > 1) {
+      return { ready: false, reason: 'ambiguous', ...last };
+    }
+    if (last.headingCount === 1 && last.skeletonCount === 0 && last.optionCount === 1) {
+      return { ready: true, ...last, choice: last.options[0] ?? last.buttons[0] };
+    }
+    await page.waitForTimeout(pollMs);
+  }
+  return { ready: false, reason: 'timeout', ...(last ?? await readChooserState(page)) };
 }
 
 const PREFETCHED_DATA_SELECTOR = '#js-json-data-prefetched-data';
@@ -189,15 +240,17 @@ export async function inspectFormatBootstrap(page, manifest, { guard = null, ope
       result.blockers.push('Opening Add new format caused a network mutation; read-only bootstrap inspection was blocked.');
       return result;
     }
-    const choice = formatChoice(page);
-    const options = await visibleCount(choice.options);
-    const buttons = options.length === 0 ? await visibleCount(choice.buttons) : [];
-    result.choiceCount = options.length + buttons.length;
-    if (result.choiceCount !== 1) {
-      result.blockers.push(`Unreal Engine choice visible match count is ${result.choiceCount}.`);
+    const chooser = await waitForFormatChooserReady(page);
+    result.choiceCount = chooser.optionCount;
+    if (!chooser.ready) {
+      result.blockers.push(chooser.reason === 'error'
+        ? `Format chooser reported an error: ${chooser.errors.join(' ')}`
+        : chooser.reason === 'ambiguous'
+          ? `Unreal Engine choice visible match count is ${chooser.optionCount}.`
+          : `Format chooser was not ready before timeout (skeletons=${chooser.skeletonCount}, Unreal Engine choices=${chooser.optionCount}).`);
       return result;
     }
-    result.choice = options.length === 1 ? options[0] : buttons[0];
+    result.choice = chooser.choice;
     result.available = true;
     return result;
   } catch (error) {
@@ -205,8 +258,8 @@ export async function inspectFormatBootstrap(page, manifest, { guard = null, ope
     throw error;
   } finally {
     if (closeChooser) {
-      const dialog = page.getByRole('dialog', { name: /add (?:new )?format/i });
-      if (await dialog.count() === 1 && await dialog.isVisible().catch(() => false)) {
+      const chooserHeading = page.getByRole('heading', { name: /(?:Choose a format|Add new format)/i });
+      if (await chooserHeading.count() === 1 && await chooserHeading.isVisible().catch(() => false)) {
         await page.keyboard.press('Escape').catch(() => undefined);
       }
     }

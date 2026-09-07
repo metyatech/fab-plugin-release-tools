@@ -377,6 +377,12 @@ all exit paths. Verify remains mutation-free; the run report records the
 original, observation, and restored viewport values. A wide viewport alone
 never proves a format exists or authorizes format creation.
 
+The Add new format chooser is also readiness-gated. The automation waits a
+bounded interval for the chooser heading, disappearance of loading skeletons,
+and exactly one enabled supported format option. A timeout, visible chooser
+error, or ambiguous option set fails closed; opening the chooser and waiting
+for readiness never authorizes a format mutation.
+
 Some new listings expose no format controls until a listing prerequisite has
 been persisted. The observed Fab Category autosave is supported only through
 the dedicated `listing-prerequisite-save` phase: the target UUID, exact

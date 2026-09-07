@@ -26,7 +26,8 @@ function pageMarkup(state, listingId) {
   const prefetchedKey = state.prefetchedListingId ?? listingId;
   const prefetchedData = JSON.stringify({ [`/i/portal/listings/${prefetchedKey}`]: prefetchedListing }).replaceAll('<', '\\u003c');
   const addFormatButtons = Array.from({ length: state.addFormatButtonCount ?? 1 }, () => '<button type="button" aria-label="Add new format">Add new format</button>').join('');
-  const formatChoices = Array.from({ length: state.formatChoiceCount ?? 1 }, () => '<button type="button" role="option" aria-label="Unreal Engine">Unreal Engine</button>').join('');
+  const delayedChoiceStyle = state.formatChoiceDelayMs ? ' style="display:none"' : '';
+  const formatChoices = Array.from({ length: state.formatChoiceCount ?? 1 }, () => `<button type="button" role="option" aria-label="Unreal Engine"${delayedChoiceStyle}>Unreal Engine</button>`).join('');
   const responsiveStyle = state.responsiveFormatNavigation ? '<style>[data-responsive-format-navigation]{display:block}@media (max-width: 1000px){[data-responsive-format-navigation]{display:none}}</style>' : '';
   const formatInventory = `<section aria-label="Included Files" data-testid="product-formats" data-responsive-format-navigation="${state.responsiveFormatNavigation ? 'true' : 'false'}" data-format-count="${productFormats.length}"${state.hideFormatInventory ? ' hidden' : ''}><h2>Included Files</h2>${productFormats.map((format) => `<button type="button" data-format-name="${html(format.name)}">${html(format.name)}</button>`).join('')}${addFormatButtons}</section>`;
   const formatChooser = `<div role="dialog" aria-label="Add new format" hidden><h2>Add new format</h2>${formatChoices}</div>`;
@@ -121,7 +122,13 @@ function pageMarkup(state, listingId) {
       mediaOrder: document.querySelector('[data-testid="media-gallery"]')?.dataset.order ?? ''
     });
     document.querySelectorAll('[data-format-name]').forEach((button) => button.addEventListener('click', () => setView('format')));
-    document.querySelectorAll('[aria-label="Add new format"]').forEach((button) => button.addEventListener('click', () => { document.querySelector('[role="dialog"][aria-label="Add new format"]').hidden = false; }));
+    document.querySelectorAll('[aria-label="Add new format"]').forEach((button) => button.addEventListener('click', () => {
+      const dialog = document.querySelector('[role="dialog"][aria-label="Add new format"]');
+      dialog.hidden = false;
+      if (${JSON.stringify(state.formatChoiceDelayMs ?? 0)} > 0) {
+        setTimeout(() => dialog.querySelectorAll('[role="option"]').forEach((choice) => { choice.style.display = ''; }), ${JSON.stringify(state.formatChoiceDelayMs ?? 0)});
+      }
+    }));
     document.querySelectorAll('[role="option"][aria-label="Unreal Engine"]').forEach((choice) => choice.addEventListener('click', async () => {
       if (${JSON.stringify(Boolean(state.challengeAfterFormatCreate))}) revealChallenge();
       await fetch(${JSON.stringify(state.formatCreateRequestPath ?? '/api/create-format')}, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Unreal Engine' }) });

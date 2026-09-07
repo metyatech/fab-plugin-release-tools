@@ -12,6 +12,7 @@ import { detectManualBlock, mergeListingAndFormatComparisons, runPortalAutomatio
 import { parseArgs } from '../src/cli.mjs';
 import { classifyFabView, FAB_VIEW } from '../src/view-detection.mjs';
 import { persistStandardLicense, persistStandardLicensePricing } from '../src/listing-license.mjs';
+import { waitForFormatChooserReady } from '../src/format-bootstrap.mjs';
 import { startFixture } from './fixtures/server.mjs';
 import { fixtureState, makeManifest, makeManifestInfo, listingId } from './helpers.mjs';
 
@@ -1958,6 +1959,47 @@ test('client-side prerequisite staging can reveal a format control without serve
     await page.reload();
     assert.equal(await page.getByRole('combobox', { name: 'Product type *', exact: true }).inputValue(), 'Other');
     assert.equal(await page.getByRole('button', { name: 'Add new format', exact: true }).count(), 0);
+    assert.equal(fixture.mutations.length, 0);
+  } finally {
+    await guard.dispose();
+    await context.close();
+    await fixture.close();
+  }
+});
+
+test('format chooser readiness waits through a skeleton before accepting the exact option', async () => {
+  const fixture = await startFixture(fixtureState(makeManifest(), { productFormats: [], formatChoiceDelayMs: 120 }));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const guard = installNetworkGuard(context, { mode: 'verify' });
+  try {
+    await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+    await page.getByRole('button', { name: 'Add new format', exact: true }).click();
+    const readiness = await waitForFormatChooserReady(page, { timeoutMs: 1000, pollMs: 20 });
+    assert.equal(readiness.ready, true);
+    assert.equal(readiness.skeletonCount, 0);
+    assert.equal(readiness.optionCount, 1);
+    assert.equal(guard.summary().networkMutationRequestsObserved, 0);
+    assert.equal(fixture.mutations.length, 0);
+  } finally {
+    await guard.dispose();
+    await context.close();
+    await fixture.close();
+  }
+});
+
+test('format chooser readiness fails closed when skeleton timeout has no exact option', async () => {
+  const fixture = await startFixture(fixtureState(makeManifest(), { productFormats: [], formatChoiceDelayMs: 2000 }));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const guard = installNetworkGuard(context, { mode: 'verify' });
+  try {
+    await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+    await page.getByRole('button', { name: 'Add new format', exact: true }).click();
+    const readiness = await waitForFormatChooserReady(page, { timeoutMs: 80, pollMs: 20 });
+    assert.equal(readiness.ready, false);
+    assert.equal(readiness.reason, 'timeout');
+    assert.equal(guard.summary().networkMutationRequestsObserved, 0);
     assert.equal(fixture.mutations.length, 0);
   } finally {
     await guard.dispose();
