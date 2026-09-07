@@ -51,6 +51,42 @@ function formatChoice(page) {
   };
 }
 
+async function advanceFormatChooser(page, formatName) {
+  const next = await visibleCount(page.getByRole('button', { name: `Confirm selected option: ${formatName}`, exact: true }));
+  if (next.length === 0) return false;
+  if (next.length !== 1) throw new Error(`Format chooser Next control visible match count is ${next.length}.`);
+  if (await next[0].isDisabled().catch(() => true)) throw new Error('Format chooser Next control was disabled after selecting Unreal Engine.');
+  await next[0].click();
+  return true;
+}
+
+async function confirmFormatCreation(page) {
+  const confirm = await visibleCount(page.getByRole('button', { name: 'Confirm', exact: true }));
+  if (confirm.length === 0) return false;
+  if (confirm.length !== 1) throw new Error(`Format creation Confirm control visible match count is ${confirm.length}.`);
+  if (await confirm[0].isDisabled().catch(() => true)) throw new Error('Format creation Confirm control was disabled after the format choice was confirmed.');
+  await confirm[0].click();
+  return true;
+}
+
+async function formatChooserActionEvidence(page) {
+  return page.evaluate(() => {
+    const visible = (element) => Boolean(element?.getClientRects?.().length);
+    const text = (element) => (element?.innerText ?? '').trim();
+    const dialog = Array.from(document.querySelectorAll('[role="dialog"]')).find(visible);
+    const root = dialog ?? document;
+    return Array.from(root.querySelectorAll('button,[role="button"]'))
+      .filter(visible)
+      .filter((element) => dialog || /^(?:next|create|add|confirm|continue|unreal engine|unity|additional files)$/i.test(text(element)) || /^(?:next|create|add|confirm|continue|unreal engine|unity|additional files)$/i.test(element.getAttribute('aria-label') ?? ''))
+      .map((element) => ({
+        text: text(element),
+        ariaLabel: element.getAttribute('aria-label'),
+        role: element.getAttribute('role') ?? 'button',
+        disabled: Boolean(element.disabled) || element.getAttribute('aria-disabled') === 'true',
+      }));
+  });
+}
+
 async function readChooserState(page) {
   const choice = formatChoice(page);
   const options = await visibleCount(choice.options);
@@ -192,7 +228,17 @@ export async function inspectFormatBootstrap(page, manifest, { guard = null, ope
       result.blockers.push('At least one prefetched product format identity was not strictly readable.');
       return result;
     }
-    const matching = await visibleCount(exactButton(page, manifest.includedFormat));
+    let matching;
+    if (prefetched.formatCount === 0) {
+      matching = [];
+    } else if (regionVisible) {
+      matching = [];
+      for (const format of formats) {
+        if ((await format.innerText().catch(() => '')).trim() === manifest.includedFormat) matching.push(format);
+      }
+    } else {
+      matching = await visibleCount(exactButton(page, manifest.includedFormat));
+    }
     result.matchingFormatCount = matching.length;
     if (regionVisible) {
       const domNames = [];
@@ -227,18 +273,22 @@ export async function inspectFormatBootstrap(page, manifest, { guard = null, ope
       result.blockers.push('Unreal Engine choice was not inspected.');
       return result;
     }
-    const before = guard?.summary().networkMutationRequestsObserved ?? 0;
-    try {
-      await add[0].click();
-      await page.waitForTimeout(100);
-    } catch (error) {
-      result.blockers.push(`Add new format chooser could not be opened: ${error instanceof Error ? error.message : String(error)}`);
-      return result;
-    }
-    const after = guard?.summary().networkMutationRequestsObserved ?? before;
-    if (after > before) {
-      result.blockers.push('Opening Add new format caused a network mutation; read-only bootstrap inspection was blocked.');
-      return result;
+    const chooserHeading = page.getByRole('heading', { name: /(?:Choose a format|Add new format)/i });
+    const chooserAlreadyOpen = await chooserHeading.count() === 1 && await chooserHeading.isVisible().catch(() => false);
+    if (!chooserAlreadyOpen) {
+      const before = guard?.summary().networkMutationRequestsObserved ?? 0;
+      try {
+        await add[0].click();
+        await page.waitForTimeout(100);
+      } catch (error) {
+        result.blockers.push(`Add new format chooser could not be opened: ${error instanceof Error ? error.message : String(error)}`);
+        return result;
+      }
+      const after = guard?.summary().networkMutationRequestsObserved ?? before;
+      if (after > before) {
+        result.blockers.push('Opening Add new format caused a network mutation; read-only bootstrap inspection was blocked.');
+        return result;
+      }
     }
     const chooser = await waitForFormatChooserReady(page);
     result.choiceCount = chooser.optionCount;
@@ -274,11 +324,20 @@ export async function executeFormatBootstrap(page, manifest, inspection, { guard
     await onMutation?.();
     await inspection.choice.click();
     await page.waitForTimeout(150);
+    const nextClicked = await advanceFormatChooser(page, manifest.includedFormat);
+    await page.waitForTimeout(150);
+    const confirmClicked = await confirmFormatCreation(page);
+    if (confirmClicked) await page.waitForTimeout(150);
     const region = includedFilesRegion(page);
     const formats = await productFormatButtons(page);
-    const matching = await visibleCount(exactButton(page, manifest.includedFormat));
+    const matching = [];
+    for (const format of formats) {
+      if ((await format.innerText().catch(() => '')).trim() === manifest.includedFormat) matching.push(format);
+    }
     if (await region.count() !== 1 || formats.length !== 1 || matching.length !== 1) {
-      throw new Error('Format bootstrap did not produce exactly one Unreal Engine product format.');
+      const actions = await formatChooserActionEvidence(page);
+      const evidence = actions.length > 0 ? ` Visible chooser actions: ${JSON.stringify(actions)}.` : '';
+      throw new Error(`Format bootstrap did not produce exactly one Unreal Engine product format.${evidence}`);
     }
     return { created: true };
   } finally {

@@ -2251,6 +2251,23 @@ test('save with no product format creates exactly one format and saves the draft
   assert.equal(result.comparisonAfter.counts.MISMATCH, 0);
 });
 
+test('format bootstrap advances through the enabled Next action before create', async () => {
+  const { result, fixture } = await scenario({ state: { productFormats: [], formatChoiceNeedsNext: true }, mode: 'save', saveDraftAuthorized: true });
+  assert.equal(result.result, 'PASS');
+  assert.equal(result.formatBootstrapCreated, true);
+  assert.equal(fixture.state.productFormats.filter((format) => format.name === 'Unreal Engine').length, 1);
+  assert.equal(fixture.mutations.filter((item) => item.pathname === '/api/create-format').length, 1);
+  assert.equal(fixture.mutations.filter((item) => item.pathname === '/api/save').length, 1);
+});
+
+test('empty prefetched format inventory still exposes safe bootstrap beside an unrelated button', async () => {
+  const { result, fixture } = await scenario({ state: { productFormats: [], strayFormatButton: true } });
+  assert.equal(result.formatBootstrapRequired, true);
+  assert.equal(result.formatBootstrapAvailable, true);
+  assert.equal(result.formatBootstrapInvoked, false);
+  assert.equal(fixture.mutations.length, 0);
+});
+
 test('existing exact Unreal Engine format is reused without bootstrap', async () => {
   const { result, fixture } = await scenario();
   assert.equal(result.result, 'PASS');

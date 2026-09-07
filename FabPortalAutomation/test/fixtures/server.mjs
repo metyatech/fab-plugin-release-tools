@@ -35,9 +35,11 @@ function pageMarkup(state, listingId) {
   const addFormatButtons = Array.from({ length: state.addFormatButtonCount ?? 1 }, () => '<button type="button" aria-label="Add new format">Add new format</button>').join('');
   const delayedChoiceStyle = state.formatChoiceDelayMs ? ' style="display:none"' : '';
   const formatChoices = Array.from({ length: state.formatChoiceCount ?? 1 }, () => `<button type="button" role="option" aria-label="Unreal Engine"${delayedChoiceStyle}>Unreal Engine</button>`).join('');
+  const nextFormatButton = state.formatChoiceNeedsNext ? '<button type="button" aria-label="Confirm selected option: Unreal Engine" disabled>Next</button><button type="button" aria-label="Confirm" hidden>Confirm</button>' : '';
   const responsiveStyle = state.responsiveFormatNavigation ? '<style>[data-responsive-format-navigation]{display:block}@media (max-width: 1000px){[data-responsive-format-navigation]{display:none}}</style>' : '';
   const formatInventory = `<section aria-label="Included Files" data-testid="product-formats" data-responsive-format-navigation="${state.responsiveFormatNavigation ? 'true' : 'false'}" data-format-count="${productFormats.length}"${state.hideFormatInventory ? ' hidden' : ''}><h2>Included Files</h2>${productFormats.map((format) => `<button type="button" data-format-name="${html(format.name)}">${html(format.name)}</button>`).join('')}${addFormatButtons}</section>`;
-  const formatChooser = `<div role="dialog" aria-label="Add new format" hidden><h2>Add new format</h2>${formatChoices}</div>`;
+  const formatChooser = `<div role="dialog" aria-label="Add new format" hidden><h2>Add new format</h2>${formatChoices}${nextFormatButton}</div>`;
+  const strayFormatButton = state.strayFormatButton ? '<button type="button" aria-label="Unreal Engine">Unreal Engine</button>' : '';
   const listingControls = `
     <input role="combobox" aria-label="Search" disabled>
     <h1>${html(state.title)}</h1>
@@ -48,7 +50,7 @@ function pageMarkup(state, listingId) {
     <label>Product type *<select aria-label="Product type *">${(state.productTypeOptions ?? [state.productType]).map((option) => `<option${option === state.productType ? ' selected' : ''}>${html(option)}</option>`).join('')}</select></label>
     <label>Category *<input role="combobox" aria-label="Category selection" value="${html(state.category)}"></label>
     <label>Tags *<input aria-label="Tags *" value="${html(state.tags[0] ?? '')}"${state.tagsEditable ? '' : ' readonly'}>${state.tagsCount ? `<input role="combobox" aria-label="${html(state.tagSearchAriaLabel ?? 'Search a tag')}" placeholder="${html(state.tagSearchPlaceholder ?? 'Search a tag')}"><span id="tagsCount">${html(state.tagsCount)}</span>${(state.tagOptions ?? []).map((tag) => `<div role="option" aria-label="${html(tag)}">${html(tag)}</div>`).join('')}` : ''}</label>
-    ${formatInventory}
+    ${formatInventory}${strayFormatButton}
     ${state.mainProjectVersionsVisible ? '<h2>Project Versions*</h2><a href="/portal/listings">Back to listings</a>' : ''}
     ${radio('Standard License (Free or Paid)', true)}
     <label>Personal price *<input aria-label="Personal price *" value="${html(state.personalPriceUsd)}"></label>
@@ -137,7 +139,7 @@ function pageMarkup(state, listingId) {
         setTimeout(() => dialog.querySelectorAll('[role="option"]').forEach((choice) => { choice.style.display = ''; }), ${JSON.stringify(state.formatChoiceDelayMs ?? 0)});
       }
     }));
-    document.querySelectorAll('[role="option"][aria-label="Unreal Engine"]').forEach((choice) => choice.addEventListener('click', async () => {
+    const createFormat = async () => {
       if (${JSON.stringify(Boolean(state.challengeAfterFormatCreate))}) revealChallenge();
       await fetch(${JSON.stringify(state.formatCreateRequestPath ?? '/api/create-format')}, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Unreal Engine' }) });
       const inventory = document.querySelector('[data-testid="product-formats"]');
@@ -149,7 +151,27 @@ function pageMarkup(state, listingId) {
       button.addEventListener('click', () => setView('format'));
       inventory.insertBefore(button, inventory.querySelector('[aria-label="Add new format"]'));
       document.querySelector('[role="dialog"][aria-label="Add new format"]').hidden = true;
+    };
+    document.querySelectorAll('[role="option"][aria-label="Unreal Engine"]').forEach((choice) => choice.addEventListener('click', async () => {
+      if (${JSON.stringify(Boolean(state.formatChoiceNeedsNext))}) {
+        choice.setAttribute('aria-selected', 'true');
+        const next = document.querySelector('[role="dialog"][aria-label="Add new format"] [aria-label="Confirm selected option: Unreal Engine"]');
+        if (next) next.disabled = false;
+        return;
+      }
+      await createFormat();
     }));
+    document.querySelector('[role="dialog"][aria-label="Add new format"] [aria-label="Confirm selected option: Unreal Engine"]')?.addEventListener('click', () => {
+      if (${JSON.stringify(Boolean(state.formatChoiceNeedsNext))}) {
+        const next = document.querySelector('[role="dialog"][aria-label="Add new format"] [aria-label="Confirm selected option: Unreal Engine"]');
+        const confirm = document.querySelector('[role="dialog"][aria-label="Add new format"] [aria-label="Confirm"]');
+        if (next) next.hidden = true;
+        if (confirm) confirm.hidden = false;
+        return;
+      }
+      createFormat();
+    });
+    document.querySelector('[role="dialog"][aria-label="Add new format"] [aria-label="Confirm"]')?.addEventListener('click', createFormat);
     document.querySelector('[aria-label="Back to listing"]')?.addEventListener('click', () => setView('listing'));
     document.querySelector('[data-testid="format-listing-summary"]')?.addEventListener('click', () => setView('listing'));
     document.querySelector('[data-testid="save"]').addEventListener('click', () => { syncFormatState(); if (${JSON.stringify(Boolean(state.challengeAfterSave))}) revealChallenge(); fetch('/api/save', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload()) }); });
