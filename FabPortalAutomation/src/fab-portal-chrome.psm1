@@ -134,7 +134,11 @@ function Get-FabPortalChromeArgumentList {
 }
 
 function Read-FabPortalDevToolsActivePort {
-    param([Parameter(Mandatory)][string]$UserDataDir)
+    param(
+        [Parameter(Mandatory)][string]$UserDataDir,
+
+        [switch]$RequireWebSocketPath
+    )
 
     $path = Join-Path $UserDataDir 'DevToolsActivePort'
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
@@ -153,11 +157,78 @@ function Read-FabPortalDevToolsActivePort {
         -not $webSocketPath.StartsWith('/devtools/', [System.StringComparison]::Ordinal)) {
         throw "DevToolsActivePort contains an invalid websocket path: $path"
     }
+    if ($RequireWebSocketPath -and [string]::IsNullOrWhiteSpace($webSocketPath)) {
+        throw "DevToolsActivePort is missing the browser websocket path: $path"
+    }
     return [pscustomobject]@{
         Port           = $port
         WebSocketPath  = $webSocketPath
         Path           = $path
     }
+}
+
+function Get-FabPortalChromeProfileLockPath {
+    param([Parameter(Mandatory)][string]$UserDataDir)
+
+    return @('SingletonLock', 'SingletonCookie', 'SingletonSocket' | ForEach-Object {
+        Join-Path $UserDataDir $_
+    })
+}
+
+function Test-FabPortalChromeProfileLocked {
+    param([Parameter(Mandatory)][string]$UserDataDir)
+
+    return @(
+        Get-FabPortalChromeProfileLockPath -UserDataDir $UserDataDir |
+            Where-Object { Test-Path -LiteralPath $_ }
+    ).Count -gt 0
+}
+
+function Remove-FabPortalStaleDevToolsActivePort {
+    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Low')]
+    param(
+        [Parameter(Mandatory)][string]$UserDataDir,
+
+        [scriptblock]$ProcessIdProvider
+    )
+
+    $path = Join-Path $UserDataDir 'DevToolsActivePort'
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        return $false
+    }
+    if ($null -eq $ProcessIdProvider) {
+        $ProcessIdProvider = { param($directory) Get-FabPortalChromeProcessIdsForUserDataDir -UserDataDir $directory }
+    }
+    $processIds = @(& $ProcessIdProvider $UserDataDir)
+    if ($processIds.Count -gt 0) {
+        throw 'Cannot remove DevToolsActivePort while a dedicated Chrome process is running.'
+    }
+    if (Test-FabPortalChromeProfileLocked -UserDataDir $UserDataDir) {
+        throw 'Cannot remove DevToolsActivePort while the dedicated Chrome profile is locked.'
+    }
+    if (-not $PSCmdlet.ShouldProcess($path, 'Remove stale Chrome debug metadata')) {
+        return $false
+    }
+    [System.IO.File]::Delete($path)
+    return $true
+}
+
+function Test-FabPortalDevToolsActivePortFresh {
+    param(
+        [Parameter(Mandatory)][string]$UserDataDir,
+
+        [Parameter(Mandatory)][DateTime]$NotBeforeUtc
+    )
+
+    $path = Join-Path $UserDataDir 'DevToolsActivePort'
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        return $null
+    }
+    $item = Get-Item -LiteralPath $path -ErrorAction Stop
+    if ($item.LastWriteTimeUtc -lt $NotBeforeUtc.ToUniversalTime()) {
+        return $null
+    }
+    return Read-FabPortalDevToolsActivePort -UserDataDir $UserDataDir -RequireWebSocketPath
 }
 
 function Test-FabPortalChromeEndpoint {
@@ -258,6 +329,8 @@ function Wait-FabPortalChromeSession {
 
         [double]$TimeoutSeconds = 30,
 
+        [DateTime]$MetadataNotBeforeUtc = [DateTime]::MinValue,
+
         [scriptblock]$EndpointProbe,
 
         [scriptblock]$ProcessIdProvider
@@ -272,7 +345,8 @@ function Wait-FabPortalChromeSession {
     }
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     do {
-        $activePort = Read-FabPortalDevToolsActivePort -UserDataDir $UserDataDir
+        $activePort = Test-FabPortalDevToolsActivePortFresh -UserDataDir $UserDataDir `
+            -NotBeforeUtc $MetadataNotBeforeUtc
         if ($null -ne $activePort) {
             $probe = & $EndpointProbe $activePort.Port
             if ($null -ne $probe -and $probe.Ready) {
@@ -328,6 +402,13 @@ function Start-FabPortalChromeSession {
     if ($matchingProcesses.Count -gt 0) {
         throw 'A Chrome process already uses the dedicated profile; close it manually before starting another mode.'
     }
+    $metadataBaselineUtc = [DateTime]::UtcNow
+    if ($Mode -eq 'Automation') {
+        if (-not $PSCmdlet.ShouldProcess((Join-Path $resolvedUserDataDir 'DevToolsActivePort'), 'Remove stale Chrome debug metadata')) {
+            return $null
+        }
+        [void](Remove-FabPortalStaleDevToolsActivePort -UserDataDir $resolvedUserDataDir -Confirm:$false)
+    }
     if (-not $PSCmdlet.ShouldProcess($resolvedUserDataDir, 'Launch dedicated Chrome')) {
         return $null
     }
@@ -347,7 +428,8 @@ function Start-FabPortalChromeSession {
         }
     }
     return Wait-FabPortalChromeSession -UserDataDir $resolvedUserDataDir `
-        -ProcessId $process.Id -TimeoutSeconds $ReadyTimeoutSeconds
+        -ProcessId $process.Id -TimeoutSeconds $ReadyTimeoutSeconds `
+        -MetadataNotBeforeUtc $metadataBaselineUtc
 }
 
 Export-ModuleMember -Function @(
@@ -358,8 +440,11 @@ Export-ModuleMember -Function @(
     'Get-FabPortalChromeSession',
     'Get-FabPortalChromeArgumentList',
     'Read-FabPortalDevToolsActivePort',
+    'Remove-FabPortalStaleDevToolsActivePort',
     'Resolve-FabPortalChromeUserDataDir',
     'Start-FabPortalChromeSession',
     'Test-FabPortalChromeEndpoint',
     'Test-FabPortalPathWithin',
+    'Test-FabPortalChromeProfileLocked',
+    'Test-FabPortalDevToolsActivePortFresh',
     'Wait-FabPortalChromeSession')

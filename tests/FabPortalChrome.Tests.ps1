@@ -51,12 +51,82 @@ Describe 'Fab dedicated Chrome launcher' {
     It 'times out when the endpoint never becomes ready' {
         $testProfile = Join-Path $TestDrive 'NeverReady'
         [System.IO.Directory]::CreateDirectory($testProfile) | Out-Null
-        [System.IO.File]::WriteAllText((Join-Path $testProfile 'DevToolsActivePort'), '43211')
+        [System.IO.File]::WriteAllLines((Join-Path $testProfile 'DevToolsActivePort'), @('43211', '/devtools/browser/never-ready'))
         $probe = { $null }
         $processes = { $null = $args; @(9001) }
         { Wait-FabPortalChromeSession -UserDataDir $testProfile -ProcessId 9001 `
                 -TimeoutSeconds 0.25 -EndpointProbe $probe -ProcessIdProvider $processes } |
             Should -Throw '*timed out*'
+    }
+
+    It 'removes stale metadata only when the profile is not running or locked' {
+        $testProfile = Join-Path $TestDrive 'StaleMetadata'
+        [System.IO.Directory]::CreateDirectory($testProfile) | Out-Null
+        $metadataPath = Join-Path $testProfile 'DevToolsActivePort'
+        [System.IO.File]::WriteAllLines($metadataPath, @('43214', '/devtools/browser/stale'))
+        $removed = Remove-FabPortalStaleDevToolsActivePort -UserDataDir $testProfile -ProcessIdProvider { return @() }
+        $removed | Should -BeTrue
+        Test-Path -LiteralPath $metadataPath | Should -BeFalse
+    }
+
+    It 'refuses stale metadata cleanup while a dedicated Chrome process is running' {
+        $testProfile = Join-Path $TestDrive 'RunningMetadata'
+        [System.IO.Directory]::CreateDirectory($testProfile) | Out-Null
+        $metadataPath = Join-Path $testProfile 'DevToolsActivePort'
+        [System.IO.File]::WriteAllLines($metadataPath, @('43215', '/devtools/browser/running'))
+        { Remove-FabPortalStaleDevToolsActivePort -UserDataDir $testProfile -ProcessIdProvider { @(9015) } } |
+            Should -Throw '*process is running*'
+        Test-Path -LiteralPath $metadataPath | Should -BeTrue
+    }
+
+    It 'refuses stale metadata cleanup while the profile lock is present' {
+        $testProfile = Join-Path $TestDrive 'LockedMetadata'
+        [System.IO.Directory]::CreateDirectory($testProfile) | Out-Null
+        $metadataPath = Join-Path $testProfile 'DevToolsActivePort'
+        [System.IO.File]::WriteAllLines($metadataPath, @('43216', '/devtools/browser/locked'))
+        [System.IO.File]::WriteAllText((Join-Path $testProfile 'SingletonLock'), 'lock')
+        { Remove-FabPortalStaleDevToolsActivePort -UserDataDir $testProfile -ProcessIdProvider { return @() } } |
+            Should -Throw '*profile is locked*'
+        Test-Path -LiteralPath $metadataPath | Should -BeTrue
+    }
+
+    It 'accepts metadata written after the current process baseline' {
+        $testProfile = Join-Path $TestDrive 'FreshMetadata'
+        [System.IO.Directory]::CreateDirectory($testProfile) | Out-Null
+        $baseline = [DateTime]::UtcNow.AddMilliseconds(-100)
+        Start-Sleep -Milliseconds 150
+        [System.IO.File]::WriteAllLines((Join-Path $testProfile 'DevToolsActivePort'), @('43217', '/devtools/browser/fresh'))
+        $fresh = Test-FabPortalDevToolsActivePortFresh -UserDataDir $testProfile -NotBeforeUtc $baseline
+        $fresh.Port | Should -Be 43217
+        $fresh.WebSocketPath | Should -BeExactly '/devtools/browser/fresh'
+    }
+
+    It 'rejects metadata written before the current process baseline' {
+        $testProfile = Join-Path $TestDrive 'OldMetadata'
+        [System.IO.Directory]::CreateDirectory($testProfile) | Out-Null
+        [System.IO.File]::WriteAllLines((Join-Path $testProfile 'DevToolsActivePort'), @('43218', '/devtools/browser/old'))
+        $future = [DateTime]::UtcNow.AddMilliseconds(100)
+        Test-FabPortalDevToolsActivePortFresh -UserDataDir $testProfile -NotBeforeUtc $future | Should -BeNullOrEmpty
+    }
+
+    It 'rejects metadata without a browser websocket path for fresh sessions' {
+        $testProfile = Join-Path $TestDrive 'MissingWebSocketPath'
+        [System.IO.Directory]::CreateDirectory($testProfile) | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $testProfile 'DevToolsActivePort'), '43219')
+        { Test-FabPortalDevToolsActivePortFresh -UserDataDir $testProfile -NotBeforeUtc ([DateTime]::UtcNow.AddSeconds(-1)) } |
+            Should -Throw '*missing the browser websocket path*'
+    }
+
+    It 'does not touch credential or profile files during stale cleanup' {
+        $testProfile = Join-Path $TestDrive 'PreservedProfile'
+        [System.IO.Directory]::CreateDirectory($testProfile) | Out-Null
+        $metadataPath = Join-Path $testProfile 'DevToolsActivePort'
+        $sentinelPath = Join-Path $testProfile 'Cookies'
+        [System.IO.File]::WriteAllLines($metadataPath, @('43220', '/devtools/browser/stale'))
+        [System.IO.File]::WriteAllText($sentinelPath, 'sentinel')
+        [void](Remove-FabPortalStaleDevToolsActivePort -UserDataDir $testProfile -ProcessIdProvider { return @() })
+        Test-Path -LiteralPath $metadataPath | Should -BeFalse
+        [System.IO.File]::ReadAllText($sentinelPath) | Should -BeExactly 'sentinel'
     }
 
     It 'accepts a healthy endpoint only with one matching process' {

@@ -351,6 +351,14 @@ This mode emits no CDP endpoint and never automates the login. Close the
 dedicated Chrome window normally after authentication, then start the default
 Automation mode again to discover a fresh endpoint from the same profile.
 
+Automation mode removes only a stale `DevToolsActivePort` file when no Chrome
+process uses the dedicated profile and the profile is not locked. It never
+removes that metadata while Chrome is running, never removes cookies or other
+profile data, and accepts a new endpoint only after the metadata is fresh for
+the newly launched browser process. Close the dedicated Chrome normally before
+restarting Automation mode; the helper will fail closed if the profile is
+still in use or the fresh metadata does not appear within its bounded wait.
+
 Keep the Chrome window open. If the dedicated profile is not authenticated,
 complete Fab login, MFA, or a Cloudflare/security challenge manually in that
 window. The helper does not handle credentials or challenges. The same healthy
