@@ -69,6 +69,62 @@ async function confirmFormatCreation(page) {
   return true;
 }
 
+async function visibleLabeledControl(page, labels, field) {
+  const matches = [];
+  for (const label of labels) {
+    const locator = page.getByLabel(label, { exact: true });
+    for (let index = 0; index < await locator.count(); index += 1) {
+      if (await locator.nth(index).isVisible().catch(() => false)) matches.push(locator.nth(index));
+    }
+    if (matches.length > 0) break;
+  }
+  if (matches.length !== 1) throw new Error(`${field} control visible match count was ${matches.length}.`);
+  return matches[0];
+}
+
+async function fillTextControl(page, labels, field, value) {
+  const control = await visibleLabeledControl(page, labels, field);
+  const metadata = await control.evaluate((element) => ({ tagName: element.tagName, readOnly: element.readOnly === true, disabled: element.disabled === true, role: element.getAttribute('role') }));
+  if (metadata.disabled || metadata.readOnly || !['INPUT', 'TEXTAREA'].includes(metadata.tagName)) throw new Error(`${field} control was not an enabled writable text control.`);
+  await control.fill(value);
+}
+
+async function chooseExactOption(page, labels, field, value) {
+  const control = await visibleLabeledControl(page, labels, field);
+  const metadata = await control.evaluate((element) => ({ tagName: element.tagName, disabled: element.disabled === true, role: element.getAttribute('role') }));
+  if (metadata.disabled) throw new Error(`${field} control was disabled.`);
+  if (metadata.tagName === 'SELECT') {
+    const options = await control.locator('option').evaluateAll((items) => items.map((item) => ({ label: item.textContent?.trim() ?? '', disabled: item.disabled })));
+    const matches = options.filter((option) => option.label === value);
+    if (matches.length !== 1 || matches[0].disabled) throw new Error(`${field} did not expose exactly one enabled option for ${value}.`);
+    await control.selectOption({ label: value });
+    return;
+  }
+  if (metadata.role !== 'combobox' && metadata.tagName !== 'INPUT') throw new Error(`${field} control shape was not a supported combobox.`);
+  await control.click();
+  const option = page.getByRole('option', { name: value, exact: true });
+  const visible = [];
+  for (let index = 0; index < await option.count(); index += 1) {
+    if (await option.nth(index).isVisible().catch(() => false)) visible.push(option.nth(index));
+  }
+  if (visible.length !== 1 || await visible[0].isDisabled().catch(() => true)) throw new Error(`${field} did not expose exactly one enabled option for ${value}.`);
+  await visible[0].click();
+}
+
+async function fillUnrealVersionForm(page, manifest) {
+  const version = String(manifest.engineVersions?.[0] ?? '');
+  const packageInfo = manifest.packages?.find((item) => String(item?.engineVersion) === version);
+  if (!version || !packageInfo) throw new Error('Canonical first Unreal Engine package was not available for format bootstrap.');
+  if (typeof packageInfo.versionTitle !== 'string' || packageInfo.versionTitle.trim() === '') throw new Error(`Canonical Version title is missing for UE${version}.`);
+  if (typeof packageInfo.projectFileLink !== 'string' || packageInfo.projectFileLink.trim() === '') throw new Error(`Canonical Project File Link is missing for UE${version}.`);
+  if (!Array.isArray(manifest.platforms) || manifest.platforms.length !== 1 || typeof manifest.platforms[0] !== 'string' || manifest.platforms[0].trim() === '') throw new Error('Canonical supported target platforms were not an exact single-value configuration.');
+  await fillTextControl(page, ['Version title *', 'Version title'], 'Version title', packageInfo.versionTitle);
+  await fillTextControl(page, ['Project file link *', 'Project file link'], 'Project file link', packageInfo.projectFileLink);
+  await chooseExactOption(page, ['Supported engine version *', 'Supported engine version'], 'Supported engine version', version);
+  await chooseExactOption(page, ['Supported target platforms *', 'Supported target platforms'], 'Supported target platforms', manifest.platforms[0]);
+  return { engineVersion: version, versionTitle: packageInfo.versionTitle, projectFileLink: packageInfo.projectFileLink, platform: manifest.platforms[0] };
+}
+
 async function formatChooserActionEvidence(page) {
   return page.evaluate(() => {
     const visible = (element) => Boolean(element?.getClientRects?.().length);
@@ -326,6 +382,11 @@ export async function executeFormatBootstrap(page, manifest, inspection, { guard
     await page.waitForTimeout(150);
     const nextClicked = await advanceFormatChooser(page, manifest.includedFormat);
     await page.waitForTimeout(150);
+    let versionEvidence = null;
+    const versionHeading = page.getByRole('heading', { name: /Add Unreal Engine version/i });
+    if (await versionHeading.count() === 1 && await versionHeading.isVisible().catch(() => false)) {
+      versionEvidence = await fillUnrealVersionForm(page, manifest);
+    }
     const confirmClicked = await confirmFormatCreation(page);
     if (confirmClicked) await page.waitForTimeout(150);
     const region = includedFilesRegion(page);
@@ -339,7 +400,7 @@ export async function executeFormatBootstrap(page, manifest, inspection, { guard
       const evidence = actions.length > 0 ? ` Visible chooser actions: ${JSON.stringify(actions)}.` : '';
       throw new Error(`Format bootstrap did not produce exactly one Unreal Engine product format.${evidence}`);
     }
-    return { created: true };
+    return { created: true, versionEvidence };
   } finally {
     guard.setPhase('stage');
   }

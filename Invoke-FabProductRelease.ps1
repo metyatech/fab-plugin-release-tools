@@ -1503,8 +1503,16 @@ function Copy-FabProductPackage {
             [System.IO.File]::Copy($sourcePath, (Join-Path $packageDirectory ([System.IO.Path]::GetFileName($sourcePath))), $false)
         }
         $bundleRelative = "packages/$directoryName/$([System.IO.Path]::GetFileName($release.ZipPath))"
+        $versionTitle = switch ([string]$release.EngineVersion) {
+            '5.5' { 'UE 5.5'; break }
+            '5.6' { 'UE 5.6'; break }
+            '5.7' { 'UE 5.7'; break }
+            '5.8' { 'UE 5.8'; break }
+            default { $null }
+        }
         $items.Add([ordered]@{
                 engineVersion       = $release.EngineVersion
+                versionTitle        = $versionTitle
                 bundleRelativePath  = $bundleRelative
                 sha256              = $release.Sha256
                 projectFileLink     = if ($ProjectFileLinks.Contains($release.EngineVersion)) {

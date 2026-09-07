@@ -48,6 +48,34 @@ function isMutation(method, graph, intent) {
     : graph?.type === 'mutation';
 }
 
+const SAFE_FORMAT_PAYLOAD_KEYS = new Set([
+  'listingId', 'listing_id', 'format', 'formatId', 'format_id', 'formatName', 'format_name',
+  'engineVersion', 'engine_version', 'versionTitle', 'version_title', 'projectFileLink',
+  'project_file_link', 'supportedEngineVersion', 'supported_engine_version', 'platforms',
+  'targetPlatforms', 'target_platforms', 'name', 'type', 'operation', 'operationName',
+]);
+
+function safePayloadShape(request) {
+  const method = request.method().toUpperCase();
+  if (!['POST', 'PUT', 'PATCH'].includes(method)) return null;
+  const raw = request.postData();
+  if (!raw) return { contentType: null, topLevelKeys: [], knownFields: {} };
+  let body;
+  try { body = JSON.parse(raw); } catch { return { contentType: 'non-json', topLevelKeys: [], knownFields: {} }; }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return { contentType: 'json-non-object', topLevelKeys: [], knownFields: {} };
+  const knownFields = {};
+  for (const key of SAFE_FORMAT_PAYLOAD_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(body, key)) continue;
+    const value = body[key];
+    knownFields[key] = Array.isArray(value)
+      ? { type: 'array', length: value.length, itemTypes: [...new Set(value.map((item) => typeof item))] }
+      : value && typeof value === 'object'
+        ? { type: 'object', keys: Object.keys(value).sort() }
+        : { type: typeof value, value: typeof value === 'string' ? value : value };
+  }
+  return { contentType: 'json-object', topLevelKeys: Object.keys(body).sort(), knownFields };
+}
+
 function phaseAllows(mode, phase, intent) {
   if (mode === 'verify') return false;
   if (intent === 'cancel' || intent === 'delete' || intent === 'unlist' || intent === 'publish') return false;
@@ -187,6 +215,7 @@ export function installNetworkGuard(context, { mode = 'verify', listingPrerequis
         hostname: url.hostname,
         pathname: url.pathname,
         graphqlOperation: graph,
+        ...(state.phase === 'format-create' ? { payloadShape: safePayloadShape(request) } : {}),
         intent,
         mutation,
         phase: state.phase,

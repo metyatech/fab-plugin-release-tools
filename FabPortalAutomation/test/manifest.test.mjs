@@ -41,6 +41,13 @@ test('manifest loader exposes Technical Information file content separately', as
   assert.equal(loaded.manifest.technicalInformationFile, 'submission/FabTechnicalInformation.txt');
 });
 
+test('manifest requires a canonical Version title for every format package', async () => {
+  const fixture = await validManifestBundle();
+  delete fixture.manifest.packages[0].versionTitle;
+  await writeFile(fixture.manifestPath, JSON.stringify(fixture.manifest));
+  await assert.rejects(() => loadSubmissionManifest(fixture.manifestPath), /packages\[0\]\.versionTitle must be non-blank text/);
+});
+
 test('verify manifest loading accepts generator-style portal-unready packages', async () => {
   const fixture = await validManifestBundle();
   fixture.manifest.portalReady = false;

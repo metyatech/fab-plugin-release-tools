@@ -169,6 +169,7 @@ export async function loadSubmissionManifest(manifestPath, { requirePortalReady 
   for (const [index, item] of manifest.packages.entries()) {
     if (!item || typeof item !== 'object' || Array.isArray(item)) fail(`packages[${index}] must be an object.`);
     requireString(item.engineVersion, `packages[${index}].engineVersion`);
+    requireString(item.versionTitle, `packages[${index}].versionTitle`);
     if (!Object.prototype.hasOwnProperty.call(item, 'projectFileLink')) fail(`packages[${index}].projectFileLink must be present and either HTTPS or null.`);
     const projectFileLink = item.projectFileLink;
     if (projectFileLink === null) {
