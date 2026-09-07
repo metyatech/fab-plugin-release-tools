@@ -4,6 +4,7 @@ import { loadSubmissionManifest } from './manifest.mjs';
 import { createStdinManualInteraction } from './manual-handoff.mjs';
 import { runPortalAutomation } from './portal.mjs';
 import { createRunDirectory, writeRunReport } from './report.mjs';
+import { resolveBrowserTransport } from './transport.mjs';
 
 const VERSION = '1.0.0';
 
@@ -12,6 +13,7 @@ function help() {
 
 Usage:
   pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> -CdpEndpoint <endpoint>
+  pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> -CdpWebSocketEndpoint <ws-endpoint>
   pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> -CdpEndpoint <endpoint> -SaveDraft
   pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> -CdpEndpoint <endpoint> -SaveDraft -SubmitForReview
 
@@ -23,7 +25,9 @@ complete it manually and press Enter; q + Enter cancels the run.
 
 Options:
   --manifest <path>       FabPortalSubmission.json (required)
-  --cdp-endpoint <url>    Existing dedicated Chrome CDP endpoint (required)
+  --cdp-endpoint <url>    Existing dedicated Chrome HTTP CDP endpoint
+  --cdp-websocket-endpoint <url>
+                          Existing dedicated Chrome browser WebSocket endpoint
   --output <directory>    Artifact root (default: ./artifacts)
   --save-draft            Explicitly authorize Save Draft
   --submit-for-review     Explicitly authorize Submit for review; requires --save-draft
@@ -35,7 +39,7 @@ Options:
 }
 
 function parseArgs(argv) {
-  const result = { output: null, saveDraft: false, submitForReview: false, json: false, verbose: false };
+  const result = { output: null, saveDraft: false, submitForReview: false, json: false, verbose: false, cdpEndpoint: null, cdpWebSocketEndpoint: null };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--help' || arg === '-h') result.help = true;
@@ -44,14 +48,19 @@ function parseArgs(argv) {
     else if (arg === '--submit-for-review') result.submitForReview = true;
     else if (arg === '--json') result.json = true;
     else if (arg === '--verbose') result.verbose = true;
-    else if (['--manifest', '--cdp-endpoint', '--output'].includes(arg)) {
+    else if (['--manifest', '--cdp-endpoint', '--cdp-websocket-endpoint', '--output'].includes(arg)) {
       const value = argv[++index];
       if (!value || value.startsWith('--')) throw new Error(`${arg} requires a value.`);
-      result[arg.slice(2).replaceAll('-', '')] = value;
+      if (arg === '--manifest') result.manifest = value;
+      else if (arg === '--cdp-endpoint') result.cdpEndpoint = value;
+      else if (arg === '--cdp-websocket-endpoint') result.cdpWebSocketEndpoint = value;
+      else result.output = value;
     } else throw new Error(`Unknown option: ${arg}. Use --help.`);
   }
   if (result.submitForReview && !result.saveDraft) throw new Error('--submit-for-review requires --save-draft.');
-  if (!result.help && !result.version && (!result.manifest || !result.cdpendpoint)) throw new Error('--manifest and --cdp-endpoint are required. Use --help.');
+  if (!result.help && !result.version && (!result.manifest || (!result.cdpEndpoint && !result.cdpWebSocketEndpoint))) throw new Error('--manifest and exactly one CDP transport endpoint are required. Use --help.');
+  if (result.cdpEndpoint && result.cdpWebSocketEndpoint) throw new Error('Specify exactly one of --cdp-endpoint and --cdp-websocket-endpoint.');
+  if (result.cdpWebSocketEndpoint) resolveBrowserTransport({ cdpWebSocketEndpoint: result.cdpWebSocketEndpoint });
   return result;
 }
 
@@ -87,7 +96,7 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
   const mode = args.submitForReview ? 'submit' : args.saveDraft ? 'save' : 'verify';
   const manifestInfo = await loadManifest(args.manifest, { requirePortalReady: mode !== 'verify' });
   const artifactDirectory = await createDirectory(args.output ?? path.resolve('artifacts'), manifestInfo.manifest.pluginName);
-  const result = await run({ manifestInfo, cdpEndpoint: args.cdpendpoint, mode, saveDraftAuthorized: args.saveDraft, outputDirectory: artifactDirectory, manualInteraction });
+  const result = await run({ manifestInfo, cdpEndpoint: args.cdpEndpoint, cdpWebSocketEndpoint: args.cdpWebSocketEndpoint, mode, saveDraftAuthorized: args.saveDraft, outputDirectory: artifactDirectory, manualInteraction });
   result.artifactDirectory = artifactDirectory;
   await writeReportFile({ directory: artifactDirectory, result, comparison: result.comparison, comparisonAfter: result.comparisonAfter, network: result.network, page: result.page });
   if (result.browser) await result.browser.close().catch(() => undefined);

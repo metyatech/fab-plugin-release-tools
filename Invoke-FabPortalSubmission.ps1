@@ -4,6 +4,7 @@
 param(
     [string]$ManifestPath,
     [string]$CdpEndpoint,
+    [string]$CdpWebSocketEndpoint,
     [string]$OutputDirectory,
     [switch]$SaveDraft,
     [switch]$SubmitForReview,
@@ -72,8 +73,11 @@ if ($Version) {
 if ([string]::IsNullOrWhiteSpace($ManifestPath)) {
     throw 'ManifestPath is required. Use -Help for usage.'
 }
-if ([string]::IsNullOrWhiteSpace($CdpEndpoint)) {
-    throw 'CdpEndpoint is required. Use -Help for usage.'
+if ([string]::IsNullOrWhiteSpace($CdpEndpoint) -and [string]::IsNullOrWhiteSpace($CdpWebSocketEndpoint)) {
+    throw 'Exactly one of CdpEndpoint or CdpWebSocketEndpoint is required. Use -Help for usage.'
+}
+if (-not [string]::IsNullOrWhiteSpace($CdpEndpoint) -and -not [string]::IsNullOrWhiteSpace($CdpWebSocketEndpoint)) {
+    throw 'CdpEndpoint and CdpWebSocketEndpoint are mutually exclusive.'
 }
 if ($SubmitForReview -and -not $SaveDraft) {
     throw 'SubmitForReview requires SaveDraft.'
@@ -86,8 +90,13 @@ $arguments = [System.Collections.Generic.List[string]]::new()
 [void]$arguments.Add((Join-Path $runtime 'src\cli.mjs'))
 [void]$arguments.Add('--manifest')
 [void]$arguments.Add([System.IO.Path]::GetFullPath($ManifestPath))
-[void]$arguments.Add('--cdp-endpoint')
-[void]$arguments.Add($CdpEndpoint)
+if (-not [string]::IsNullOrWhiteSpace($CdpEndpoint)) {
+    [void]$arguments.Add('--cdp-endpoint')
+    [void]$arguments.Add($CdpEndpoint)
+} else {
+    [void]$arguments.Add('--cdp-websocket-endpoint')
+    [void]$arguments.Add($CdpWebSocketEndpoint)
+}
 if (-not [string]::IsNullOrWhiteSpace($OutputDirectory)) {
     [void]$arguments.Add('--output')
     [void]$arguments.Add([System.IO.Path]::GetFullPath($OutputDirectory))

@@ -39,8 +39,25 @@ test('actual CLI main path denies write authorization by default', async () => {
   assert.equal(code, 0);
   assert.equal(received.mode, 'verify');
   assert.equal(received.saveDraftAuthorized, false);
+  assert.equal(received.cdpEndpoint, 'http://127.0.0.1:1');
+  assert.equal(received.cdpWebSocketEndpoint, null);
   assert.deepEqual(loadOptions, { requirePortalReady: false });
   assert.equal(typeof received.manualInteraction.waitForConfirmation, 'function');
+});
+
+test('CLI accepts an explicit localhost browser WebSocket endpoint', async () => {
+  const endpoint = 'ws://127.0.0.1:50095/devtools/browser/session-id';
+  const { code, received } = await invoke(['--manifest', 'manifest.json', '--cdp-websocket-endpoint', endpoint, '--json']);
+  assert.equal(code, 0);
+  assert.equal(received.cdpEndpoint, null);
+  assert.equal(received.cdpWebSocketEndpoint, endpoint);
+});
+
+test('CLI rejects both transport endpoints', async () => {
+  await assert.rejects(
+    () => invoke(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', '--cdp-websocket-endpoint', 'ws://127.0.0.1:1/devtools/browser/id', '--json']),
+    /exactly one/,
+  );
 });
 
 test('actual CLI main path propagates explicit Save Draft authorization', async () => {

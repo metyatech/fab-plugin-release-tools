@@ -1,4 +1,3 @@
-import { chromium } from 'playwright-core';
 import { compareManifest, summarizeComparison } from './comparison.mjs';
 import { buildMutationPlan, executeMutationPlan, preflightMutationPlan } from './mutation-plan.mjs';
 import { createStdinManualInteraction, DEFAULT_MANUAL_CHALLENGE_MAX_CYCLES, normalizeManualInteractionDecision } from './manual-handoff.mjs';
@@ -6,6 +5,7 @@ import { installNetworkGuard } from './network-guard.mjs';
 import { dangerousActionCandidates, listingEditUrl, resolveCandidate, saveCandidates, submitCandidates } from './locators.mjs';
 import { classifyFabView, isFormatView } from './view-detection.mjs';
 import { DEFERRED_FORMAT_FIELDS, executeFormatBootstrap, inspectFormatBootstrap } from './format-bootstrap.mjs';
+import { connectBrowserTransport, resolveBrowserTransport } from './transport.mjs';
 
 const REVIEW_LOCKED = new Set(['pending approval', 'pending publication', 'approved', 'live']);
 const KNOWN_STATUSES = ['Pending approval', 'Pending Publication', 'Changes needed', 'Draft', 'Approved', 'Live'];
@@ -671,7 +671,7 @@ async function executeSubmitFlow(page, guard, result) {
   }
 }
 
-export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'verify', saveDraftAuthorized = false, outputDirectory = null, origin = 'https://www.fab.com', page: injectedPage = null, context: injectedContext = null, manualInteraction = null, maxManualChallengeCycles = DEFAULT_MANUAL_CHALLENGE_MAX_CYCLES }) {
+export async function runPortalAutomation({ manifestInfo, cdpEndpoint = null, cdpWebSocketEndpoint = null, mode = 'verify', saveDraftAuthorized = false, outputDirectory = null, origin = 'https://www.fab.com', page: injectedPage = null, context: injectedContext = null, manualInteraction = null, maxManualChallengeCycles = DEFAULT_MANUAL_CHALLENGE_MAX_CYCLES }) {
   if (mode === 'save' && !saveDraftAuthorized) throw new Error('Save Draft requires explicit Save Draft authorization.');
   if (mode === 'submit' && !saveDraftAuthorized) throw new Error('Submit for review requires explicit Save Draft authorization.');
   let browser = null;
@@ -679,11 +679,12 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
   let page = injectedPage;
   const passiveAttach = mode === 'verify';
   const interaction = manualInteraction ?? createStdinManualInteraction();
+  const browserTransport = resolveBrowserTransport({ cdpEndpoint, cdpWebSocketEndpoint });
   let targetPageSelectionReason = injectedPage ? 'Caller-supplied page was used for controlled fixture verification.' : null;
   if (!page) {
-    if (!context && !cdpEndpoint) throw new Error('A CDP endpoint is required for the production browser connection.');
+    if (!context && !browserTransport) throw new Error('A CDP transport endpoint is required for the production browser connection.');
     if (!context) {
-      browser = await chromium.connectOverCDP(cdpEndpoint);
+      browser = await connectBrowserTransport({ endpoint: browserTransport.endpoint, kind: browserTransport.kind, manualInteraction: interaction });
       context = browser.contexts()[0];
     }
     if (!context) throw new Error('The CDP browser has no default context.');

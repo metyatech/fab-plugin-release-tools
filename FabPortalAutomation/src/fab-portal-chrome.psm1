@@ -310,6 +310,7 @@ function Get-FabPortalChromeSession {
     }
     return [pscustomobject]@{
         CdpEndpoint          = "http://127.0.0.1:$($activePort.Port)"
+        CdpWebSocketEndpoint = if ([string]::IsNullOrWhiteSpace($activePort.WebSocketPath)) { $null } else { "ws://127.0.0.1:$($activePort.Port)$($activePort.WebSocketPath)" }
         ChromeProcessId      = [int]$processIds[0]
         UserDataDir           = [System.IO.Path]::GetFullPath($UserDataDir)
         Browser               = [string]$probe.Browser
@@ -359,6 +360,7 @@ function Wait-FabPortalChromeSession {
                 }
                 return [pscustomobject]@{
                     CdpEndpoint          = "http://127.0.0.1:$($activePort.Port)"
+                    CdpWebSocketEndpoint = "ws://127.0.0.1:$($activePort.Port)$($activePort.WebSocketPath)"
                     ChromeProcessId      = $ProcessId
                     UserDataDir           = [System.IO.Path]::GetFullPath($UserDataDir)
                     Browser               = [string]$probe.Browser

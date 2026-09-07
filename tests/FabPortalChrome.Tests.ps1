@@ -132,13 +132,14 @@ Describe 'Fab dedicated Chrome launcher' {
     It 'accepts a healthy endpoint only with one matching process' {
         $testProfile = Join-Path $TestDrive 'Healthy'
         [System.IO.Directory]::CreateDirectory($testProfile) | Out-Null
-        [System.IO.File]::WriteAllText((Join-Path $testProfile 'DevToolsActivePort'), '43212')
+        [System.IO.File]::WriteAllLines((Join-Path $testProfile 'DevToolsActivePort'), @('43212', '/devtools/browser/test'))
         $probe = { [pscustomobject]@{ Ready = $true; Browser = 'Chrome/test'; WebSocketDebuggerUrl = 'ws://127.0.0.1/devtools/browser/test' } }
         $processes = { $null = $args; @(9002) }
         $session = Get-FabPortalChromeSession -UserDataDir $testProfile -EndpointProbe $probe -ProcessIdProvider $processes
         $session.Reused | Should -BeTrue
         $session.ChromeProcessId | Should -Be 9002
         $session.CdpEndpoint | Should -BeExactly 'http://127.0.0.1:43212'
+        $session.CdpWebSocketEndpoint | Should -BeExactly 'ws://127.0.0.1:43212/devtools/browser/test'
     }
 
     It 'rejects an ambiguous healthy session without terminating anything' {

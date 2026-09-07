@@ -336,6 +336,7 @@ $session = pwsh .\Start-FabPortalChrome.ps1 `
   -ListingUrl <Fab-listing-edit-URL> `
   -Json | ConvertFrom-Json
 $session.CdpEndpoint
+$session.CdpWebSocketEndpoint
 ```
 
 If the CDP-enabled window cannot pass an authentication security check, start
@@ -367,13 +368,33 @@ reported without killing a process or deleting a profile. Do not point the
 helper at the normal Chrome `User Data` directory or a child of it.
 
 After login, make sure the target listing edit URL is open in exactly one tab,
-then connect the guarded automation to the returned endpoint:
+then connect the guarded automation to one returned endpoint. The HTTP endpoint
+keeps the traditional path:
 
 ```powershell
 pwsh .\Invoke-FabPortalSubmission.ps1 `
   -ManifestPath <FabPortalSubmission.json> `
   -CdpEndpoint $session.CdpEndpoint
 ```
+
+When Chrome's live Remote Debugging permission has been approved and the fresh
+browser WebSocket path is available, the direct browser transport can be used
+instead:
+
+```powershell
+pwsh .\Invoke-FabPortalSubmission.ps1 `
+  -ManifestPath <FabPortalSubmission.json> `
+  -CdpWebSocketEndpoint $session.CdpWebSocketEndpoint
+```
+
+The two endpoint parameters are mutually exclusive. Browser WebSocket input
+must be a run-scoped `ws://127.0.0.1:<port>/devtools/browser/<id>` value from
+fresh `DevToolsActivePort` metadata; remote hosts, credentials, query strings,
+and fragments are rejected and the endpoint is never persisted. If Chrome
+shows “Chrome allows remote debugging?” / “Allow remote debugging?”, click
+Allow manually. The automation does not click that security prompt. If the
+connection is waiting for that approval, it pauses for the manual confirmation
+before retrying the same endpoint once.
 
 The default is read-only verification. Explicit `-SaveDraft` enables a guarded
 draft save, and `-SaveDraft -SubmitForReview` additionally enables submission.
