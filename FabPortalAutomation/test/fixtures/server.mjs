@@ -46,7 +46,7 @@ function pageMarkup(state, listingId) {
     <label>Description *<div role="textbox" aria-label="Description *" contenteditable="true">${html(state.longDescription)}</div></label>
     <label>Product type *<select aria-label="Product type *">${(state.productTypeOptions ?? [state.productType]).map((option) => `<option${option === state.productType ? ' selected' : ''}>${html(option)}</option>`).join('')}</select></label>
     <label>Category *<input role="combobox" aria-label="Category selection" value="${html(state.category)}"></label>
-    <label>Tags *<input aria-label="Tags *" value="${html(state.tags[0] ?? '')}"${state.tagsEditable ? '' : ' readonly'}>${state.tagsCount ? `<input role="combobox" aria-label="Search a tag" placeholder="Search a tag"><span id="tagsCount">${html(state.tagsCount)}</span>` : ''}</label>
+    <label>Tags *<input aria-label="Tags *" value="${html(state.tags[0] ?? '')}"${state.tagsEditable ? '' : ' readonly'}>${state.tagsCount ? `<input role="combobox" aria-label="${html(state.tagSearchAriaLabel ?? 'Search a tag')}" placeholder="${html(state.tagSearchPlaceholder ?? 'Search a tag')}"><span id="tagsCount">${html(state.tagsCount)}</span>${(state.tagOptions ?? []).map((tag) => `<div role="option" aria-label="${html(tag)}">${html(tag)}</div>`).join('')}` : ''}</label>
     ${formatInventory}
     ${state.mainProjectVersionsVisible ? '<h2>Project Versions*</h2><a href="/portal/listings">Back to listings</a>' : ''}
     ${radio('Standard License (Free or Paid)', true)}

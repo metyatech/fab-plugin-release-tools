@@ -475,7 +475,19 @@ an unreadable control. For Tags, the page's exact prefetched `tags` array is
 usable only when the target UUID and listing snapshot validate and the visible
 Fab tag-count control agrees with that array. Missing, malformed, or
 contradictory tag evidence remains `NOT_VISIBLE` and fails closed; the empty
-search box is never treated as the persisted tag set.
+search box is never treated as the persisted tag set. The current Fab portal's
+`Search` accessible name is accepted as the exact tag-search control when it
+is uniquely visible.
+Even when the persisted array and tag count agree, the comparison does not
+create a generic text mutation target: selected-tag option identities and a
+dedicated safe tag mutation contract must be proven before Tags can be staged.
+
+The manifest may also retain release metadata that the current Draft editor
+does not own. An independent `shortDescription` control is not required for
+Draft comparison or Save Draft, and `activation` is deferred to the explicitly
+authorized Submit-for-review publication choice. Neither value is synthesized
+or written through a generic listing mutation; an unproven Submit-phase
+activation control remains fail closed.
 
 Staging manifests with `portalReady: false` and unresolved package
 `projectFileLink: null` values are valid for read-only verification. They are
@@ -484,9 +496,10 @@ never written to Fab; Save Draft and Submit for review require a manifest with
 
 Save and submit safety requires every manifest-owned critical field to be
 readable and either already matching or backed by an approved writable locator,
-including descriptions, taxonomy, tags, format/engine/platform, license,
-prices, AI/content flags, activation, URLs, Technical Information text, media,
-and every package Project File Link. An empty `subcategory` is legitimately
+including Draft-owned descriptions, taxonomy, tags, format/engine/platform,
+license, prices, AI/content flags, URLs, Technical Information text, media, and
+every package Project File Link. Activation is checked only at the explicit
+Submit boundary. An empty `subcategory` is legitimately
 `NOT_APPLICABLE` when Fab exposes no distinct subcategory. Existing media whose
 identity cannot be proven remains a write blocker.
 

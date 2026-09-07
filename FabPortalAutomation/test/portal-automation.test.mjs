@@ -8,7 +8,7 @@ import { buildMutationPlan, executeMutationPlan, preflightMutationPlan } from '.
 import { installNetworkGuard, validateListingLicensePayload, validateListingLicensePricingPayload, validateListingPrerequisitePayload } from '../src/network-guard.mjs';
 import { inspectPrefetchedListingPrerequisite, LISTING_PREREQUISITE_PAYLOAD_KEYS } from '../src/listing-prerequisite.mjs';
 import { compareManifest, comparePlatformClassification, comparePriceClassification } from '../src/comparison.mjs';
-import { detectManualBlock, mergeListingAndFormatComparisons, runPortalAutomation, selectExistingTargetPage } from '../src/portal.mjs';
+import { CRITICAL_OWNED_FIELDS, criticalBlockers, detectManualBlock, mergeListingAndFormatComparisons, runPortalAutomation, selectExistingTargetPage } from '../src/portal.mjs';
 import { parseArgs } from '../src/cli.mjs';
 import { classifyFabView, FAB_VIEW } from '../src/view-detection.mjs';
 import { persistStandardLicense, persistStandardLicensePricing } from '../src/listing-license.mjs';
@@ -1125,6 +1125,8 @@ test('visible empty rich description is a mismatch, not unreadable', async () =>
     tags: [],
     tagsEditable: true,
     tagsCount: '0 / 25',
+    tagSearchAriaLabel: 'Search',
+    tagOptions: ['Plugin', 'Other available tag'],
     prefetchedListingFields: {
       title: manifest.title,
       listingType: 'tool-and-plugin',
@@ -1153,7 +1155,8 @@ test('visible empty rich description is a mismatch, not unreadable', async () =>
     assert.equal(description.writeTarget.strategy, 'getByLabel');
     assert.equal(tags.classification, 'MISMATCH');
     assert.deepEqual(tags.currentNormalizedValue, []);
-    assert.equal(tags.writeTarget.strategy, 'getByLabel');
+    assert.equal(tags.writeTarget, null);
+    assert.equal(tags.editableControlAvailable, false);
   } finally {
     await context.close();
     await fixture.close();
@@ -1194,6 +1197,22 @@ test('prefetched tag evidence fails closed when the visible count disagrees', as
     await context.close();
     await fixture.close();
   }
+});
+
+test('Draft ownership excludes Short Description and Activation while Submit keeps Activation gated', () => {
+  assert.equal(CRITICAL_OWNED_FIELDS.has('shortDescription'), false);
+  assert.equal(CRITICAL_OWNED_FIELDS.has('activation'), false);
+  const comparison = {
+    fields: [
+      { manifestJsonPath: 'shortDescription', classification: 'NOT_VISIBLE', writeTarget: null },
+      { manifestJsonPath: 'activation', classification: 'NOT_APPLICABLE', writeTarget: null },
+    ],
+  };
+  const draftBlockers = criticalBlockers(comparison, makeManifest());
+  assert.equal(draftBlockers.some((blocker) => /shortDescription/.test(blocker)), false);
+  assert.equal(draftBlockers.some((blocker) => /activation/.test(blocker)), false);
+  const submitBlockers = criticalBlockers(comparison, makeManifest(), { includeSubmissionFields: true });
+  assert.match(submitBlockers.join(' '), /activation is NOT_APPLICABLE/);
 });
 
 test('format view owns format controls and hides listing controls', async () => {

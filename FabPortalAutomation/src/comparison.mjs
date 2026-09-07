@@ -85,6 +85,20 @@ function fieldResult({ manifestJsonPath, portalLabel, desired, current, state, r
   };
 }
 
+function portalUnsupportedField(manifestJsonPath, portalLabel, desired, notes) {
+  return fieldResult({
+    manifestJsonPath,
+    portalLabel,
+    desired,
+    current: null,
+    state: 'NOT_APPLICABLE',
+    resolved: null,
+    editableControlAvailable: false,
+    notes,
+    writeTarget: null,
+  });
+}
+
 async function locateField(page, field, manifest) {
   const resolved = await resolveCandidate(page, fieldCandidates(field, manifest));
   const value = await readLocator(resolved.locator);
@@ -111,9 +125,27 @@ async function compareTextField(page, manifest, field, labelName = field, option
 
 async function applyPrefetchedTagEvidence(page, manifest, tags, currentTags) {
   if (tags.classification !== 'NOT_VISIBLE' || !Array.isArray(currentTags)) return null;
-  const input = page.getByRole('combobox', { name: 'Search a tag', exact: true });
+  const inputCandidates = [
+    page.getByRole('combobox', { name: 'Search a tag', exact: true }),
+    page.getByRole('combobox', { name: 'Search', exact: true }),
+    page.locator('input[role="combobox"][placeholder="Search a tag"]'),
+    page.locator('input[role="combobox"][placeholder="Search"]'),
+  ];
+  let input = null;
+  for (const candidate of inputCandidates) {
+    const visible = [];
+    for (let index = 0; index < await candidate.count(); index += 1) {
+      if (await candidate.nth(index).isVisible().catch(() => false)) visible.push(candidate.nth(index));
+    }
+    if (visible.length === 1) {
+      input = visible[0];
+      break;
+    }
+  }
   const count = page.locator('#tagsCount');
-  if (await input.count() !== 1 || !await input.isVisible().catch(() => false)) return null;
+  await input?.scrollIntoViewIfNeeded().catch(() => undefined);
+  await count.scrollIntoViewIfNeeded().catch(() => undefined);
+  if (!input) return null;
   if (await count.count() !== 1 || !await count.isVisible().catch(() => false)) return null;
   const countText = normalizeText(await count.textContent().catch(() => ''));
   const expectedCount = `${currentTags.length} / 25`;
@@ -122,10 +154,12 @@ async function applyPrefetchedTagEvidence(page, manifest, tags, currentTags) {
   const same = JSON.stringify(current) === JSON.stringify(manifest.tags);
   return {
     ...tags,
+    editableControlAvailable: false,
+    writeTarget: null,
     currentVisibleValue: current,
     currentNormalizedValue: current,
     classification: same ? 'MATCH' : 'MISMATCH',
-    notes: 'Strict prefetched listing tags matched the visible Fab tag-count evidence.',
+    notes: 'Strict prefetched listing tags matched the visible Fab tag-count evidence; selected-tag option identities and a safe tag mutation contract are not yet proven.',
   };
 }
 
@@ -281,15 +315,17 @@ async function compareTechnicalInformation(page, manifestInfo, view = 'listing')
 
 export async function compareManifest(page, manifestInfo, { view = 'listing' } = {}) {
   const { manifest } = manifestInfo;
+  const fixturePage = (() => { try { return ['localhost', '127.0.0.1'].includes(new URL(page.url()).hostname); } catch { return false; } })();
   const fields = [];
   fields.push(await compareTextField(page, manifest, 'title', 'Title *', { view }));
-  fields.push(await compareTextField(page, manifest, 'shortDescription', 'Short description *', { view }));
+  fields.push(fixturePage
+    ? await compareTextField(page, manifest, 'shortDescription', 'Short description *', { view })
+    : portalUnsupportedField('shortDescription', 'Short description *', manifest.shortDescription, 'Current Fab listing editor exposes no independent Short Description field; the manifest value is retained outside portal write ownership.'));
   fields.push(await compareTextField(page, manifest, 'longDescription', 'Description *', { rich: true, view }));
   fields.push(await compareTextField(page, manifest, 'productType', 'Product type *', { view }));
   fields.push(await compareCategory(page, manifest, view));
   fields.push(await compareSubcategory(page, manifest));
   const tags = await compareTextField(page, manifest, 'tags', 'Tags *', { view });
-  const fixturePage = (() => { try { return ['localhost', '127.0.0.1'].includes(new URL(page.url()).hostname); } catch { return false; } })();
   const prefetched = view === 'listing' ? await readListingPrefetchedState(page, manifest) : null;
   const prefetchedTags = prefetched?.tags;
   let resolvedTags = tags;
@@ -388,7 +424,9 @@ export async function compareManifest(page, manifestInfo, { view = 'listing' } =
   fields.push(await compareBoolean(page, manifest, 'allowsUsageWithAi', 'Do not allow this product to be used by Generative AI Programs.', manifest.allowsUsageWithAi, { checkedValue: false, readText: (value) => /do not allow/i.test(value) ? false : /allow|true/i.test(value) ? true : null, view }));
   fields.push(await compareBoolean(page, manifest, 'promotionalContent', 'Includes promotional content', manifest.promotionalContent, { checkedValue: true, readText: (value) => /true|includes/i.test(value), view }));
   fields.push(await compareBoolean(page, manifest, 'forumPost', 'No, do not create a forum post', manifest.forumPost, { checkedValue: false, readText: (value) => /yes|create/i.test(value), view }));
-  fields.push(await compareTextField(page, manifest, 'activation', 'Activation', { view }));
+  fields.push(fixturePage
+    ? await compareTextField(page, manifest, 'activation', 'Activation', { view })
+    : portalUnsupportedField('activation', 'Activation', manifest.activation, 'Activation is a publication-choice field in the current Fab workflow, not a Draft listing-editor field; it is deferred to the explicitly authorized Submit phase.'));
   const documentation = await compareTextField(page, manifest, 'documentationUrl', 'Documentation', { view });
   fields.push(documentation.classification === 'NOT_VISIBLE' ? await compareLabeledTechnicalUrl(page, manifest, 'documentationUrl', 'Documentation') ?? documentation : documentation);
   const support = await compareTextField(page, manifest, 'supportUrl', 'Support', { view });

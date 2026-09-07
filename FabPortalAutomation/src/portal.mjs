@@ -23,15 +23,22 @@ const MANUAL_CHALLENGE_TEXT = [
 ];
 
 // These fields are owned by the manifest and must be readable or safely writable
-// before a Save Draft or Submit for review operation can begin. Subcategory=[] is
-// intentionally excluded because Fab may expose no distinct control for it.
+// before a Save Draft operation can begin. Subcategory=[] is intentionally
+// excluded because Fab may expose no distinct control for it. Short Description
+// and Activation are retained in the manifest but are not Draft-editor fields
+// in the current Fab portal contract.
 const CRITICAL_OWNED_FIELDS = new Set([
-  'shortDescription', 'longDescription', 'productType', 'category', 'tags',
+  'longDescription', 'productType', 'category', 'tags',
   'includedFormat', 'engineVersions', 'platforms', 'license',
   'personalPriceUsd', 'professionalPriceUsd', 'matureContent', 'generatedWithAi',
-  'allowsUsageWithAi', 'promotionalContent', 'forumPost', 'activation',
+  'allowsUsageWithAi', 'promotionalContent', 'forumPost',
   'documentationUrl', 'supportUrl', 'technicalInformationFile', 'media',
 ]);
+
+// Activation is a publication-choice field, not a Draft-editor field. Submit
+// remains separately authorized and must fail closed until that UI contract is
+// proven in the submission phase.
+const SUBMISSION_OWNED_FIELDS = new Set(['activation']);
 
 export class ManualChallengeError extends Error {
   constructor() {
@@ -500,8 +507,10 @@ async function uniqueAction(page, candidates, actionName) {
   return resolved;
 }
 
-function criticalBlockers(comparison, manifest = null, { deferredFormatFields = new Set() } = {}) {
-  const expected = new Set(CRITICAL_OWNED_FIELDS);
+function criticalBlockers(comparison, manifest = null, { deferredFormatFields = new Set(), includeSubmissionFields = false } = {}) {
+  const ownedFields = new Set(CRITICAL_OWNED_FIELDS);
+  if (includeSubmissionFields) for (const field of SUBMISSION_OWNED_FIELDS) ownedFields.add(field);
+  const expected = new Set(ownedFields);
   if (manifest?.packages) for (const [index] of manifest.packages.entries()) expected.add(`packages[${index}].projectFileLink`);
   const fields = comparison.fields;
   const missing = [...expected]
@@ -509,9 +518,11 @@ function criticalBlockers(comparison, manifest = null, { deferredFormatFields = 
     .filter((path) => !fields.some((field) => field.manifestJsonPath === path))
     .map((path) => `${path} is NOT_DISCOVERED.`);
   return [...missing, ...fields
-    .filter((field) => CRITICAL_OWNED_FIELDS.has(field.manifestJsonPath) || /^packages\[\d+\]\.projectFileLink$/.test(field.manifestJsonPath))
+    .filter((field) => ownedFields.has(field.manifestJsonPath) || /^packages\[\d+\]\.projectFileLink$/.test(field.manifestJsonPath))
     .filter((field) => !deferredFormatFields.has(field.manifestJsonPath))
-    .filter((field) => ['NOT_VISIBLE', 'NOT_DISCOVERED'].includes(field.classification) || (field.classification === 'MISMATCH' && !field.writeTarget))
+    .filter((field) => ['NOT_VISIBLE', 'NOT_DISCOVERED'].includes(field.classification)
+      || (field.classification === 'NOT_APPLICABLE' && SUBMISSION_OWNED_FIELDS.has(field.manifestJsonPath))
+      || (field.classification === 'MISMATCH' && !field.writeTarget))
     .map((field) => `${field.manifestJsonPath} is ${field.classification}${field.classification === 'MISMATCH' ? ' and has no approved writable locator' : ''}.`)];
 }
 
@@ -983,7 +994,7 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint = null, cd
     }
     if (mode === 'submit') {
       if (!result.saveInvoked && result.plannedMutations.length > 0) throw new Error('Submit for review requires a completed Save Draft operation.');
-      if (result.comparisonAfter.mismatchCount > 0 || criticalBlockers(result.comparisonAfter, manifestInfo.manifest).length > 0) throw new Error('Submit for review blocked by post-save comparison.');
+      if (result.comparisonAfter.mismatchCount > 0 || criticalBlockers(result.comparisonAfter, manifestInfo.manifest, { includeSubmissionFields: true }).length > 0) throw new Error('Submit for review blocked by post-save comparison.');
       const submitRun = await withManualChallengeHandoff({
         context,
         page,
