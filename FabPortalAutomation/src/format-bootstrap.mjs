@@ -69,7 +69,7 @@ async function confirmFormatCreation(page) {
   return true;
 }
 
-async function visibleLabeledControl(page, labels, field) {
+async function visibleLabeledControl(page, labels, field, placeholders = []) {
   const matches = [];
   for (const label of labels) {
     const locator = page.getByLabel(label, { exact: true });
@@ -77,6 +77,15 @@ async function visibleLabeledControl(page, labels, field) {
       if (await locator.nth(index).isVisible().catch(() => false)) matches.push(locator.nth(index));
     }
     if (matches.length > 0) break;
+  }
+  if (matches.length === 0) {
+    for (const placeholder of placeholders) {
+      const locator = page.getByPlaceholder(placeholder, { exact: true });
+      for (let index = 0; index < await locator.count(); index += 1) {
+        if (await locator.nth(index).isVisible().catch(() => false)) matches.push(locator.nth(index));
+      }
+      if (matches.length > 0) break;
+    }
   }
   if (matches.length !== 1) throw new Error(`${field} control visible match count was ${matches.length}.`);
   return matches[0];
@@ -89,8 +98,8 @@ async function fillTextControl(page, labels, field, value) {
   await control.fill(value);
 }
 
-async function chooseExactOption(page, labels, field, value) {
-  const control = await visibleLabeledControl(page, labels, field);
+async function chooseExactOption(page, labels, field, value, placeholders = []) {
+  const control = await visibleLabeledControl(page, labels, field, placeholders);
   const metadata = await control.evaluate((element) => ({ tagName: element.tagName, disabled: element.disabled === true, role: element.getAttribute('role') }));
   if (metadata.disabled) throw new Error(`${field} control was disabled.`);
   if (metadata.tagName === 'SELECT') {
@@ -120,8 +129,8 @@ async function fillUnrealVersionForm(page, manifest) {
   if (!Array.isArray(manifest.platforms) || manifest.platforms.length !== 1 || typeof manifest.platforms[0] !== 'string' || manifest.platforms[0].trim() === '') throw new Error('Canonical supported target platforms were not an exact single-value configuration.');
   await fillTextControl(page, ['Version title *', 'Version title'], 'Version title', packageInfo.versionTitle);
   await fillTextControl(page, ['Project file link *', 'Project file link'], 'Project file link', packageInfo.projectFileLink);
-  await chooseExactOption(page, ['Supported engine version *', 'Supported engine version'], 'Supported engine version', version);
-  await chooseExactOption(page, ['Supported target platforms *', 'Supported target platforms'], 'Supported target platforms', manifest.platforms[0]);
+  await chooseExactOption(page, ['Supported engine version *', 'Supported engine version'], 'Supported engine version', version, ['Search or select engine versions']);
+  await chooseExactOption(page, ['Supported target platforms *', 'Supported target platforms'], 'Supported target platforms', manifest.platforms[0], ['Search or select target platforms']);
   return { engineVersion: version, versionTitle: packageInfo.versionTitle, projectFileLink: packageInfo.projectFileLink, platform: manifest.platforms[0] };
 }
 
@@ -246,6 +255,7 @@ export async function inspectFormatBootstrap(page, manifest, { guard = null, ope
     matchingFormatCount: 0,
     addControlCount: 0,
     choiceCount: 0,
+    resumedVersionForm: false,
     inventorySource: null,
     inventoryStatus: 'unknown',
     inventoryReason: null,
@@ -329,6 +339,12 @@ export async function inspectFormatBootstrap(page, manifest, { guard = null, ope
       result.blockers.push('Unreal Engine choice was not inspected.');
       return result;
     }
+    const versionHeading = page.getByRole('heading', { name: /Add Unreal Engine version/i });
+    if (await versionHeading.count() === 1 && await versionHeading.isVisible().catch(() => false)) {
+      result.available = true;
+      result.resumedVersionForm = true;
+      return result;
+    }
     const chooserHeading = page.getByRole('heading', { name: /(?:Choose a format|Add new format)/i });
     const chooserAlreadyOpen = await chooserHeading.count() === 1 && await chooserHeading.isVisible().catch(() => false);
     if (!chooserAlreadyOpen) {
@@ -374,14 +390,16 @@ export async function inspectFormatBootstrap(page, manifest, { guard = null, ope
 }
 
 export async function executeFormatBootstrap(page, manifest, inspection, { guard, onMutation = null } = {}) {
-  if (!inspection.required || !inspection.available || !inspection.choice) throw new Error('Format bootstrap was not proven safe before execution.');
+  if (!inspection.required || !inspection.available || (!inspection.choice && !inspection.resumedVersionForm)) throw new Error('Format bootstrap was not proven safe before execution.');
   guard.setPhase('format-create');
   try {
     await onMutation?.();
-    await inspection.choice.click();
-    await page.waitForTimeout(150);
-    const nextClicked = await advanceFormatChooser(page, manifest.includedFormat);
-    await page.waitForTimeout(150);
+    if (!inspection.resumedVersionForm) {
+      await inspection.choice.click();
+      await page.waitForTimeout(150);
+      await advanceFormatChooser(page, manifest.includedFormat);
+      await page.waitForTimeout(150);
+    }
     let versionEvidence = null;
     const versionHeading = page.getByRole('heading', { name: /Add Unreal Engine version/i });
     if (await versionHeading.count() === 1 && await versionHeading.isVisible().catch(() => false)) {
