@@ -193,7 +193,8 @@ function Get-FabPortalChromeProcessIdsForUserDataDir {
         $commandLine = [string]$process.CommandLine
         if ([string]::IsNullOrWhiteSpace($commandLine)) { continue }
         $normalizedCommandLine = $commandLine.Replace('/', '\')
-        if ($normalizedCommandLine -match ('--user-data-dir="?' + [regex]::Escape($normalized) + '"?(?:\s|$)')) {
+        if ($normalizedCommandLine -match ('--user-data-dir="?' + [regex]::Escape($normalized) + '"?(?:\s|$)') -and
+            $normalizedCommandLine -notmatch '(?:^|\s)--type=') {
             [int]$process.ProcessId
         }
     }
