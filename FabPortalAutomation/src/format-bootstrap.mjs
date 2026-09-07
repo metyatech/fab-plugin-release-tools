@@ -4,6 +4,13 @@ const SUPPORTED_FORMATS = new Set(['Unreal Engine']);
 const FORMAT_CHOOSER_TIMEOUT_MS = 30000;
 const FORMAT_CHOOSER_POLL_MS = 100;
 const FORMAT_FIELD_OPTION_TIMEOUT_MS = 10000;
+const PORTAL_PLATFORM_LABELS = Object.freeze({ Win64: 'Windows' });
+
+function portalPlatformLabel(value) {
+  const label = PORTAL_PLATFORM_LABELS[value];
+  if (!label) throw new Error(`No observed Fab platform label is available for canonical platform ${value}.`);
+  return label;
+}
 
 function visibleCount(locator) {
   return (async () => {
@@ -151,8 +158,9 @@ async function fillUnrealVersionForm(page, manifest) {
   await fillTextControl(page, ['Version title *', 'Version title'], 'Version title', packageInfo.versionTitle);
   await fillTextControl(page, ['Project file link *', 'Project file link'], 'Project file link', packageInfo.projectFileLink);
   await chooseExactOption(page, ['Supported engine version *', 'Supported engine version'], 'Supported engine version', version, ['Search or select engine versions']);
-  await chooseExactOption(page, ['Supported target platforms *', 'Supported target platforms'], 'Supported target platforms', manifest.platforms[0], ['Search or select target platforms']);
-  return { engineVersion: version, versionTitle: packageInfo.versionTitle, projectFileLink: packageInfo.projectFileLink, platform: manifest.platforms[0] };
+  const portalPlatform = portalPlatformLabel(manifest.platforms[0]);
+  await chooseExactOption(page, ['Supported target platforms *', 'Supported target platforms'], 'Supported target platforms', portalPlatform, ['Search or select target platforms']);
+  return { engineVersion: version, versionTitle: packageInfo.versionTitle, projectFileLink: packageInfo.projectFileLink, platform: manifest.platforms[0], portalPlatform };
 }
 
 async function formatChooserActionEvidence(page) {
