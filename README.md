@@ -323,13 +323,35 @@ formats only staged PowerShell files and restages them before a commit.
 
 `FabPortalSubmission.json` is the sole production input to the guarded portal
 automation. Install its pinned Node dependency with `npm ci` from
-`FabPortalAutomation`, then connect to an already authenticated dedicated
-Chrome CDP endpoint:
+`FabPortalAutomation`.
+
+For a dedicated Fab browser session, launch the repository helper. It uses a
+persistent non-default Chrome user-data directory outside the repository and
+discovers the actual localhost CDP port from Chrome's `DevToolsActivePort`
+file; it never copies or reads the default Chrome profile, cookies, passwords,
+or browser storage:
+
+```powershell
+$session = pwsh .\Start-FabPortalChrome.ps1 `
+  -ListingUrl <Fab-listing-edit-URL> `
+  -Json | ConvertFrom-Json
+$session.CdpEndpoint
+```
+
+Keep the Chrome window open. If the dedicated profile is not authenticated,
+complete Fab login, MFA, or a Cloudflare/security challenge manually in that
+window. The helper does not handle credentials or challenges. The same healthy
+dedicated profile can be reused; an ambiguous or unhealthy existing session is
+reported without killing a process or deleting a profile. Do not point the
+helper at the normal Chrome `User Data` directory or a child of it.
+
+After login, make sure the target listing edit URL is open in exactly one tab,
+then connect the guarded automation to the returned endpoint:
 
 ```powershell
 pwsh .\Invoke-FabPortalSubmission.ps1 `
   -ManifestPath <FabPortalSubmission.json> `
-  -CdpEndpoint <http://127.0.0.1:port>
+  -CdpEndpoint $session.CdpEndpoint
 ```
 
 The default is read-only verification. Explicit `-SaveDraft` enables a guarded
