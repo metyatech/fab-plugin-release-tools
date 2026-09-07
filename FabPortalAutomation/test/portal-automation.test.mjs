@@ -374,6 +374,7 @@ function tagsContract(origin, overrides = {}) {
   return {
     origin,
     listingId,
+    categoryId: prerequisiteCategoryId,
     expectedTagIds: approvedTagIds,
     payloadKeys: [...LISTING_PREREQUISITE_PAYLOAD_KEYS],
     unchanged: {
@@ -475,6 +476,35 @@ test('prefetched listing prerequisite resolves an exact category identity', () =
   assert.equal(result.status, 'known');
   assert.equal(result.categoryId, prerequisiteCategoryId);
   assert.equal(result.source, 'prefetched-listing-data');
+});
+
+test('prefetched license objects normalize to the observed listing PATCH shape', () => {
+  const data = {
+    [`/i/portal/listings/${listingId}`]: {
+      uid: listingId,
+      title: 'Fixture Product',
+      listingType: 'tool-and-plugin',
+      description: '',
+      hasPromotionalContent: false,
+      intellectualPropertyConfirmed: false,
+      isAiForbidden: false,
+      isAiGenerated: true,
+      licenses: [
+        { uid: '33333333-3333-4333-8333-333333333331', priceTier: { priceTierId: 'personal_USD_3999' } },
+        { uid: '33333333-3333-4333-8333-333333333332', priceTier: { priceTierId: 'professional_USD_7999' } },
+      ],
+      sellerProvidedMaturityRating: 'U18',
+      tags: [{ name: 'Plugin', slug: 'plugin', uid: '33333333-3333-4333-8333-333333333333' }],
+      useCommentThread: false,
+    },
+    '/i/taxonomy/categories/tree': { results: { 'tool-and-plugin': [{ uid: prerequisiteCategoryId, name: 'Engine Tools' }] } },
+  };
+  const result = inspectPrefetchedListingPrerequisite(data, { listingId, productType: 'Tools & Plugins', category: 'Engine Tools', title: 'Fixture Product' });
+  assert.deepEqual(result.unchanged.licenses, [
+    { licenseId: '33333333-3333-4333-8333-333333333331', priceTierId: 'personal_USD_3999' },
+    { licenseId: '33333333-3333-4333-8333-333333333332', priceTierId: 'professional_USD_7999' },
+  ]);
+  assert.deepEqual(result.unchanged.tags, ['33333333-3333-4333-8333-333333333333']);
 });
 
 test('prefetched listing prerequisite fails closed for missing, malformed, or wrong-listing evidence', () => {

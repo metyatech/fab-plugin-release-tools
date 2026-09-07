@@ -23,6 +23,17 @@ async function exactVisibleOption(page, label) {
   return { ok: true, locator: matches[0] };
 }
 
+async function waitForExactVisibleOption(page, label, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  let last = { ok: false, reason: `Fab tag ${label} exact option did not become visible.` };
+  while (Date.now() < deadline) {
+    last = await exactVisibleOption(page, label);
+    if (last.ok || /exact option count was [2-9]/.test(last.reason ?? '')) return last;
+    await page.waitForTimeout(100);
+  }
+  return last;
+}
+
 async function autocomplete(page, query) {
   return page.evaluate(async (value) => {
     const response = await fetch(`/i/tags/autocomplete?q=${encodeURIComponent(value)}`, { credentials: 'same-origin' });
@@ -49,8 +60,7 @@ export async function resolveFabTagIdentities(page, desiredTags) {
     const exactApi = response.results.filter((item) => item?.name === label && TAG_UID_PATTERN.test(String(item?.uid ?? '')));
     if (exactApi.length !== 1) return { ok: false, reason: `Fab tag autocomplete exact identity count for ${label} was ${exactApi.length}.` };
     await input.fill(label);
-    await page.waitForTimeout(250);
-    const option = await exactVisibleOption(page, label);
+    const option = await waitForExactVisibleOption(page, label);
     await input.fill('');
     if (!option.ok) return option;
     identities.push({ label, uid: String(exactApi[0].uid), slug: exactApi[0].slug ?? null });
@@ -81,8 +91,7 @@ export async function persistListingTags(page, { guard, contract, currentTagIds 
       const requestPromise = page.waitForRequest((request) => request.method().toUpperCase() === 'PATCH' && request.url() === endpoint, { timeout: 5000 }).catch(() => null);
       const responsePromise = page.waitForResponse((response) => response.request().method().toUpperCase() === 'PATCH' && response.url() === endpoint, { timeout: 5000 }).catch(() => null);
       await input.fill(identity.label);
-      await page.waitForTimeout(250);
-      const option = await exactVisibleOption(page, identity.label);
+      const option = await waitForExactVisibleOption(page, identity.label);
       if (!option.ok) throw new Error(option.reason);
       await option.locator.click();
       const request = await requestPromise;

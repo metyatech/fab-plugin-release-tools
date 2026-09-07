@@ -914,6 +914,7 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint = null, cd
       if (prerequisite.status !== 'known' || !Array.isArray(prerequisite.unchanged.tags)) throw new Error('The exact prefetched listing payload required for a Tags write was not available.');
       listingTagsContract.origin = origin;
       listingTagsContract.listingId = manifestInfo.manifest.listingId;
+      listingTagsContract.categoryId = prerequisite.categoryId;
       listingTagsContract.payloadKeys = prerequisite.payloadKeys;
       listingTagsContract.unchanged = prerequisite.unchanged;
       const tagRun = await withManualChallengeHandoff({

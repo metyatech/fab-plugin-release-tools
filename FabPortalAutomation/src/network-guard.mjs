@@ -1,4 +1,5 @@
 const SECRET_QUERY_KEYS = /^(?:token|access_token|auth|authorization|signature|sig|key|api[_-]?key)$/i;
+const TAG_UID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function sanitizeUrl(url) {
   const parsed = new URL(url);
@@ -135,12 +136,13 @@ export function validateListingLicensePricingPayload({ method, url, body }, expe
 export function validateListingTagsPayload({ method, url, body }, expected) {
   const base = validateExactListingPayload({ method, url, body }, expected, 'Listing tags');
   if (!base.ok) return base;
+  if (!TAG_UID_PATTERN.test(String(expected.categoryId ?? '')) || body.category !== expected.categoryId) return { ok: false, reason: 'Listing tags category identity did not match the exact unchanged category.' };
   if (!Array.isArray(expected.expectedTagIds) || expected.expectedTagIds.length === 0) return { ok: false, reason: 'Listing tags did not declare an expected non-empty tag identity set.' };
   if (!Array.isArray(body.tags) || body.tags.length !== expected.expectedTagIds.length) return { ok: false, reason: 'Listing tags payload length did not match the expected full tag set.' };
   if (new Set(body.tags).size !== body.tags.length) return { ok: false, reason: 'Listing tags payload contained duplicate identities.' };
   if (!sameJson([...body.tags].sort(), [...expected.expectedTagIds].sort())) return { ok: false, reason: 'Listing tags payload identities did not match the expected full tag set.' };
   for (const key of base.expectedKeys) {
-    if (key !== 'tags' && !sameJson(body[key], expected.unchanged[key])) return { ok: false, reason: `Listing tags sibling field changed unexpectedly: ${key}.` };
+    if (key !== 'category' && key !== 'tags' && !sameJson(body[key], expected.unchanged[key])) return { ok: false, reason: `Listing tags sibling field changed unexpectedly: ${key}.` };
   }
   return { ok: true };
 }

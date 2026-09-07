@@ -32,6 +32,41 @@ function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+function normalizeLicenseEntries(licenses) {
+  if (!Array.isArray(licenses)) return null;
+  const normalized = [];
+  for (const license of licenses) {
+    if (!isPlainObject(license)) return null;
+    if (typeof license.licenseId === 'string' && typeof license.priceTierId === 'string') {
+      normalized.push({ licenseId: license.licenseId, priceTierId: license.priceTierId });
+      continue;
+    }
+    if (typeof license.uid === 'string' && isPlainObject(license.priceTier) && typeof license.priceTier.priceTierId === 'string') {
+      normalized.push({ licenseId: license.uid, priceTierId: license.priceTier.priceTierId });
+      continue;
+    }
+    return null;
+  }
+  return normalized;
+}
+
+function normalizeTagEntries(tags) {
+  if (!Array.isArray(tags)) return null;
+  const normalized = [];
+  for (const tag of tags) {
+    if (typeof tag === 'string') {
+      normalized.push(tag);
+      continue;
+    }
+    if (isPlainObject(tag) && typeof tag.uid === 'string') {
+      normalized.push(tag.uid);
+      continue;
+    }
+    return null;
+  }
+  return normalized;
+}
+
 function listingUpdateSnapshot(listing) {
   return {
     description: listing.description,
@@ -39,10 +74,10 @@ function listingUpdateSnapshot(listing) {
     intellectual_property_confirmed: listing.intellectualPropertyConfirmed,
     is_ai_forbidden: listing.isAiForbidden,
     is_ai_generated: listing.isAiGenerated,
-    licenses: listing.licenses,
+    licenses: normalizeLicenseEntries(listing.licenses),
     listing_type: listing.listingType,
     seller_provided_maturity_rating: listing.sellerProvidedMaturityRating,
-    tags: listing.tags,
+    tags: normalizeTagEntries(listing.tags),
     title: listing.title,
     use_comment_thread: listing.useCommentThread,
   };
@@ -55,6 +90,10 @@ function validSnapshot(snapshot) {
     && typeof snapshot.is_ai_forbidden === 'boolean'
     && typeof snapshot.is_ai_generated === 'boolean'
     && Array.isArray(snapshot.licenses)
+    && snapshot.licenses.every((license) => isPlainObject(license)
+      && Object.keys(license).sort().join(',') === 'licenseId,priceTierId'
+      && typeof license.licenseId === 'string'
+      && typeof license.priceTierId === 'string')
     && typeof snapshot.listing_type === 'string'
     && typeof snapshot.seller_provided_maturity_rating === 'string'
     && Array.isArray(snapshot.tags)
