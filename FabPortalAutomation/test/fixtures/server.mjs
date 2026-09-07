@@ -22,9 +22,16 @@ function pageMarkup(state, listingId) {
   const prefetchedFormats = state.prefetchedAssetFormats === 'missing'
     ? undefined
     : state.prefetchedAssetFormats ?? productFormats.map((format) => ({ assetFormatType: { code: format.code ?? format.name.toLowerCase().replaceAll(' ', '-'), name: format.name } }));
-  const prefetchedListing = { uid: listingId, ...(prefetchedFormats === undefined ? {} : { assetFormats: prefetchedFormats }) };
+  const prefetchedListing = {
+    uid: listingId,
+    ...(state.prefetchedListingFields ?? {}),
+    ...(prefetchedFormats === undefined ? {} : { assetFormats: prefetchedFormats }),
+  };
   const prefetchedKey = state.prefetchedListingId ?? listingId;
-  const prefetchedData = JSON.stringify({ [`/i/portal/listings/${prefetchedKey}`]: prefetchedListing }).replaceAll('<', '\\u003c');
+  const prefetchedData = JSON.stringify({
+    [`/i/portal/listings/${prefetchedKey}`]: prefetchedListing,
+    ...(state.prefetchedCategoryEntries ? { '/i/taxonomy/categories/tree': { results: { 'tool-and-plugin': state.prefetchedCategoryEntries } } } : {}),
+  }).replaceAll('<', '\\u003c');
   const addFormatButtons = Array.from({ length: state.addFormatButtonCount ?? 1 }, () => '<button type="button" aria-label="Add new format">Add new format</button>').join('');
   const delayedChoiceStyle = state.formatChoiceDelayMs ? ' style="display:none"' : '';
   const formatChoices = Array.from({ length: state.formatChoiceCount ?? 1 }, () => `<button type="button" role="option" aria-label="Unreal Engine"${delayedChoiceStyle}>Unreal Engine</button>`).join('');
@@ -39,7 +46,7 @@ function pageMarkup(state, listingId) {
     <label>Description *<div role="textbox" aria-label="Description *" contenteditable="true">${html(state.longDescription)}</div></label>
     <label>Product type *<select aria-label="Product type *">${(state.productTypeOptions ?? [state.productType]).map((option) => `<option${option === state.productType ? ' selected' : ''}>${html(option)}</option>`).join('')}</select></label>
     <label>Category *<input role="combobox" aria-label="Category selection" value="${html(state.category)}"></label>
-    <label>Tags *<input aria-label="Tags *" value="${html(state.tags[0] ?? '')}" readonly></label>
+    <label>Tags *<input aria-label="Tags *" value="${html(state.tags[0] ?? '')}"${state.tagsEditable ? '' : ' readonly'}>${state.tagsCount ? `<input role="combobox" aria-label="Search a tag" placeholder="Search a tag"><span id="tagsCount">${html(state.tagsCount)}</span>` : ''}</label>
     ${formatInventory}
     ${state.mainProjectVersionsVisible ? '<h2>Project Versions*</h2><a href="/portal/listings">Back to listings</a>' : ''}
     ${radio('Standard License (Free or Paid)', true)}

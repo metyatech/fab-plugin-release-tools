@@ -468,6 +468,15 @@ sibling fields. Verify, generic listing updates, price changes outside this
 contract, and unknown payloads remain blocked; this path does not authorize
 format creation, Submit, Publish, Delete, or Cancel.
 
+Listing comparison preserves a visible empty rich-text editor as an observed
+empty value, so a non-empty manifest description is reported as `MISMATCH`
+with its approved contenteditable write target rather than being mistaken for
+an unreadable control. For Tags, the page's exact prefetched `tags` array is
+usable only when the target UUID and listing snapshot validate and the visible
+Fab tag-count control agrees with that array. Missing, malformed, or
+contradictory tag evidence remains `NOT_VISIBLE` and fails closed; the empty
+search box is never treated as the persisted tag set.
+
 Staging manifests with `portalReady: false` and unresolved package
 `projectFileLink: null` values are valid for read-only verification. They are
 never written to Fab; Save Draft and Submit for review require a manifest with

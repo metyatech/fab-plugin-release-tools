@@ -1,5 +1,6 @@
 import { fieldCandidates, mediaCandidates, resolveCandidate } from './locators.mjs';
 import { isFormatView } from './view-detection.mjs';
+import { readPrefetchedListingPrerequisite } from './listing-prerequisite.mjs';
 
 export const COMPARISON_STATES = ['MATCH', 'MISMATCH', 'NOT_VISIBLE', 'NOT_DISCOVERED', 'NOT_APPLICABLE'];
 const FORMAT_OWNED_FIELDS = new Set(['engineVersions', 'platforms', 'technicalInformationFile', 'media']);
@@ -91,7 +92,7 @@ async function locateField(page, field, manifest) {
 }
 
 function semanticState(current, desired, { rich = false } = {}) {
-  if (current === null || current === undefined || current === '') return 'NOT_VISIBLE';
+  if (current === null || current === undefined) return 'NOT_VISIBLE';
   const left = rich ? normalizeRichText(current) : normalizeText(current);
   const right = rich ? normalizeRichText(desired) : normalizeText(desired);
   return left === right ? 'MATCH' : 'MISMATCH';
@@ -100,12 +101,42 @@ function semanticState(current, desired, { rich = false } = {}) {
 async function compareTextField(page, manifest, field, labelName = field, options = {}) {
   const { resolved, value } = await locateField(page, field, manifest);
   const desired = options.desiredOverride ?? manifest[field];
-  const current = value.value || value.placeholder;
+  const current = value.visible ? (value.value !== null && value.value !== undefined ? value.value : value.placeholder) : null;
   const state = semanticState(current, desired, options);
   const target = value.visible && value.editable && !value.disabled && resolved.metadata?.unique
     ? writeTargetFor(field, options.view ?? 'listing', { strategy: resolved.candidate.strategy, expression: resolved.candidate.expression, field, locator: resolved.candidate.locator })
     : null;
   return fieldResult({ manifestJsonPath: field, portalLabel: labelName, desired, current, state, resolved, editableControlAvailable: value.editable && !value.disabled, notes: value.count === 1 ? '' : 'No unique readable portal control was found.', writeTarget: target });
+}
+
+async function applyPrefetchedTagEvidence(page, manifest, tags, currentTags) {
+  if (tags.classification !== 'NOT_VISIBLE' || !Array.isArray(currentTags)) return null;
+  const input = page.getByRole('combobox', { name: 'Search a tag', exact: true });
+  const count = page.locator('#tagsCount');
+  if (await input.count() !== 1 || !await input.isVisible().catch(() => false)) return null;
+  if (await count.count() !== 1 || !await count.isVisible().catch(() => false)) return null;
+  const countText = normalizeText(await count.textContent().catch(() => ''));
+  const expectedCount = `${currentTags.length} / 25`;
+  if (countText !== expectedCount) return null;
+  const current = currentTags;
+  const same = JSON.stringify(current) === JSON.stringify(manifest.tags);
+  return {
+    ...tags,
+    currentVisibleValue: current,
+    currentNormalizedValue: current,
+    classification: same ? 'MATCH' : 'MISMATCH',
+    notes: 'Strict prefetched listing tags matched the visible Fab tag-count evidence.',
+  };
+}
+
+async function readListingPrefetchedState(page, manifest) {
+  const evidence = await readPrefetchedListingPrerequisite(page, {
+    listingId: manifest.listingId,
+    productType: manifest.productType,
+    category: manifest.category,
+    title: manifest.title,
+  });
+  return evidence.status === 'known' ? evidence.unchanged : null;
 }
 
 async function compareCategory(page, manifest, view = 'listing') {
@@ -259,12 +290,23 @@ export async function compareManifest(page, manifestInfo, { view = 'listing' } =
   fields.push(await compareSubcategory(page, manifest));
   const tags = await compareTextField(page, manifest, 'tags', 'Tags *', { view });
   const fixturePage = (() => { try { return ['localhost', '127.0.0.1'].includes(new URL(page.url()).hostname); } catch { return false; } })();
-  if (!fixturePage || manifest.tags.length !== 1) {
+  const prefetched = view === 'listing' ? await readListingPrefetchedState(page, manifest) : null;
+  const prefetchedTags = prefetched?.tags;
+  let resolvedTags = tags;
+  if (Array.isArray(prefetchedTags)) {
+    tags.classification = 'NOT_VISIBLE';
+    resolvedTags = await applyPrefetchedTagEvidence(page, manifest, tags, prefetchedTags);
+    if (!resolvedTags) {
+      tags.writeTarget = null;
+      tags.notes = 'Prefetched tag state contradicted the visible Fab tag-count evidence.';
+      resolvedTags = tags;
+    }
+  } else if (!fixturePage || manifest.tags.length !== 1) {
     tags.classification = 'NOT_VISIBLE';
     tags.notes = 'Portal exposes only a partial tag summary; complete tag ownership is not proven.';
   }
-  tags.desiredValue = manifest.tags;
-  fields.push(tags);
+  resolvedTags.desiredValue = manifest.tags;
+  fields.push(resolvedTags);
   fields.push(await compareTextField(page, manifest, 'includedFormat', 'Unreal Engine', { view }));
   const engineLocator = page.getByText(/^UE_[0-9]+(?:\.[0-9]+)+$/, { exact: false });
   const engineCount = await engineLocator.count();

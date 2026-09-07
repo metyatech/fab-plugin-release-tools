@@ -1118,6 +1118,84 @@ test('one changed field changes only that field', async () => {
   assert.equal(fixture.mutations[0].body.shortDescription, 'New Fixture Short Description');
 });
 
+test('visible empty rich description is a mismatch, not unreadable', async () => {
+  const manifest = makeManifest({ longDescription: 'Desired rich description', tags: ['Plugin'] });
+  const fixture = await startFixture(fixtureState(manifest, {
+    longDescription: '',
+    tags: [],
+    tagsEditable: true,
+    tagsCount: '0 / 25',
+    prefetchedListingFields: {
+      title: manifest.title,
+      listingType: 'tool-and-plugin',
+      description: '',
+      hasPromotionalContent: false,
+      intellectualPropertyConfirmed: false,
+      isAiForbidden: false,
+      isAiGenerated: true,
+      licenses: [],
+      sellerProvidedMaturityRating: 'U18',
+      tags: [],
+      useCommentThread: false,
+    },
+    prefetchedCategoryEntries: [{ uid: '22222222-2222-4222-8222-222222222222', name: manifest.category }],
+  }));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const info = await makeManifestInfo(manifest);
+  try {
+    await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+    const comparison = await compareManifest(page, info, { view: 'listing' });
+    const description = comparison.fields.find((field) => field.manifestJsonPath === 'longDescription');
+    const tags = comparison.fields.find((field) => field.manifestJsonPath === 'tags');
+    assert.equal(description.classification, 'MISMATCH');
+    assert.equal(description.currentNormalizedValue, '');
+    assert.equal(description.writeTarget.strategy, 'getByLabel');
+    assert.equal(tags.classification, 'MISMATCH');
+    assert.deepEqual(tags.currentNormalizedValue, []);
+    assert.equal(tags.writeTarget.strategy, 'getByLabel');
+  } finally {
+    await context.close();
+    await fixture.close();
+  }
+});
+
+test('prefetched tag evidence fails closed when the visible count disagrees', async () => {
+  const manifest = makeManifest({ tags: ['Plugin'] });
+  const fixture = await startFixture(fixtureState(manifest, {
+    tags: [],
+    tagsEditable: true,
+    tagsCount: '1 / 25',
+    prefetchedListingFields: {
+      title: manifest.title,
+      listingType: 'tool-and-plugin',
+      description: manifest.longDescription,
+      hasPromotionalContent: false,
+      intellectualPropertyConfirmed: false,
+      isAiForbidden: false,
+      isAiGenerated: true,
+      licenses: [],
+      sellerProvidedMaturityRating: 'U18',
+      tags: [],
+      useCommentThread: false,
+    },
+    prefetchedCategoryEntries: [{ uid: '22222222-2222-4222-8222-222222222222', name: manifest.category }],
+  }));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const info = await makeManifestInfo(manifest);
+  try {
+    await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+    const comparison = await compareManifest(page, info, { view: 'listing' });
+    const tags = comparison.fields.find((field) => field.manifestJsonPath === 'tags');
+    assert.equal(tags.classification, 'NOT_VISIBLE');
+    assert.equal(tags.writeTarget, null);
+  } finally {
+    await context.close();
+    await fixture.close();
+  }
+});
+
 test('format view owns format controls and hides listing controls', async () => {
   const manifest = makeManifest();
   const fixture = await startFixture(fixtureState(manifest));
