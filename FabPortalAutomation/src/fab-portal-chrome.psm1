@@ -318,11 +318,13 @@ function Start-FabPortalChromeSession {
     $resolvedUserDataDir = Resolve-FabPortalChromeUserDataDir -UserDataDir $UserDataDir `
         -WorkspaceRoot $workspaceRoot
     $safeListingUrl = Assert-FabPortalListingUrl -ListingUrl $ListingUrl
-    if ($Mode -eq 'Automation') {
-        $existing = Get-FabPortalChromeSession -UserDataDir $resolvedUserDataDir
-        if ($null -ne $existing) { return $existing }
-    }
     $matchingProcesses = @(Get-FabPortalChromeProcessIdsForUserDataDir -UserDataDir $resolvedUserDataDir)
+    if ($Mode -eq 'Automation') {
+        if ($matchingProcesses.Count -gt 0) {
+            $existing = Get-FabPortalChromeSession -UserDataDir $resolvedUserDataDir
+            if ($null -ne $existing) { return $existing }
+        }
+    }
     if ($matchingProcesses.Count -gt 0) {
         throw 'A Chrome process already uses the dedicated profile; close it manually before starting another mode.'
     }
