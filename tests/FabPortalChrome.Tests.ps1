@@ -17,13 +17,14 @@ Describe 'Fab dedicated Chrome launcher' {
 
     It 'accepts a non-default profile outside the repository' {
         $testProfile = Resolve-FabPortalChromeUserDataDir -UserDataDir (Join-Path $TestDrive 'FabProfile') `
-            -WorkspaceRoot $repositoryRoot
+            -WorkspaceRoot (Join-Path $TestDrive 'Workspace')
         $testProfile | Should -BeExactly ([System.IO.Path]::GetFullPath((Join-Path $TestDrive 'FabProfile')))
     }
 
     It 'rejects a profile inside the repository' {
-        { Resolve-FabPortalChromeUserDataDir -UserDataDir (Join-Path $repositoryRoot 'ChromeProfile') `
-                -WorkspaceRoot $repositoryRoot } | Should -Throw
+        $workspace = Join-Path $TestDrive 'Workspace'
+        { Resolve-FabPortalChromeUserDataDir -UserDataDir (Join-Path $workspace 'ChromeProfile') `
+                -WorkspaceRoot $workspace } | Should -Throw
     }
 
     It 'fails when an explicit Chrome executable is missing' {
