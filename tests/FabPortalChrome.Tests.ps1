@@ -89,6 +89,34 @@ Describe 'Fab dedicated Chrome launcher' {
         ($chromeArgs -join ' ') | Should -Not -Match 'disable-web-security|ignore-certificate-errors|disable-site-isolation-trials'
     }
 
+    It 'builds manual-login arguments for the same profile without CDP flags' {
+        $manualArgs = Get-FabPortalChromeArgumentList -UserDataDir (Join-Path $TestDrive 'FabProfile') `
+            -ListingUrl 'https://www.fab.com/portal/listings/96fc1bdc-71ea-4b80-8c68-e08ae430a2a8/edit' `
+            -Mode ManualLogin
+        ($manualArgs -join ' ') | Should -Match '--user-data-dir='
+        ($manualArgs -join ' ') | Should -Not -Match 'remote-debugging-port|remote-debugging-address|remote-debugging-pipe'
+    }
+
+    It 'keeps automation arguments CDP-enabled for the same profile' {
+        $automationArgs = Get-FabPortalChromeArgumentList -UserDataDir (Join-Path $TestDrive 'FabProfile') `
+            -ListingUrl 'https://www.fab.com/portal/listings/96fc1bdc-71ea-4b80-8c68-e08ae430a2a8/edit' `
+            -Mode Automation
+        $automationArgs | Should -Contain '--remote-debugging-address=127.0.0.1'
+        $automationArgs | Should -Contain '--remote-debugging-port=0'
+    }
+
+    It 'returns manual-login state without a CDP endpoint' {
+        $manualState = [pscustomobject]@{
+            Mode                   = 'manual-login'
+            UserDataDir            = Join-Path $TestDrive 'FabProfile'
+            ChromeProcessId        = 9005
+            RemoteDebuggingEnabled = $false
+        }
+        $manualState.Mode | Should -BeExactly 'manual-login'
+        $manualState.RemoteDebuggingEnabled | Should -BeFalse
+        $manualState.PSObject.Properties.Name | Should -Not -Contain 'CdpEndpoint'
+    }
+
     It 'rejects listing URLs that could carry credentials or secrets' {
         { Assert-FabPortalListingUrl -ListingUrl 'https://www.fab.com/portal/listings/abc/edit?token=secret' } |
             Should -Throw

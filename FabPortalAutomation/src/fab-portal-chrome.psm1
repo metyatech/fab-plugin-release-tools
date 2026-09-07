@@ -113,18 +113,24 @@ function Get-FabPortalChromeArgumentList {
         [string]$UserDataDir,
 
         [Parameter(Mandatory)]
-        [string]$ListingUrl
+        [string]$ListingUrl,
+
+        [ValidateSet('Automation', 'ManualLogin')]
+        [string]$Mode = 'Automation'
     )
 
     $safeUrl = Assert-FabPortalListingUrl -ListingUrl $ListingUrl
-    return @(
-        ('--user-data-dir="{0}"' -f $UserDataDir),
-        '--remote-debugging-address=127.0.0.1',
-        '--remote-debugging-port=0',
-        '--no-first-run',
-        '--no-default-browser-check',
-        '--new-window',
-        $safeUrl)
+    $arguments = [System.Collections.Generic.List[string]]::new()
+    [void]$arguments.Add(('--user-data-dir="{0}"' -f $UserDataDir))
+    if ($Mode -eq 'Automation') {
+        [void]$arguments.Add('--remote-debugging-address=127.0.0.1')
+        [void]$arguments.Add('--remote-debugging-port=0')
+    }
+    [void]$arguments.Add('--no-first-run')
+    [void]$arguments.Add('--no-default-browser-check')
+    [void]$arguments.Add('--new-window')
+    [void]$arguments.Add($safeUrl)
+    return $arguments.ToArray()
 }
 
 function Read-FabPortalDevToolsActivePort {
@@ -302,6 +308,9 @@ function Start-FabPortalChromeSession {
 
         [string]$ChromePath,
 
+        [ValidateSet('Automation', 'ManualLogin')]
+        [string]$Mode = 'Automation',
+
         [int]$ReadyTimeoutSeconds = 30
     )
 
@@ -309,19 +318,32 @@ function Start-FabPortalChromeSession {
     $resolvedUserDataDir = Resolve-FabPortalChromeUserDataDir -UserDataDir $UserDataDir `
         -WorkspaceRoot $workspaceRoot
     $safeListingUrl = Assert-FabPortalListingUrl -ListingUrl $ListingUrl
-    $existing = Get-FabPortalChromeSession -UserDataDir $resolvedUserDataDir
-    if ($null -ne $existing) { return $existing }
+    if ($Mode -eq 'Automation') {
+        $existing = Get-FabPortalChromeSession -UserDataDir $resolvedUserDataDir
+        if ($null -ne $existing) { return $existing }
+    }
     $matchingProcesses = @(Get-FabPortalChromeProcessIdsForUserDataDir -UserDataDir $resolvedUserDataDir)
     if ($matchingProcesses.Count -gt 0) {
-        throw 'A Chrome process already uses the dedicated profile, but its session is not safely reusable.'
+        throw 'A Chrome process already uses the dedicated profile; close it manually before starting another mode.'
     }
     if (-not $PSCmdlet.ShouldProcess($resolvedUserDataDir, 'Launch dedicated Chrome')) {
         return $null
     }
     [System.IO.Directory]::CreateDirectory($resolvedUserDataDir) | Out-Null
     $chrome = Get-FabPortalChromeExecutable -ChromePath $ChromePath
-    $arguments = Get-FabPortalChromeArgumentList -UserDataDir $resolvedUserDataDir -ListingUrl $safeListingUrl
+    $arguments = Get-FabPortalChromeArgumentList -UserDataDir $resolvedUserDataDir `
+        -ListingUrl $safeListingUrl -Mode $Mode
     $process = Start-Process -FilePath $chrome -ArgumentList $arguments -PassThru
+    if ($Mode -eq 'ManualLogin') {
+        return [pscustomobject]@{
+            Mode                    = 'manual-login'
+            UserDataDir             = $resolvedUserDataDir
+            ChromeProcessId         = $process.Id
+            RemoteDebuggingEnabled  = $false
+            Launched                = $true
+            Reused                  = $false
+        }
+    }
     return Wait-FabPortalChromeSession -UserDataDir $resolvedUserDataDir `
         -ProcessId $process.Id -TimeoutSeconds $ReadyTimeoutSeconds
 }

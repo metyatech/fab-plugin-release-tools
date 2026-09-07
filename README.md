@@ -338,6 +338,19 @@ $session = pwsh .\Start-FabPortalChrome.ps1 `
 $session.CdpEndpoint
 ```
 
+If the CDP-enabled window cannot pass an authentication security check, start
+the same profile without remote debugging and complete the login manually:
+
+```powershell
+pwsh .\Start-FabPortalChrome.ps1 `
+  -Mode ManualLogin `
+  -ListingUrl <Fab-listing-edit-URL>
+```
+
+This mode emits no CDP endpoint and never automates the login. Close the
+dedicated Chrome window normally after authentication, then start the default
+Automation mode again to discover a fresh endpoint from the same profile.
+
 Keep the Chrome window open. If the dedicated profile is not authenticated,
 complete Fab login, MFA, or a Cloudflare/security challenge manually in that
 window. The helper does not handle credentials or challenges. The same healthy
