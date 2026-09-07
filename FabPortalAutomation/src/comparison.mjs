@@ -126,10 +126,8 @@ async function compareTextField(page, manifest, field, labelName = field, option
 async function applyPrefetchedTagEvidence(page, manifest, tags, currentTags) {
   if (tags.classification !== 'NOT_VISIBLE' || !Array.isArray(currentTags)) return null;
   const inputCandidates = [
-    page.getByRole('combobox', { name: 'Search a tag', exact: true }),
-    page.getByRole('combobox', { name: 'Search', exact: true }),
     page.locator('input[role="combobox"][placeholder="Search a tag"]'),
-    page.locator('input[role="combobox"][placeholder="Search"]'),
+    page.getByRole('combobox', { name: 'Search a tag', exact: true }),
   ];
   let input = null;
   for (const candidate of inputCandidates) {

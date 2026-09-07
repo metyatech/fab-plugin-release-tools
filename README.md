@@ -476,8 +476,8 @@ usable only when the target UUID and listing snapshot validate and the visible
 Fab tag-count control agrees with that array. Missing, malformed, or
 contradictory tag evidence remains `NOT_VISIBLE` and fails closed; the empty
 search box is never treated as the persisted tag set. The current Fab portal's
-`Search` accessible name is accepted as the exact tag-search control when it
-is uniquely visible.
+tag control is identified by its exact `Search a tag` placeholder/accessible
+name; the separate global `Search` combobox is never used for Tags.
 Even when the persisted array and tag count agree, the comparison does not
 create a generic text mutation target: selected-tag option identities and a
 dedicated safe tag mutation contract must be proven before Tags can be staged.
