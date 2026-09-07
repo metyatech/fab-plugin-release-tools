@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { chromium } from 'playwright-core';
 import { buildMutationPlan, executeMutationPlan, preflightMutationPlan } from '../src/mutation-plan.mjs';
-import { installNetworkGuard, validateFormatCreatePayload, validateListingLicensePayload, validateListingLicensePricingPayload, validateListingPrerequisitePayload, validateListingTagsPayload } from '../src/network-guard.mjs';
+import { classifyRequestIntent, installNetworkGuard, validateFormatCreatePayload, validateListingLicensePayload, validateListingLicensePricingPayload, validateListingPrerequisitePayload, validateListingTagsPayload } from '../src/network-guard.mjs';
 import { inspectPrefetchedListingPrerequisite, LISTING_PREREQUISITE_PAYLOAD_KEYS } from '../src/listing-prerequisite.mjs';
 import { compareManifest, comparePlatformClassification, comparePriceClassification } from '../src/comparison.mjs';
 import { CRITICAL_OWNED_FIELDS, criticalBlockers, detectManualBlock, mergeListingAndFormatComparisons, runPortalAutomation, selectExistingTargetPage } from '../src/portal.mjs';
@@ -2320,6 +2320,10 @@ test('real Fab Unreal Engine format-create contract requires the exact empty JSO
   assert.equal(validateFormatCreatePayload({ method: 'POST', url, body: { name: 'Unreal Engine' } }, expected).ok, false);
   assert.equal(validateFormatCreatePayload({ method: 'POST', url: url.replace(listingId, '00000000-0000-0000-0000-000000000000'), body: {} }, expected).ok, false);
   assert.equal(validateFormatCreatePayload({ method: 'POST', url: url.replace('unreal-engine', 'unity'), body: {} }, expected).ok, false);
+});
+
+test('Fab challenge telemetry is not treated as a listing mutation', () => {
+  assert.equal(classifyRequestIntent(new URL('https://www.fab.com/cdn-cgi/challenge-platform/h/g/jsd/oneshot/example'), 'POST', null), 'security-challenge');
 });
 
 test('format-create mutation is blocked in verify mode', async () => {

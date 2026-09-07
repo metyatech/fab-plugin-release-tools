@@ -27,6 +27,7 @@ function graphqlOperation(request) {
 
 function classifyRequestIntent(url, method, graph) {
   const haystack = `${url.pathname} ${graph?.name ?? ''}`.toLowerCase();
+  if (method === 'POST' && url.hostname === 'www.fab.com' && url.pathname.startsWith('/cdn-cgi/challenge-platform/')) return 'security-challenge';
   // The fixture endpoint is intentionally local-only. Production Fab format
   // creation must be admitted only after observing its exact request identity.
   if (method === 'POST' && ['127.0.0.1', 'localhost'].includes(url.hostname) && url.pathname === '/api/create-format') return 'format-create';
@@ -44,6 +45,7 @@ function classifyRequestIntent(url, method, graph) {
 }
 
 function isMutation(method, graph, intent) {
+  if (intent === 'security-challenge') return false;
   return method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE'
     ? intent !== 'query'
     : graph?.type === 'mutation';
