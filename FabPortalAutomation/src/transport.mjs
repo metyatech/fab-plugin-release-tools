@@ -34,7 +34,7 @@ export function isRemoteDebuggingApprovalError(error) {
   return REMOTE_DEBUGGING_PERMISSION_ERROR.test(String(error?.message ?? error));
 }
 
-export async function connectBrowserTransport({ endpoint, kind, manualInteraction = null, maxApprovalCycles = 1, connectOverCDP = chromium.connectOverCDP }) {
+export async function connectBrowserTransport({ endpoint, kind, manualInteraction = null, maxApprovalCycles = 1, connectOverCDP = (...args) => chromium.connectOverCDP(...args) }) {
   const connect = () => connectOverCDP(endpoint, kind === 'websocket' ? { timeout: 5000 } : undefined);
   try {
     return await connect();
