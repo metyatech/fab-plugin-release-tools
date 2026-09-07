@@ -706,7 +706,16 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint = null, cd
     page = selectExistingTargetPage(context, manifestInfo.manifest, origin);
     targetPageSelectionReason = 'Selected the only existing page with the exact Fab hostname and listing pathname; query/hash ignored.';
   }
-  const guard = installNetworkGuard(context, { mode, listingTags: listingTagsContract });
+  const formatCreateContract = (() => {
+    try {
+      return new URL(origin).hostname === 'www.fab.com'
+        ? { origin, listingId: manifestInfo.manifest.listingId }
+        : null;
+    } catch {
+      return null;
+    }
+  })();
+  const guard = installNetworkGuard(context, { mode, listingTags: listingTagsContract, formatCreate: formatCreateContract });
   const result = {
     schemaVersion: 1,
     mode,

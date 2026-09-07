@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { chromium } from 'playwright-core';
 import { buildMutationPlan, executeMutationPlan, preflightMutationPlan } from '../src/mutation-plan.mjs';
-import { installNetworkGuard, validateListingLicensePayload, validateListingLicensePricingPayload, validateListingPrerequisitePayload, validateListingTagsPayload } from '../src/network-guard.mjs';
+import { installNetworkGuard, validateFormatCreatePayload, validateListingLicensePayload, validateListingLicensePricingPayload, validateListingPrerequisitePayload, validateListingTagsPayload } from '../src/network-guard.mjs';
 import { inspectPrefetchedListingPrerequisite, LISTING_PREREQUISITE_PAYLOAD_KEYS } from '../src/listing-prerequisite.mjs';
 import { compareManifest, comparePlatformClassification, comparePriceClassification } from '../src/comparison.mjs';
 import { CRITICAL_OWNED_FIELDS, criticalBlockers, detectManualBlock, mergeListingAndFormatComparisons, runPortalAutomation, selectExistingTargetPage } from '../src/portal.mjs';
@@ -2309,6 +2309,17 @@ test('ambiguous Unreal Engine choice fails closed before mutation', async () => 
   assert.equal(result.writeReady, false);
   assert.equal(fixture.mutations.length, 0);
   assert.match(result.formatBootstrapBlockers.join(' '), /choice visible match count is 2/i);
+});
+
+test('real Fab Unreal Engine format-create contract requires the exact empty JSON payload', () => {
+  const expected = { origin: 'https://www.fab.com', listingId };
+  const url = `https://www.fab.com/i/portal/listings/${listingId}/asset-formats/unreal-engine`;
+  assert.deepEqual(validateFormatCreatePayload({ method: 'POST', url, body: {} }, expected), { ok: true });
+  assert.equal(validateFormatCreatePayload({ method: 'PATCH', url, body: {} }, expected).ok, false);
+  assert.equal(validateFormatCreatePayload({ method: 'POST', url: `${url}?format=unreal-engine`, body: {} }, expected).ok, false);
+  assert.equal(validateFormatCreatePayload({ method: 'POST', url, body: { name: 'Unreal Engine' } }, expected).ok, false);
+  assert.equal(validateFormatCreatePayload({ method: 'POST', url: url.replace(listingId, '00000000-0000-0000-0000-000000000000'), body: {} }, expected).ok, false);
+  assert.equal(validateFormatCreatePayload({ method: 'POST', url: url.replace('unreal-engine', 'unity'), body: {} }, expected).ok, false);
 });
 
 test('format-create mutation is blocked in verify mode', async () => {

@@ -30,6 +30,7 @@ function classifyRequestIntent(url, method, graph) {
   // The fixture endpoint is intentionally local-only. Production Fab format
   // creation must be admitted only after observing its exact request identity.
   if (method === 'POST' && ['127.0.0.1', 'localhost'].includes(url.hostname) && url.pathname === '/api/create-format') return 'format-create';
+  if (method === 'POST' && url.hostname === 'www.fab.com' && /^\/i\/portal\/listings\/[^/]+\/asset-formats\/unreal-engine$/.test(url.pathname)) return 'format-create';
   if (/(?:cancel|abort)/.test(haystack)) return 'cancel';
   if (method === 'DELETE' || /(?:delete|destroy)/.test(haystack)) return 'delete';
   if (/(?:unlist|unpublish)/.test(haystack)) return 'unlist';
@@ -106,6 +107,18 @@ function exactObjectKeys(value, keys) {
     && sameJson(Object.keys(value).sort(), [...keys].sort());
 }
 
+export function validateFormatCreatePayload({ method, url, body }, expected) {
+  if (!expected || typeof expected !== 'object') return { ok: false, reason: 'No format-create contract was configured.' };
+  if (String(method).toUpperCase() !== 'POST') return { ok: false, reason: 'Format creation requires POST.' };
+  let parsedUrl;
+  try { parsedUrl = new URL(url); } catch { return { ok: false, reason: 'Format-create URL was invalid.' }; }
+  if (parsedUrl.origin !== expected.origin) return { ok: false, reason: 'Format-create origin did not match the expected Fab origin.' };
+  if (parsedUrl.pathname !== `/i/portal/listings/${expected.listingId}/asset-formats/unreal-engine`) return { ok: false, reason: 'Format-create pathname did not match the exact Unreal Engine target listing path.' };
+  if (parsedUrl.search || parsedUrl.hash) return { ok: false, reason: 'Format-create URL contained unexpected query or hash data.' };
+  if (!exactObjectKeys(body, [])) return { ok: false, reason: 'Format-create payload was not the observed empty JSON object shape.' };
+  return { ok: true };
+}
+
 function validateExactListingPayload({ method, url, body }, expected, label) {
   if (!expected || typeof expected !== 'object') return { ok: false, reason: 'No listing prerequisite contract was configured.' };
   if (String(method).toUpperCase() !== 'PATCH') return { ok: false, reason: `${label} persistence requires PATCH.` };
@@ -175,7 +188,7 @@ export function validateListingTagsPayload({ method, url, body }, expected) {
   return { ok: true };
 }
 
-export function installNetworkGuard(context, { mode = 'verify', listingPrerequisite = null, listingLicense = null, listingLicensePricing = null, listingTags = null } = {}) {
+export function installNetworkGuard(context, { mode = 'verify', listingPrerequisite = null, listingLicense = null, listingLicensePricing = null, listingTags = null, formatCreate = null } = {}) {
   const effectiveMode = mode === 'write' ? 'save' : mode;
   const state = { mode: effectiveMode, phase: 'stage', phaseHistory: ['stage'], requests: [], observed: 0, blocked: 0 };
   const handler = async (route) => {
@@ -185,7 +198,17 @@ export function installNetworkGuard(context, { mode = 'verify', listingPrerequis
     const graph = graphqlOperation(request);
     let intent = classifyRequestIntent(url, method, graph);
     let validationReason = null;
-    if (method === 'PATCH' && state.phase === 'listing-tags-save' && listingTags) {
+    if (method === 'POST' && state.phase === 'format-create' && formatCreate && intent === 'format-create') {
+      const postData = request.postData();
+      let body = null;
+      try { body = postData ? JSON.parse(postData) : null; } catch { /* validation below fails closed */ }
+      const validation = validateFormatCreatePayload({ method, url: request.url(), body }, formatCreate);
+      if (validation.ok) intent = 'format-create';
+      else {
+        validationReason = validation.reason;
+        intent = 'other-mutation';
+      }
+    } else if (method === 'PATCH' && state.phase === 'listing-tags-save' && listingTags) {
       const postData = request.postData();
       let body = null;
       try { body = postData ? JSON.parse(postData) : null; } catch { /* validation below fails closed */ }
