@@ -3,6 +3,7 @@ import { acquireResponsiveViewportLease } from './responsive-viewport.mjs';
 const SUPPORTED_FORMATS = new Set(['Unreal Engine']);
 const FORMAT_CHOOSER_TIMEOUT_MS = 30000;
 const FORMAT_CHOOSER_POLL_MS = 100;
+const FORMAT_FIELD_OPTION_TIMEOUT_MS = 10000;
 
 function visibleCount(locator) {
   return (async () => {
@@ -112,12 +113,32 @@ async function chooseExactOption(page, labels, field, value, placeholders = []) 
   if (metadata.role !== 'combobox' && metadata.tagName !== 'INPUT') throw new Error(`${field} control shape was not a supported combobox.`);
   await control.click();
   const option = page.getByRole('option', { name: value, exact: true });
-  const visible = [];
-  for (let index = 0; index < await option.count(); index += 1) {
-    if (await option.nth(index).isVisible().catch(() => false)) visible.push(option.nth(index));
+  const labeled = page.getByLabel(value, { exact: true });
+  const deadline = Date.now() + FORMAT_FIELD_OPTION_TIMEOUT_MS;
+  while (Date.now() <= deadline) {
+    const visible = [];
+    for (let index = 0; index < await option.count(); index += 1) {
+      if (await option.nth(index).isVisible().catch(() => false)) visible.push(option.nth(index));
+    }
+    if (visible.length > 1) throw new Error(`${field} did not expose exactly one enabled option for ${value}.`);
+    if (visible.length === 1) {
+      if (await visible[0].isDisabled().catch(() => true)) throw new Error(`${field} did not expose exactly one enabled option for ${value}.`);
+      await visible[0].click();
+      return;
+    }
+    const labeledVisible = [];
+    for (let index = 0; index < await labeled.count(); index += 1) {
+      if (await labeled.nth(index).isVisible().catch(() => false)) labeledVisible.push(labeled.nth(index));
+    }
+    if (labeledVisible.length > 1) throw new Error(`${field} did not expose exactly one enabled labeled control for ${value}.`);
+    if (labeledVisible.length === 1) {
+      if (await labeledVisible[0].isDisabled().catch(() => true)) throw new Error(`${field} did not expose exactly one enabled labeled control for ${value}.`);
+      await labeledVisible[0].click();
+      return;
+    }
+    await page.waitForTimeout(100);
   }
-  if (visible.length !== 1 || await visible[0].isDisabled().catch(() => true)) throw new Error(`${field} did not expose exactly one enabled option for ${value}.`);
-  await visible[0].click();
+  throw new Error(`${field} did not expose exactly one enabled option for ${value} within ${FORMAT_FIELD_OPTION_TIMEOUT_MS}ms.`);
 }
 
 async function fillUnrealVersionForm(page, manifest) {
