@@ -53,6 +53,7 @@ function phaseAllows(mode, phase, intent) {
   if (phase === 'listing-prerequisite-save') return mode === 'save' && intent === 'listing-prerequisite-save';
   if (phase === 'listing-license-save') return mode === 'save' && intent === 'listing-license-save';
   if (phase === 'listing-license-pricing-save') return mode === 'save' && intent === 'listing-license-pricing-save';
+  if (phase === 'listing-tags-save') return (mode === 'save' || mode === 'tags-only') && intent === 'listing-tags-save';
   if (phase === 'format-create') return (mode === 'save' || mode === 'submit') && intent === 'format-create';
   if (phase === 'media-upload') return (mode === 'save' || mode === 'submit') && intent === 'media-upload';
   if (phase === 'field-update') return (mode === 'save' || mode === 'submit') && intent === 'save';
@@ -131,7 +132,20 @@ export function validateListingLicensePricingPayload({ method, url, body }, expe
   return { ok: true };
 }
 
-export function installNetworkGuard(context, { mode = 'verify', listingPrerequisite = null, listingLicense = null, listingLicensePricing = null } = {}) {
+export function validateListingTagsPayload({ method, url, body }, expected) {
+  const base = validateExactListingPayload({ method, url, body }, expected, 'Listing tags');
+  if (!base.ok) return base;
+  if (!Array.isArray(expected.expectedTagIds) || expected.expectedTagIds.length === 0) return { ok: false, reason: 'Listing tags did not declare an expected non-empty tag identity set.' };
+  if (!Array.isArray(body.tags) || body.tags.length !== expected.expectedTagIds.length) return { ok: false, reason: 'Listing tags payload length did not match the expected full tag set.' };
+  if (new Set(body.tags).size !== body.tags.length) return { ok: false, reason: 'Listing tags payload contained duplicate identities.' };
+  if (!sameJson([...body.tags].sort(), [...expected.expectedTagIds].sort())) return { ok: false, reason: 'Listing tags payload identities did not match the expected full tag set.' };
+  for (const key of base.expectedKeys) {
+    if (key !== 'tags' && !sameJson(body[key], expected.unchanged[key])) return { ok: false, reason: `Listing tags sibling field changed unexpectedly: ${key}.` };
+  }
+  return { ok: true };
+}
+
+export function installNetworkGuard(context, { mode = 'verify', listingPrerequisite = null, listingLicense = null, listingLicensePricing = null, listingTags = null } = {}) {
   const effectiveMode = mode === 'write' ? 'save' : mode;
   const state = { mode: effectiveMode, phase: 'stage', phaseHistory: ['stage'], requests: [], observed: 0, blocked: 0 };
   const handler = async (route) => {
@@ -141,7 +155,14 @@ export function installNetworkGuard(context, { mode = 'verify', listingPrerequis
     const graph = graphqlOperation(request);
     let intent = classifyRequestIntent(url, method, graph);
     let validationReason = null;
-    if (method === 'PATCH' && (listingLicensePricing || listingLicense || listingPrerequisite)) {
+    if (method === 'PATCH' && state.phase === 'listing-tags-save' && listingTags) {
+      const postData = request.postData();
+      let body = null;
+      try { body = postData ? JSON.parse(postData) : null; } catch { /* validation below fails closed */ }
+      const validation = validateListingTagsPayload({ method, url: request.url(), body }, listingTags);
+      if (validation.ok) intent = 'listing-tags-save';
+      else validationReason = validation.reason;
+    } else if (method === 'PATCH' && (listingLicensePricing || listingLicense || listingPrerequisite)) {
       const postData = request.postData();
       let body = null;
       try { body = postData ? JSON.parse(postData) : null; } catch { /* validation below fails closed */ }

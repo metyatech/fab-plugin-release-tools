@@ -6,6 +6,8 @@ import { dangerousActionCandidates, listingEditUrl, resolveCandidate, saveCandid
 import { classifyFabView, isFormatView } from './view-detection.mjs';
 import { DEFERRED_FORMAT_FIELDS, executeFormatBootstrap, inspectFormatBootstrap } from './format-bootstrap.mjs';
 import { connectBrowserTransport, resolveBrowserTransport } from './transport.mjs';
+import { readPrefetchedListingPrerequisite } from './listing-prerequisite.mjs';
+import { persistListingTags } from './listing-tags.mjs';
 
 const REVIEW_LOCKED = new Set(['pending approval', 'pending publication', 'approved', 'live']);
 const KNOWN_STATUSES = ['Pending approval', 'Pending Publication', 'Changes needed', 'Draft', 'Approved', 'Live'];
@@ -684,13 +686,15 @@ async function executeSubmitFlow(page, guard, result) {
 
 export async function runPortalAutomation({ manifestInfo, cdpEndpoint = null, cdpWebSocketEndpoint = null, mode = 'verify', saveDraftAuthorized = false, outputDirectory = null, origin = 'https://www.fab.com', page: injectedPage = null, context: injectedContext = null, manualInteraction = null, maxManualChallengeCycles = DEFAULT_MANUAL_CHALLENGE_MAX_CYCLES }) {
   if (mode === 'save' && !saveDraftAuthorized) throw new Error('Save Draft requires explicit Save Draft authorization.');
+  if (mode === 'tags-only' && saveDraftAuthorized) throw new Error('Tags-only mode cannot authorize Save Draft.');
   if (mode === 'submit' && !saveDraftAuthorized) throw new Error('Submit for review requires explicit Save Draft authorization.');
   let browser = null;
   let context = injectedContext;
   let page = injectedPage;
-  const passiveAttach = mode === 'verify';
+  const passiveAttach = mode === 'verify' || mode === 'tags-only';
   const interaction = manualInteraction ?? createStdinManualInteraction();
   const browserTransport = resolveBrowserTransport({ cdpEndpoint, cdpWebSocketEndpoint });
+  const listingTagsContract = {};
   let targetPageSelectionReason = injectedPage ? 'Caller-supplied page was used for controlled fixture verification.' : null;
   if (!page) {
     if (!context && !browserTransport) throw new Error('A CDP transport endpoint is required for the production browser connection.');
@@ -702,7 +706,7 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint = null, cd
     page = selectExistingTargetPage(context, manifestInfo.manifest, origin);
     targetPageSelectionReason = 'Selected the only existing page with the exact Fab hostname and listing pathname; query/hash ignored.';
   }
-  const guard = installNetworkGuard(context, { mode });
+  const guard = installNetworkGuard(context, { mode, listingTags: listingTagsContract });
   const result = {
     schemaVersion: 1,
     mode,
@@ -735,6 +739,7 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint = null, cd
     formatInventorySource: null,
     formatInventoryStatus: 'unknown',
     formatInventoryReason: null,
+    tagMutation: null,
     portalViewport: {
       originalWidth: null,
       originalHeight: null,
@@ -810,7 +815,7 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint = null, cd
         return inspectFormatBootstrap(candidatePage, manifestInfo.manifest, {
           guard,
           openChooser: true,
-          closeChooser: mode === 'verify',
+          closeChooser: mode !== 'save' && mode !== 'submit',
           holdViewportLease: true,
           portalViewport: result.portalViewport,
         });
@@ -827,7 +832,7 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint = null, cd
     result.formatInventoryStatus = bootstrap.inventoryStatus;
     result.formatInventoryReason = bootstrap.inventoryReason;
     if (bootstrap.blockers.length > 0) result.blockers.push(...bootstrap.blockers);
-    if (bootstrap.required && mode !== 'verify') {
+    if (bootstrap.required && (mode === 'save' || mode === 'submit')) {
       if (!bootstrap.available) throw new Error(`Format bootstrap blocked: ${bootstrap.blockers.join(' ')}`);
       const createRun = await withManualChallengeHandoff({
         context,
@@ -851,7 +856,7 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint = null, cd
       result.formatBootstrapFormatCount = 1;
       result.formatBootstrapAvailable = true;
     }
-    if (bootstrap.required && mode === 'verify') {
+    if (bootstrap.required && (mode === 'verify' || mode === 'tags-only')) {
       const listingOnly = await withManualChallengeHandoff({
         context,
         page,
@@ -866,8 +871,10 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint = null, cd
       page = listingOnly.page;
       result.readOnlyUiActions.push(...listingOnly.value.readOnlyUiActions);
       result.comparison = listingOnly.value.comparison;
-      if (bootstrap.available) result.blockers.push('Unreal Engine product format is missing; a safe Save Draft bootstrap is available.');
-      else result.blockers.push('Unreal Engine product format is missing and safe bootstrap is unavailable.');
+      if (mode === 'verify') {
+        if (bootstrap.available) result.blockers.push('Unreal Engine product format is missing; a safe Save Draft bootstrap is available.');
+        else result.blockers.push('Unreal Engine product format is missing and safe bootstrap is unavailable.');
+      }
       ({ writeReady: result.writeReady, writeBlockers: result.writeBlockers } = writeReadiness(result.listingStatus, result.comparison, manifestInfo.manifest, { deferredFormatFields: bootstrap.available ? deferredFormatFieldSet(manifestInfo.manifest) : new Set() }));
     } else {
       const collectedResult = await withManualChallengeHandoff({
@@ -893,6 +900,82 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint = null, cd
       return result;
     }
     if (result.writeBlockers.length > 0) throw new Error(`Write blocked by readiness gates: ${result.writeBlockers.join(' ')}`);
+    const tagField = result.comparison.fields.find((field) => field.manifestJsonPath === 'tags');
+    if ((mode === 'save' || mode === 'tags-only') && tagField?.classification === 'MISMATCH' && tagField.writeTarget) {
+      if (!Array.isArray(tagField.tagIdentities) || tagField.tagIdentities.length !== manifestInfo.manifest.tags.length) {
+        throw new Error('Tags are mismatched but exact Fab tag identities were not proven.');
+      }
+      const prerequisite = await readPrefetchedListingPrerequisite(page, {
+        listingId: manifestInfo.manifest.listingId,
+        productType: manifestInfo.manifest.productType,
+        category: manifestInfo.manifest.category,
+        title: manifestInfo.manifest.title,
+      });
+      if (prerequisite.status !== 'known' || !Array.isArray(prerequisite.unchanged.tags)) throw new Error('The exact prefetched listing payload required for a Tags write was not available.');
+      listingTagsContract.origin = origin;
+      listingTagsContract.listingId = manifestInfo.manifest.listingId;
+      listingTagsContract.payloadKeys = prerequisite.payloadKeys;
+      listingTagsContract.unchanged = prerequisite.unchanged;
+      const tagRun = await withManualChallengeHandoff({
+        context,
+        page,
+        manifest: manifestInfo.manifest,
+        origin,
+        result,
+        manualInteraction: interaction,
+        maxCycles: maxManualChallengeCycles,
+        diagnostics: result,
+        action: async (candidatePage) => {
+          await ensureListingView(candidatePage, manifestInfo.manifest, origin, guard, { diagnostics: result });
+          return persistListingTags(candidatePage, {
+            guard,
+            contract: listingTagsContract,
+            currentTagIds: prerequisite.unchanged.tags,
+            identities: tagField.tagIdentities,
+            onMutation: () => { result.writeInteractionsPerformed += 1; },
+          });
+        },
+      });
+      page = tagRun.page;
+      result.tagMutation = tagRun.value;
+      result.executedMutations.push('tags');
+    }
+    if (mode === 'tags-only') {
+      guard.setPhase('stage');
+      await reloadWithDiagnostics(page, { waitUntil: 'domcontentloaded' }, result);
+      const postTagTarget = await withManualChallengeHandoff({
+        context,
+        page,
+        manifest: manifestInfo.manifest,
+        origin,
+        result,
+        manualInteraction: interaction,
+        maxCycles: maxManualChallengeCycles,
+        diagnostics: result,
+        action: (candidatePage) => ensureTarget(candidatePage, manifestInfo.manifest, origin, { passive: true, diagnostics: result }),
+      });
+      page = postTagTarget.page;
+      result.listingStatus = await readStatus(page);
+      const postTagRun = await withManualChallengeHandoff({
+        context,
+        page,
+        manifest: manifestInfo.manifest,
+        origin,
+        result,
+        manualInteraction: interaction,
+        maxCycles: maxManualChallengeCycles,
+        diagnostics: result,
+        action: (candidatePage) => collectListingOnlyComparison(candidatePage, manifestInfo, origin, guard, result, { passive: true }),
+      });
+      page = postTagRun.page;
+      result.readOnlyUiActions.push(...postTagRun.value.readOnlyUiActions);
+      result.comparisonAfter = postTagRun.value.comparison;
+      const persistedTags = result.comparisonAfter.fields.find((field) => field.manifestJsonPath === 'tags');
+      if (persistedTags?.classification !== 'MATCH') throw new Error('Canonical Tags did not persist as an exact read-back match.');
+      ({ writeReady: result.writeReady, writeBlockers: result.writeBlockers } = writeReadiness(result.listingStatus, result.comparisonAfter, manifestInfo.manifest, { deferredFormatFields: bootstrap.available ? deferredFormatFieldSet(manifestInfo.manifest) : new Set() }));
+      result.result = 'PASS';
+      return result;
+    }
     const mutation = buildMutationPlan(result.comparison, manifestInfo);
     result.plannedMutations = mutation.plan;
     result.blockers.push(...mutation.blockers);

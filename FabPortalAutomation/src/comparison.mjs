@@ -1,6 +1,7 @@
 import { fieldCandidates, mediaCandidates, resolveCandidate } from './locators.mjs';
 import { isFormatView } from './view-detection.mjs';
 import { readPrefetchedListingPrerequisite } from './listing-prerequisite.mjs';
+import { resolveFabTagIdentities } from './listing-tags.mjs';
 
 export const COMPARISON_STATES = ['MATCH', 'MISMATCH', 'NOT_VISIBLE', 'NOT_DISCOVERED', 'NOT_APPLICABLE'];
 const FORMAT_OWNED_FIELDS = new Set(['engineVersions', 'platforms', 'technicalInformationFile', 'media']);
@@ -149,15 +150,27 @@ async function applyPrefetchedTagEvidence(page, manifest, tags, currentTags) {
   const expectedCount = `${currentTags.length} / 25`;
   if (countText !== expectedCount) return null;
   const current = currentTags;
-  const same = JSON.stringify(current) === JSON.stringify(manifest.tags);
+  const inputDisabled = await input.isDisabled().catch(() => true);
+  const fixturePage = (() => { try { return ['localhost', '127.0.0.1'].includes(new URL(page.url()).hostname); } catch { return false; } })();
+  const identityEvidence = !fixturePage && !inputDisabled ? await resolveFabTagIdentities(page, manifest.tags) : { ok: false, reason: fixturePage ? 'Fab tag identity resolution is production-only.' : 'Fab tag Search a tag input was disabled.' };
+  const desiredIds = identityEvidence.ok ? identityEvidence.identities.map((item) => item.uid) : [];
+  const currentIds = current.filter((item) => typeof item === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(item));
+  const sameNames = JSON.stringify(current) === JSON.stringify(manifest.tags);
+  const sameIds = identityEvidence.ok && desiredIds.length === currentIds.length && [...desiredIds].sort().every((item, index) => item === [...currentIds].sort()[index]);
+  const writeTarget = !fixturePage && identityEvidence.ok && !inputDisabled
+    ? writeTargetFor('tags', 'listing', { strategy: 'getByRole', expression: 'page.getByRole("combobox", { name: "Search a tag", exact: true })', field: 'tags', mutationType: 'tags', locator: { strategy: 'getByRole', role: 'combobox', name: 'Search a tag', exact: true } })
+    : null;
   return {
     ...tags,
-    editableControlAvailable: false,
-    writeTarget: null,
+    editableControlAvailable: !fixturePage && !inputDisabled,
+    writeTarget,
     currentVisibleValue: current,
     currentNormalizedValue: current,
-    classification: same ? 'MATCH' : 'MISMATCH',
-    notes: 'Strict prefetched listing tags matched the visible Fab tag-count evidence; selected-tag option identities and a safe tag mutation contract are not yet proven.',
+    classification: sameNames || sameIds ? 'MATCH' : 'MISMATCH',
+    tagIdentities: identityEvidence.ok ? identityEvidence.identities : [],
+    notes: identityEvidence.ok
+      ? 'Strict prefetched listing tags matched the visible Fab tag-count evidence and every desired tag resolved to one enabled Fab autocomplete identity.'
+      : `Strict prefetched listing tags matched the visible Fab tag-count evidence, but tag identity resolution was not proven: ${identityEvidence.reason}`,
   };
 }
 

@@ -16,6 +16,7 @@ export function buildMutationPlan(comparison, manifestInfo) {
   for (const field of comparison.fields) {
     if (field.classification !== 'MISMATCH') continue;
     const fieldName = field.manifestJsonPath;
+    if (fieldName === 'tags') continue;
     const type = field.writeTarget?.mutationType ?? mutationType(fieldName);
     if (!field.writeTarget || !SUPPORTED_MUTATIONS.has(type)) {
       blockers.push(`${fieldName} differs but has no approved writable locator.`);

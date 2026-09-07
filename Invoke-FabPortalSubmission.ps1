@@ -7,6 +7,7 @@ param(
     [string]$CdpWebSocketEndpoint,
     [string]$OutputDirectory,
     [switch]$SaveDraft,
+    [switch]$TagsOnly,
     [switch]$SubmitForReview,
     [switch]$Json,
     [switch]$VerboseOutput,
@@ -82,6 +83,9 @@ if (-not [string]::IsNullOrWhiteSpace($CdpEndpoint) -and -not [string]::IsNullOr
 if ($SubmitForReview -and -not $SaveDraft) {
     throw 'SubmitForReview requires SaveDraft.'
 }
+if ($TagsOnly -and ($SaveDraft -or $SubmitForReview)) {
+    throw 'TagsOnly cannot be combined with SaveDraft or SubmitForReview.'
+}
 $runtime = Join-Path $PSScriptRoot 'FabPortalAutomation'
 if (-not (Test-Path -LiteralPath (Join-Path $runtime 'node_modules\playwright-core\package.json') -PathType Leaf)) {
     throw "Portal automation dependencies are not installed. Run npm ci in $runtime."
@@ -102,6 +106,7 @@ if (-not [string]::IsNullOrWhiteSpace($OutputDirectory)) {
     [void]$arguments.Add([System.IO.Path]::GetFullPath($OutputDirectory))
 }
 if ($SaveDraft) { [void]$arguments.Add('--save-draft') }
+if ($TagsOnly) { [void]$arguments.Add('--tags-only') }
 if ($SubmitForReview) { [void]$arguments.Add('--submit-for-review') }
 if ($Json) { [void]$arguments.Add('--json') }
 if ($VerboseOutput) { [void]$arguments.Add('--verbose') }

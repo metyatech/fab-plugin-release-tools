@@ -68,6 +68,18 @@ test('actual CLI main path propagates explicit Save Draft authorization', async 
   assert.deepEqual(loadOptions, { requirePortalReady: true });
 });
 
+test('CLI exposes an explicit Tags-only mode without Save Draft authorization', async () => {
+  const { code, received, loadOptions } = await invoke(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', '--tags-only', '--json']);
+  assert.equal(code, 0);
+  assert.equal(received.mode, 'tags-only');
+  assert.equal(received.saveDraftAuthorized, false);
+  assert.deepEqual(loadOptions, { requirePortalReady: true });
+});
+
+test('CLI rejects Tags-only mode combined with Save Draft', async () => {
+  await assert.rejects(() => invoke(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', '--tags-only', '--save-draft', '--json']), /cannot be combined/);
+});
+
 test('CLI rejects Submit for review without Save Draft before core execution', async () => {
   await assert.rejects(() => invoke(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', '--submit-for-review', '--json']), /requires --save-draft/);
 });

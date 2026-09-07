@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { chromium } from 'playwright-core';
 import { buildMutationPlan, executeMutationPlan, preflightMutationPlan } from '../src/mutation-plan.mjs';
-import { installNetworkGuard, validateListingLicensePayload, validateListingLicensePricingPayload, validateListingPrerequisitePayload } from '../src/network-guard.mjs';
+import { installNetworkGuard, validateListingLicensePayload, validateListingLicensePricingPayload, validateListingPrerequisitePayload, validateListingTagsPayload } from '../src/network-guard.mjs';
 import { inspectPrefetchedListingPrerequisite, LISTING_PREREQUISITE_PAYLOAD_KEYS } from '../src/listing-prerequisite.mjs';
 import { compareManifest, comparePlatformClassification, comparePriceClassification } from '../src/comparison.mjs';
 import { CRITICAL_OWNED_FIELDS, criticalBlockers, detectManualBlock, mergeListingAndFormatComparisons, runPortalAutomation, selectExistingTargetPage } from '../src/portal.mjs';
@@ -323,6 +323,11 @@ async function waitForPrompt(promptState) {
 }
 
 const prerequisiteCategoryId = '22222222-2222-4222-8222-222222222222';
+const approvedTagIds = [
+  '33333333-3333-4333-8333-333333333331',
+  '33333333-3333-4333-8333-333333333332',
+  '33333333-3333-4333-8333-333333333333',
+];
 
 function prerequisiteContract(origin, overrides = {}) {
   return {
@@ -361,6 +366,30 @@ function prerequisitePayload(overrides = {}) {
     tags: [],
     title: 'Fixture Product',
     use_comment_thread: false,
+    ...overrides,
+  };
+}
+
+function tagsContract(origin, overrides = {}) {
+  return {
+    origin,
+    listingId,
+    expectedTagIds: approvedTagIds,
+    payloadKeys: [...LISTING_PREREQUISITE_PAYLOAD_KEYS],
+    unchanged: {
+      category: prerequisiteCategoryId,
+      description: '',
+      has_promotional_content: false,
+      intellectual_property_confirmed: false,
+      is_ai_forbidden: false,
+      is_ai_generated: true,
+      licenses: [],
+      listing_type: 'tool-and-plugin',
+      seller_provided_maturity_rating: 'U18',
+      tags: [],
+      title: 'Fixture Product',
+      use_comment_thread: false,
+    },
     ...overrides,
   };
 }
@@ -464,6 +493,67 @@ test('listing prerequisite validator admits only the exact observed Category pay
   assert.equal(validateListingPrerequisitePayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: prerequisitePayload({ tags: ['unexpected'] }) }, contract).ok, false);
   assert.equal(validateListingPrerequisitePayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: { ...prerequisitePayload(), unexpected: true } }, contract).ok, false);
   assert.equal(validateListingPrerequisitePayload({ method: 'POST', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: prerequisitePayload() }, contract).ok, false);
+});
+
+test('listing tags validator admits only the exact full approved tag set', () => {
+  const contract = tagsContract('https://www.fab.com');
+  const valid = validateListingTagsPayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: prerequisitePayload({ tags: approvedTagIds }) }, contract);
+  assert.deepEqual(valid, { ok: true });
+  assert.equal(validateListingTagsPayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/33333333-3333-4333-8333-333333333333`, body: prerequisitePayload({ tags: approvedTagIds }) }, contract).ok, false);
+  assert.equal(validateListingTagsPayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: prerequisitePayload({ tags: approvedTagIds.slice(0, 2) }) }, contract).ok, false);
+  assert.equal(validateListingTagsPayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: prerequisitePayload({ tags: [approvedTagIds[0], approvedTagIds[0], approvedTagIds[2]] }) }, contract).ok, false);
+  assert.equal(validateListingTagsPayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: prerequisitePayload({ tags: [...approvedTagIds.slice(0, 2), '33333333-3333-4333-8333-333333333339'] }) }, contract).ok, false);
+  assert.equal(validateListingTagsPayload({ method: 'PATCH', url: `https://www.fab.com/i/portal/listings/${listingId}`, body: { ...prerequisitePayload({ tags: approvedTagIds }), description: 'unexpected' } }, contract).ok, false);
+});
+
+test('listing tags mutation is allowed only in its dedicated save phase and is blocked in verify', async () => {
+  const fixture = await startFixture(fixtureState(makeManifest()));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const contract = tagsContract(fixture.origin);
+  try {
+    const verifyGuard = installNetworkGuard(context, { mode: 'verify', listingTags: contract });
+    await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+    await page.evaluate((payload) => { window.__payload = payload; }, prerequisitePayload({ tags: approvedTagIds }));
+    await page.evaluate((id) => fetch(`/i/portal/listings/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(window.__payload) }).catch(() => undefined), listingId);
+    assert.equal(verifyGuard.summary().networkMutationRequestsBlocked, 1);
+    await verifyGuard.dispose();
+    const saveGuard = installNetworkGuard(context, { mode: 'save', listingTags: contract });
+    saveGuard.setPhase('listing-tags-save');
+    await page.evaluate((id) => fetch(`/i/portal/listings/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(window.__payload) }), listingId);
+    const summary = saveGuard.summary();
+    assert.equal(summary.networkMutationRequestsObserved, 1);
+    assert.equal(summary.networkMutationRequestsBlocked, 0);
+    assert.equal(summary.requests[0].intent, 'listing-tags-save');
+    assert.equal(fixture.mutations.length, 1);
+    await saveGuard.dispose();
+  } finally {
+    await context.close();
+    await fixture.close();
+  }
+});
+
+test('Tags-only network mode admits only the dedicated tag phase', async () => {
+  const fixture = await startFixture(fixtureState(makeManifest()));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const contract = tagsContract(fixture.origin);
+  try {
+    await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+    const guard = installNetworkGuard(context, { mode: 'tags-only', listingTags: contract });
+    await page.evaluate((payload) => { window.__payload = payload; }, prerequisitePayload({ tags: approvedTagIds }));
+    guard.setPhase('listing-tags-save');
+    await page.evaluate((id) => fetch(`/i/portal/listings/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(window.__payload) }), listingId);
+    const summary = guard.summary();
+    assert.equal(summary.networkMutationRequestsObserved, 1);
+    assert.equal(summary.networkMutationRequestsBlocked, 0);
+    assert.equal(summary.requests[0].intent, 'listing-tags-save');
+    assert.equal(fixture.mutations.length, 1);
+    await guard.dispose();
+  } finally {
+    await context.close();
+    await fixture.close();
+  }
 });
 
 test('listing license validator admits only the exact observed standard-license payload', () => {

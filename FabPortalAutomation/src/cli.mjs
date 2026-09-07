@@ -15,6 +15,7 @@ Usage:
   pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> -CdpEndpoint <endpoint>
   pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> -CdpWebSocketEndpoint <ws-endpoint>
   pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> -CdpEndpoint <endpoint> -SaveDraft
+  pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> -CdpEndpoint <endpoint> -TagsOnly
   pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> -CdpEndpoint <endpoint> -SaveDraft -SubmitForReview
 
 Default mode is read-only verification. Save Draft and Submit for review are
@@ -30,6 +31,7 @@ Options:
                           Existing dedicated Chrome browser WebSocket endpoint
   --output <directory>    Artifact root (default: ./artifacts)
   --save-draft            Explicitly authorize Save Draft
+  --tags-only             Persist and verify only canonical listing Tags; never creates a format or saves the draft
   --submit-for-review     Explicitly authorize Submit for review; requires --save-draft
   --json                  Emit one machine-readable result object
   --verbose               Emit additional non-secret diagnostics
@@ -39,12 +41,13 @@ Options:
 }
 
 function parseArgs(argv) {
-  const result = { output: null, saveDraft: false, submitForReview: false, json: false, verbose: false, cdpEndpoint: null, cdpWebSocketEndpoint: null };
+  const result = { output: null, saveDraft: false, tagsOnly: false, submitForReview: false, json: false, verbose: false, cdpEndpoint: null, cdpWebSocketEndpoint: null };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--help' || arg === '-h') result.help = true;
     else if (arg === '--version' || arg === '-V') result.version = true;
     else if (arg === '--save-draft') result.saveDraft = true;
+    else if (arg === '--tags-only') result.tagsOnly = true;
     else if (arg === '--submit-for-review') result.submitForReview = true;
     else if (arg === '--json') result.json = true;
     else if (arg === '--verbose') result.verbose = true;
@@ -57,6 +60,7 @@ function parseArgs(argv) {
       else result.output = value;
     } else throw new Error(`Unknown option: ${arg}. Use --help.`);
   }
+  if (result.tagsOnly && (result.saveDraft || result.submitForReview)) throw new Error('--tags-only cannot be combined with --save-draft or --submit-for-review.');
   if (result.submitForReview && !result.saveDraft) throw new Error('--submit-for-review requires --save-draft.');
   if (!result.help && !result.version && (!result.manifest || (!result.cdpEndpoint && !result.cdpWebSocketEndpoint))) throw new Error('--manifest and exactly one CDP transport endpoint are required. Use --help.');
   if (result.cdpEndpoint && result.cdpWebSocketEndpoint) throw new Error('Specify exactly one of --cdp-endpoint and --cdp-websocket-endpoint.');
@@ -93,7 +97,7 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
   const writeReportFile = dependencies.writeReport ?? writeRunReport;
   const run = dependencies.run ?? runPortalAutomation;
   const manualInteraction = dependencies.manualInteraction ?? createStdinManualInteraction();
-  const mode = args.submitForReview ? 'submit' : args.saveDraft ? 'save' : 'verify';
+  const mode = args.submitForReview ? 'submit' : args.saveDraft ? 'save' : args.tagsOnly ? 'tags-only' : 'verify';
   const manifestInfo = await loadManifest(args.manifest, { requirePortalReady: mode !== 'verify' });
   const artifactDirectory = await createDirectory(args.output ?? path.resolve('artifacts'), manifestInfo.manifest.pluginName);
   const result = await run({ manifestInfo, cdpEndpoint: args.cdpEndpoint, cdpWebSocketEndpoint: args.cdpWebSocketEndpoint, mode, saveDraftAuthorized: args.saveDraft, outputDirectory: artifactDirectory, manualInteraction });
