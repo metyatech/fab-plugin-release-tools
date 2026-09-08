@@ -62,6 +62,7 @@ Describe 'Fab submission preflight' {
   "pluginName": "TestPlugin",
   "descriptorFile": "TestPlugin.uplugin",
   "engineVersions": ["5.8"],
+  "versionTitles": { "5.8": "UE 5.8" },
   "platforms": ["Win64"],
   "distributionModules": ["TestPlugin"],
   "documentationUrl": "https://github.com/metyatech",

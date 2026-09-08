@@ -9,6 +9,7 @@
     "pluginName",
     "descriptorFile",
     "engineVersions",
+    "versionTitles",
     "platforms",
     "distributionModules",
     "enabledPluginDependencies",
@@ -34,6 +35,14 @@
       "minItems": 1,
       "uniqueItems": true,
       "items": { "type": "string", "pattern": "^5\\.[0-9]+$" }
+    },
+    "versionTitles": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "patternProperties": {
+        "^5\\.[0-9]+$": { "type": "string", "minLength": 1, "pattern": "\\S" }
+      }
     },
     "platforms": {
       "type": "array",

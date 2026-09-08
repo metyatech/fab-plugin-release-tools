@@ -96,6 +96,7 @@ public sealed class FabProductTestHttpMessageHandler : HttpMessageHandler
                 pluginName                = 'TestPlugin'
                 descriptorFile            = 'TestPlugin.uplugin'
                 engineVersions            = @($EngineVersions)
+                versionTitles             = [ordered]@{}
                 platforms                 = @($Platforms)
                 distributionModules       = @('TestPlugin')
                 enabledPluginDependencies = @()
@@ -115,6 +116,9 @@ public sealed class FabProductTestHttpMessageHandler : HttpMessageHandler
                 thirdPartyLicenseSets     = @()
                 forbiddenPackagePatterns  = @()
                 buildLogFailPatterns     = @()
+            }
+            foreach ($engineVersion in @($EngineVersions)) {
+                $configuration.versionTitles[[string]$engineVersion] = "UE $engineVersion"
             }
             Write-ProductFixtureJson -Value $configuration `
                 -Path (Join-Path $Root 'FabPluginRelease.json')
@@ -267,6 +271,45 @@ public sealed class FabProductTestHttpMessageHandler : HttpMessageHandler
         $command.Source | Should -Be 'FabPluginReleaseTools'
         (Get-Module FabPluginReleaseTools).ModuleBase | Should -Be (
             (Join-Path $PSScriptRoot '..' | Resolve-Path).Path)
+    }
+
+    It 'requires an exact unique version title for every configured engine version' {
+        $configuration = [pscustomobject]@{
+            engineVersions = @('5.5', '5.6', '5.7', '5.8')
+            versionTitles = [pscustomobject]@{
+                '5.5' = 'UE 5.5'
+                '5.6' = 'UE 5.6'
+                '5.7' = 'UE 5.7'
+                '5.8' = 'UE 5.8'
+            }
+        }
+        $result = Assert-FabProductVersionTitle -Configuration $configuration
+        $result['5.5'] | Should -BeExactly 'UE 5.5'
+        $result['5.8'] | Should -BeExactly 'UE 5.8'
+    }
+
+    It 'rejects missing, extra, blank, and duplicate version titles' {
+        $cases = @(
+            [pscustomobject]@{
+                Name = 'missing'; Titles = [pscustomobject]@{ '5.5' = 'UE 5.5' }
+            },
+            [pscustomobject]@{
+                Name = 'extra'; Titles = [pscustomobject]@{ '5.5' = 'UE 5.5'; '5.6' = 'UE 5.6'; '5.7' = 'UE 5.7' }
+            },
+            [pscustomobject]@{
+                Name = 'blank'; Titles = [pscustomobject]@{ '5.5' = '' ; '5.6' = 'UE 5.6' }
+            },
+            [pscustomobject]@{
+                Name = 'duplicate'; Titles = [pscustomobject]@{ '5.5' = 'UE'; '5.6' = 'UE' }
+            }
+        )
+        foreach ($case in $cases) {
+            $configuration = [pscustomobject]@{
+                engineVersions = if ($case.Name -eq 'blank' -or $case.Name -eq 'duplicate') { @('5.5', '5.6') } else { @('5.5', '5.6') }
+                versionTitles = $case.Titles
+            }
+            { Assert-FabProductVersionTitle -Configuration $configuration } | Should -Throw
+        }
     }
 
     It 'invokes every configured engine version exactly once' {
@@ -477,6 +520,7 @@ public sealed class FabProductTestHttpMessageHandler : HttpMessageHandler
         ($manifestText | Test-Json -SchemaFile (Join-Path $PSScriptRoot '..\FabPortalSubmission.schema.json')) | Should -BeTrue
         @($manifest.engineVersions) | Should -BeExactly @('5.9', '5.10')
         @($manifest.packages.engineVersion) | Should -BeExactly @('5.9', '5.10')
+        @($manifest.packages.versionTitle) | Should -BeExactly @('UE 5.9', 'UE 5.10')
         @($manifest.media.order) | Should -BeExactly @(1, 2)
         @($manifest.media.role) | Should -BeExactly @('thumbnail', 'gallery')
         @($manifest.media.sourceRelativePath) | Should -BeExactly @('Media/First.png', 'Media/Second.png')
