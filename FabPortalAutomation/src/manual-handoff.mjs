@@ -8,22 +8,22 @@ export function normalizeManualInteractionDecision(value) {
   return 'invalid';
 }
 
-export function createStdinManualInteraction({ input = process.stdin, output = process.stdout } = {}) {
+export function createStdinManualInteraction({ input = process.stdin, output = process.stdout, prompt = null } = {}) {
   return {
     async waitForConfirmation({ cycle, maxCycles }) {
       output.write('\nCloudflare challenge detected.\n');
       output.write('Complete it manually in the dedicated Chrome.\n');
       output.write('When the normal Fab listing page is visible, return here and press Enter.\n');
       output.write(`Manual handoff cycle ${cycle} of ${maxCycles}. Press q + Enter to cancel.\n`);
-      const prompt = readline.createInterface({ input, output });
+      const handoffPrompt = prompt ?? readline.createInterface({ input, output });
       try {
-        const answer = await prompt.question('> ');
+        const answer = await handoffPrompt.question('> ');
         const normalized = answer.trim().toLowerCase();
         if (normalized === 'q') return 'cancelled';
         if (normalized === '') return 'confirmed';
         return 'invalid';
       } finally {
-        prompt.close();
+        if (!prompt) handoffPrompt.close();
       }
     },
   };

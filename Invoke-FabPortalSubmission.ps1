@@ -9,6 +9,7 @@ param(
     [switch]$SaveDraft,
     [switch]$TagsOnly,
     [switch]$SubmitForReview,
+    [switch]$Session,
     [switch]$Json,
     [switch]$VerboseOutput,
     [switch]$Help,
@@ -86,6 +87,9 @@ if ($SubmitForReview -and -not $SaveDraft) {
 if ($TagsOnly -and ($SaveDraft -or $SubmitForReview)) {
     throw 'TagsOnly cannot be combined with SaveDraft or SubmitForReview.'
 }
+if ($Session -and ($SaveDraft -or $TagsOnly -or $SubmitForReview -or $Json)) {
+    throw 'Session accepts only interactive verify, save, and quit commands; do not combine with SaveDraft, TagsOnly, SubmitForReview, or Json.'
+}
 $runtime = Join-Path $PSScriptRoot 'FabPortalAutomation'
 if (-not (Test-Path -LiteralPath (Join-Path $runtime 'node_modules\playwright-core\package.json') -PathType Leaf)) {
     throw "Portal automation dependencies are not installed. Run npm ci in $runtime."
@@ -108,6 +112,7 @@ if (-not [string]::IsNullOrWhiteSpace($OutputDirectory)) {
 if ($SaveDraft) { [void]$arguments.Add('--save-draft') }
 if ($TagsOnly) { [void]$arguments.Add('--tags-only') }
 if ($SubmitForReview) { [void]$arguments.Add('--submit-for-review') }
+if ($Session) { [void]$arguments.Add('--session') }
 if ($Json) { [void]$arguments.Add('--json') }
 if ($VerboseOutput) { [void]$arguments.Add('--verbose') }
 $result = Invoke-NodeProcess -Arguments $arguments.ToArray() -Interactive

@@ -396,6 +396,25 @@ Allow manually. The automation does not click that security prompt. If the
 connection is waiting for that approval, it pauses for the manual confirmation
 before retrying the same endpoint once.
 
+If you need to retry verification or saving without creating another browser
+connection, use session mode. It connects once, keeps the approved browser
+context open, and accepts only `verify`, `save`, and `quit` commands. A `save`
+command is the explicit Save Draft authorization for that command; session mode
+does not expose Submit for review, Publish, Cancel, Delete, or Unlist commands:
+
+```powershell
+pwsh .\Invoke-FabPortalSubmission.ps1 `
+  -ManifestPath <FabPortalSubmission.json> `
+  -CdpWebSocketEndpoint <fresh-browser-websocket-endpoint> `
+  -Session
+```
+
+If Chrome shows its Remote Debugging approval for this connection, click Allow
+manually. Then type `verify` or `save` at the `fab-session>` prompt; both
+commands reuse the same approved connection. Type `quit` to close the
+automation connection. The endpoint is supplied only for this run and is never
+persisted.
+
 The default is read-only verification. Explicit `-SaveDraft` enables a guarded
 draft save, and `-SaveDraft -SubmitForReview` additionally enables submission.
 Pending approval listings cannot be modified; Cancel submission is never

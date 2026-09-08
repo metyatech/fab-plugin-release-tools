@@ -4,6 +4,7 @@ import { loadSubmissionManifest } from './manifest.mjs';
 import { createStdinManualInteraction } from './manual-handoff.mjs';
 import { runPortalAutomation } from './portal.mjs';
 import { createRunDirectory, writeRunReport } from './report.mjs';
+import { mainSession } from './session.mjs';
 import { resolveBrowserTransport } from './transport.mjs';
 
 const VERSION = '1.0.0';
@@ -17,6 +18,7 @@ Usage:
   pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> -CdpEndpoint <endpoint> -SaveDraft
   pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> -CdpEndpoint <endpoint> -TagsOnly
   pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> -CdpEndpoint <endpoint> -SaveDraft -SubmitForReview
+  pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> -CdpWebSocketEndpoint <ws-endpoint> -Session
 
 Default mode is read-only verification. Save Draft and Submit for review are
 explicit, guarded operations. Pending approval listings are never modified and
@@ -33,6 +35,7 @@ Options:
   --save-draft            Explicitly authorize Save Draft
   --tags-only             Persist and verify only canonical listing Tags; never creates a format or saves the draft
   --submit-for-review     Explicitly authorize Submit for review; requires --save-draft
+  --session               Keep one approved browser connection open for verify/save/quit commands
   --json                  Emit one machine-readable result object
   --verbose               Emit additional non-secret diagnostics
   --help, -h              Show this help
@@ -41,7 +44,7 @@ Options:
 }
 
 function parseArgs(argv) {
-  const result = { output: null, saveDraft: false, tagsOnly: false, submitForReview: false, json: false, verbose: false, cdpEndpoint: null, cdpWebSocketEndpoint: null };
+  const result = { output: null, saveDraft: false, tagsOnly: false, submitForReview: false, session: false, json: false, verbose: false, cdpEndpoint: null, cdpWebSocketEndpoint: null };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--help' || arg === '-h') result.help = true;
@@ -49,6 +52,7 @@ function parseArgs(argv) {
     else if (arg === '--save-draft') result.saveDraft = true;
     else if (arg === '--tags-only') result.tagsOnly = true;
     else if (arg === '--submit-for-review') result.submitForReview = true;
+    else if (arg === '--session') result.session = true;
     else if (arg === '--json') result.json = true;
     else if (arg === '--verbose') result.verbose = true;
     else if (['--manifest', '--cdp-endpoint', '--cdp-websocket-endpoint', '--output'].includes(arg)) {
@@ -59,6 +63,9 @@ function parseArgs(argv) {
       else if (arg === '--cdp-websocket-endpoint') result.cdpWebSocketEndpoint = value;
       else result.output = value;
     } else throw new Error(`Unknown option: ${arg}. Use --help.`);
+  }
+  if (result.session && (result.saveDraft || result.tagsOnly || result.submitForReview || result.json)) {
+    throw new Error('--session accepts only interactive verify, save, and quit commands; do not combine it with write mode flags or --json.');
   }
   if (result.tagsOnly && (result.saveDraft || result.submitForReview)) throw new Error('--tags-only cannot be combined with --save-draft or --submit-for-review.');
   if (result.submitForReview && !result.saveDraft) throw new Error('--submit-for-review requires --save-draft.');
@@ -92,6 +99,12 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
   const args = parseArgs(argv);
   if (args.help) { process.stdout.write(help()); return 0; }
   if (args.version) { process.stdout.write(`${VERSION}\n`); return 0; }
+  if (args.session) {
+    const endpoint = args.cdpWebSocketEndpoint ?? args.cdpEndpoint;
+    const kind = args.cdpWebSocketEndpoint ? 'websocket' : 'http';
+    const runSession = dependencies.runSession ?? mainSession;
+    return runSession({ manifestPath: args.manifest, endpoint, kind, outputDirectory: args.output, dependencies });
+  }
   const loadManifest = dependencies.loadManifest ?? loadSubmissionManifest;
   const createDirectory = dependencies.createDirectory ?? createRunDirectory;
   const writeReportFile = dependencies.writeReport ?? writeRunReport;

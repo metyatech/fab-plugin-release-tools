@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { main } from '../src/cli.mjs';
+import { main, parseArgs } from '../src/cli.mjs';
 
 const manifestInfo = {
   manifest: { pluginName: 'FixturePlugin', listingId: '11111111-1111-4111-8111-111111111111', title: 'Fixture Product', portalReady: true },
@@ -51,6 +51,37 @@ test('CLI accepts an explicit localhost browser WebSocket endpoint', async () =>
   assert.equal(code, 0);
   assert.equal(received.cdpEndpoint, null);
   assert.equal(received.cdpWebSocketEndpoint, endpoint);
+});
+
+test('CLI session mode passes one run-scoped transport to the session host', async () => {
+  let sessionOptions;
+  const code = await main([
+    '--manifest', 'manifest.json',
+    '--cdp-websocket-endpoint', 'ws://127.0.0.1:50095/devtools/browser/session-id',
+    '--session',
+  ], {
+    runSession: async (options) => {
+      sessionOptions = options;
+      return 0;
+    },
+  });
+  assert.equal(code, 0);
+  assert.deepEqual(sessionOptions, {
+    manifestPath: 'manifest.json',
+    endpoint: 'ws://127.0.0.1:50095/devtools/browser/session-id',
+    kind: 'websocket',
+    outputDirectory: null,
+    dependencies: { runSession: sessionOptions.dependencies.runSession },
+  });
+});
+
+test('CLI session mode rejects write flags and JSON output', () => {
+  for (const flag of ['--save-draft', '--tags-only', '--submit-for-review', '--json']) {
+    assert.throws(
+      () => parseArgs(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', '--session', flag]),
+      /--session accepts only interactive verify, save, and quit commands/,
+    );
+  }
 });
 
 test('CLI rejects both transport endpoints', async () => {
