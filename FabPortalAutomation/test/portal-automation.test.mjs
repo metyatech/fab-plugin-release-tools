@@ -514,6 +514,25 @@ test('duplicate mutation targets are rejected before execution', () => {
   assert.equal(plan.plan.length, 2);
 });
 
+test('direct mutation plan execution fails before touching the DOM', async () => {
+  let domOperations = 0;
+  const page = new Proxy({}, {
+    get() {
+      domOperations += 1;
+      throw new Error('DOM operation should not be reached');
+    },
+  });
+  const manifest = makeManifest();
+  const preflight = {
+    targets: [{ item: { fieldName: 'title', view: 'listing', locator: { strategy: 'getByLabel', name: 'Title', exact: true }, mutationType: 'text' } }],
+  };
+  await assert.rejects(
+    () => executeMutationPlan(page, preflight, { manifest, mediaFiles: [] }),
+    /Fab Portal write automation is disabled/,
+  );
+  assert.equal(domOperations, 0);
+});
+
 
 
 

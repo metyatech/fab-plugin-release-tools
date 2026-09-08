@@ -1,4 +1,5 @@
 import { resolveLocatorDescriptor } from './locators.mjs';
+import { assertFabPortalReadOnly } from './write-policy.mjs';
 
 const SUPPORTED_MUTATIONS = new Set(['text', 'richText', 'combobox', 'boolean', 'upload']);
 
@@ -75,6 +76,7 @@ async function selectExactOption(page, desired) {
 }
 
 export async function executeMutationPlan(page, preflight, manifestInfo, { setPhase = null, assertView = null, beforeMutation = null, onMutationExecuted = null } = {}) {
+  assertFabPortalReadOnly('save');
   const executed = [];
   for (const { item } of preflight.targets) {
     await assertView?.(item.view ?? 'listing');
