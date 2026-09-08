@@ -101,8 +101,8 @@ async function visibleLabeledControl(page, labels, field, placeholders = []) {
   return matches[0];
 }
 
-async function fillTextControl(page, labels, field, value) {
-  const control = await visibleLabeledControl(page, labels, field);
+async function fillTextControl(page, labels, field, value, placeholders = []) {
+  const control = await visibleLabeledControl(page, labels, field, placeholders);
   const metadata = await control.evaluate((element) => ({ tagName: element.tagName, readOnly: element.readOnly === true, disabled: element.disabled === true, role: element.getAttribute('role') }));
   if (metadata.disabled || metadata.readOnly || !['INPUT', 'TEXTAREA'].includes(metadata.tagName)) throw new Error(`${field} control was not an enabled writable text control.`);
   await control.fill(value);
@@ -157,11 +157,11 @@ async function fillUnrealVersionForm(page, manifest) {
   if (typeof packageInfo.versionTitle !== 'string' || packageInfo.versionTitle.trim() === '') throw new Error(`Canonical Version title is missing for UE${version}.`);
   if (typeof packageInfo.projectFileLink !== 'string' || packageInfo.projectFileLink.trim() === '') throw new Error(`Canonical Project File Link is missing for UE${version}.`);
   if (!Array.isArray(manifest.platforms) || manifest.platforms.length !== 1 || typeof manifest.platforms[0] !== 'string' || manifest.platforms[0].trim() === '') throw new Error('Canonical supported target platforms were not an exact single-value configuration.');
-  await fillTextControl(page, ['Version title *', 'Version title'], 'Version title', packageInfo.versionTitle);
-  await fillTextControl(page, ['Project file link *', 'Project file link'], 'Project file link', packageInfo.projectFileLink);
-  await chooseExactOption(page, ['Supported engine version *', 'Supported engine version'], 'Supported engine version', version, ['Search or select engine versions']);
+  await fillTextControl(page, ['Version title *', 'Version title'], 'Version title', packageInfo.versionTitle, ['Enter version title']);
+  await fillTextControl(page, ['Project file link *', 'Project file link'], 'Project file link', packageInfo.projectFileLink, ['www.filesharing.com/link/to/project']);
+  await chooseExactOption(page, ['Supported engine version *', 'Supported engine version', 'Support Unreal Engine versions multi select field with search'], 'Supported engine version', version, ['Search or select engine versions']);
   const portalPlatform = portalPlatformLabel(manifest.platforms[0]);
-  await chooseExactOption(page, ['Supported target platforms *', 'Supported target platforms'], 'Supported target platforms', portalPlatform, ['Search or select target platforms']);
+  await chooseExactOption(page, ['Supported target platforms *', 'Supported target platforms', 'Support target platforms multi select field with search'], 'Supported target platforms', portalPlatform, ['Search or select target platforms']);
   return { engineVersion: version, versionTitle: packageInfo.versionTitle, projectFileLink: packageInfo.projectFileLink, platform: manifest.platforms[0], portalPlatform };
 }
 
