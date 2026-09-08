@@ -2308,6 +2308,19 @@ test('format bootstrap preserves a platform already selected by Fab', async () =
   assert.equal(fixture.mutations.filter((item) => item.pathname === '/api/save').length, 1);
 });
 
+test('format bootstrap waits for the delayed version Confirm control', async () => {
+  const { result, fixture } = await scenario({
+    state: { productFormats: [], formatChoiceNeedsNext: true, realObservedVersionForm: true, confirmDelayMs: 250 },
+    mode: 'save',
+    saveDraftAuthorized: true,
+  });
+  assert.equal(result.result, 'PASS');
+  assert.equal(result.formatBootstrapCreated, true);
+  assert.equal(fixture.state.productFormats.filter((format) => format.name === 'Unreal Engine').length, 1);
+  assert.equal(fixture.mutations.filter((item) => item.pathname === '/api/create-format').length, 1);
+  assert.equal(fixture.mutations.filter((item) => item.pathname === '/api/save').length, 1);
+});
+
 test('format bootstrap accepts Fab Next buttons whose aria label omits the format name', async () => {
   const { result, fixture } = await scenario({
     state: { productFormats: [], formatChoiceNeedsNext: true, realObservedVersionForm: true, observedChooserNextAriaLabel: true },

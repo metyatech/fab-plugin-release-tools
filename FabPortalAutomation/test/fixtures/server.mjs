@@ -103,7 +103,7 @@ function pageMarkup(state, listingId) {
   <main id="listing-view">${listingControls}</main>
   <main id="format-view" hidden>${formatControls}</main>
   ${challengeMarkup}
-  <script>
+    <script>
     const listingView = document.querySelector('#listing-view');
     const formatView = document.querySelector('#format-view');
     const value = (selector) => document.querySelector(selector)?.value ?? '';
@@ -180,7 +180,10 @@ function pageMarkup(state, listingId) {
         const next = document.querySelector('[role="dialog"][aria-label="Add new format"] [aria-label^="Confirm selected option:"]');
         const confirm = document.querySelector('[role="dialog"][aria-label="Add new format"] [aria-label="Confirm"]');
         if (next) next.hidden = true;
-        if (confirm) confirm.hidden = false;
+        if (confirm) {
+          if (${JSON.stringify(Number(state.confirmDelayMs ?? 0))} > 0) setTimeout(() => { confirm.hidden = false; }, ${JSON.stringify(Number(state.confirmDelayMs ?? 0))});
+          else confirm.hidden = false;
+        }
         return;
       }
       createFormat();

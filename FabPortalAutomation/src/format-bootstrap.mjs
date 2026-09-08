@@ -80,13 +80,22 @@ async function advanceFormatChooser(page, formatName) {
   return true;
 }
 
-async function confirmFormatCreation(page) {
-  const confirm = await visibleCount(page.getByRole('button', { name: 'Confirm', exact: true }));
-  if (confirm.length === 0) return false;
-  if (confirm.length !== 1) throw new Error(`Format creation Confirm control visible match count is ${confirm.length}.`);
-  if (await confirm[0].isDisabled().catch(() => true)) throw new Error('Format creation Confirm control was disabled after the format choice was confirmed.');
-  await confirm[0].click();
-  return true;
+async function confirmFormatCreation(page, { required = false } = {}) {
+  const deadline = Date.now() + (required ? FORMAT_FIELD_OPTION_TIMEOUT_MS : 0);
+  while (true) {
+    const confirm = await visibleCount(page.getByRole('button', { name: 'Confirm', exact: true }));
+    if (confirm.length > 1) throw new Error(`Format creation Confirm control visible match count is ${confirm.length}.`);
+    if (confirm.length === 1) {
+      if (await confirm[0].isDisabled().catch(() => true)) throw new Error('Format creation Confirm control was disabled after the format choice was confirmed.');
+      await confirm[0].click();
+      return true;
+    }
+    if (!required || Date.now() > deadline) {
+      if (required) throw new Error(`Format creation Confirm control did not become visible within ${FORMAT_FIELD_OPTION_TIMEOUT_MS}ms.`);
+      return false;
+    }
+    await page.waitForTimeout(FORMAT_CHOOSER_POLL_MS);
+  }
 }
 
 async function visibleLabeledControl(page, labels, field, placeholders = []) {
@@ -470,7 +479,7 @@ export async function executeFormatBootstrap(page, manifest, inspection, { guard
     if (await versionHeading.count() === 1 && await versionHeading.isVisible().catch(() => false)) {
       versionEvidence = await fillUnrealVersionForm(page, manifest);
     }
-    const confirmClicked = await confirmFormatCreation(page);
+    const confirmClicked = await confirmFormatCreation(page, { required: versionEvidence !== null });
     if (confirmClicked) await page.waitForTimeout(150);
     const region = includedFilesRegion(page);
     const formats = await productFormatButtons(page);
