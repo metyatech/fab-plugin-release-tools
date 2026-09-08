@@ -142,6 +142,12 @@ async function chooseExactOption(page, labels, field, value, placeholders = []) 
     if (visible.length > 1) throw new Error(`${field} did not expose exactly one enabled option for ${value}.`);
     if (visible.length === 1) {
       if (await visible[0].isDisabled().catch(() => true)) throw new Error(`${field} did not expose exactly one enabled option for ${value}.`);
+      const inputValue = await control.inputValue().catch(() => '');
+      const alreadySelected = inputValue === value || await visible[0].getAttribute('aria-selected') === 'true';
+      if (alreadySelected) {
+        await waitForSelectionEvidence(page, control, field, value);
+        return;
+      }
       await visible[0].click();
       await waitForSelectionEvidence(page, control, field, value);
       return;
