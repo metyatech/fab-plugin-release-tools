@@ -47,7 +47,7 @@ function pageMarkup(state, listingId) {
     ? '<input placeholder="Enter version title" required><input placeholder="www.filesharing.com/link/to/project" required>'
     : '<label>Version title *<input aria-label="Version title *"></label><label>Project file link *<input aria-label="Project file link *"></label>';
   const versionSelectors = state.realObservedVersionForm
-    ? `<input role="combobox" aria-label="Support Unreal Engine versions multi select field with search" placeholder="Search or select engine versions" readonly><div role="option" aria-label="${html(state.engineVersions[0] ?? '5.8')}">${html(state.engineVersions[0] ?? '5.8')}</div><input role="combobox" aria-label="Support target platforms multi select field with search" placeholder="Search or select target platforms" readonly><div role="option" aria-label="${html(portalPlatform)}">${html(portalPlatform)}</div>`
+    ? `<input role="combobox" aria-label="Support Unreal Engine versions multi select field with search" placeholder="Search or select engine versions" readonly><div role="option" aria-label="${html(state.engineVersions[0] ?? '5.8')}">${html(state.engineVersions[0] ?? '5.8')}</div><input role="combobox" aria-label="Support target platforms multi select field with search" placeholder="Search or select target platforms" readonly><div role="option" aria-label="${html(portalPlatform)}">${html(portalPlatform)}</div><button type="button" aria-label="Remove ${html(portalPlatform)}" hidden>Remove ${html(portalPlatform)}</button>`
     : state.customVersionControls
       ? `<input role="combobox" aria-label="Supported engine version *" placeholder="Search or select engine versions" readonly><div role="option" aria-label="${html(state.engineVersions[0] ?? '5.8')}">${html(state.engineVersions[0] ?? '5.8')}</div><input role="combobox" aria-label="Supported target platforms *" placeholder="Search or select target platforms" readonly><div role="option" aria-label="${html(portalPlatform)}">${html(portalPlatform)}</div>`
       : `<label>Supported engine version *<select aria-label="Supported engine version *"><option>${html(state.engineVersions[0] ?? '5.8')}</option></select></label><label>Supported target platforms *<select aria-label="Supported target platforms *"><option>${html(portalPlatform)}</option></select></label>`;
@@ -186,6 +186,14 @@ function pageMarkup(state, listingId) {
       createFormat();
     });
     document.querySelector('[role="dialog"][aria-label="Add new format"] [aria-label="Confirm"]')?.addEventListener('click', createFormat);
+    if (${JSON.stringify(Boolean(state.realObservedVersionForm || state.customVersionControls))}) {
+      const versionComboboxes = document.querySelectorAll('[role="dialog"][aria-label="Add new format"] [role="combobox"]');
+      const versionOptions = document.querySelectorAll('[role="dialog"][aria-label="Add new format"] [role="option"]');
+      const engineOption = [...versionOptions].find((option) => option.getAttribute('aria-label') === ${JSON.stringify(state.engineVersions?.[0] ?? '5.8')});
+      const platformOption = [...versionOptions].find((option) => option.getAttribute('aria-label') === ${JSON.stringify(portalPlatform)});
+      engineOption?.addEventListener('click', () => { if (versionComboboxes[0]) versionComboboxes[0].value = engineOption.getAttribute('aria-label') ?? ''; });
+      platformOption?.addEventListener('click', () => { if (versionComboboxes[1]) versionComboboxes[1].value = platformOption.getAttribute('aria-label') ?? ''; document.querySelector('[aria-label="Remove ${html(portalPlatform)}"]')?.removeAttribute('hidden'); });
+    }
     document.querySelector('[aria-label="Back to listing"]')?.addEventListener('click', () => setView('listing'));
     document.querySelector('[data-testid="format-listing-summary"]')?.addEventListener('click', () => setView('listing'));
     document.querySelector('[data-testid="save"]').addEventListener('click', () => { syncFormatState(); if (${JSON.stringify(Boolean(state.challengeAfterSave))}) revealChallenge(); fetch('/api/save', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload()) }); });

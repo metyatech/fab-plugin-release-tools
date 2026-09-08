@@ -133,6 +133,7 @@ async function chooseExactOption(page, labels, field, value, placeholders = []) 
     if (visible.length === 1) {
       if (await visible[0].isDisabled().catch(() => true)) throw new Error(`${field} did not expose exactly one enabled option for ${value}.`);
       await visible[0].click();
+      await waitForSelectionEvidence(page, control, field, value);
       return;
     }
     const labeledVisible = [];
@@ -143,11 +144,28 @@ async function chooseExactOption(page, labels, field, value, placeholders = []) 
     if (labeledVisible.length === 1) {
       if (await labeledVisible[0].isDisabled().catch(() => true)) throw new Error(`${field} did not expose exactly one enabled labeled control for ${value}.`);
       await labeledVisible[0].click();
+      await waitForSelectionEvidence(page, control, field, value);
       return;
     }
     await page.waitForTimeout(100);
   }
   throw new Error(`${field} did not expose exactly one enabled option for ${value} within ${FORMAT_FIELD_OPTION_TIMEOUT_MS}ms.`);
+}
+
+async function waitForSelectionEvidence(page, control, field, value) {
+  const deadline = Date.now() + FORMAT_FIELD_OPTION_TIMEOUT_MS;
+  while (Date.now() <= deadline) {
+    const inputValue = await control.inputValue().catch(() => '');
+    if (inputValue === value) return;
+    const removal = await visibleCount(exactButton(page, `Remove ${value}`));
+    if (removal.length === 1) return;
+    const selected = page.getByRole('option', { name: value, exact: true });
+    for (let index = 0; index < await selected.count(); index += 1) {
+      if (await selected.nth(index).isVisible().catch(() => false) && await selected.nth(index).getAttribute('aria-selected') === 'true') return;
+    }
+    await page.waitForTimeout(100);
+  }
+  throw new Error(`${field} did not expose selected-state evidence for ${value} within ${FORMAT_FIELD_OPTION_TIMEOUT_MS}ms.`);
 }
 
 async function fillUnrealVersionForm(page, manifest) {
