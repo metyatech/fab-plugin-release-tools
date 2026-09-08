@@ -2295,6 +2295,17 @@ test('format bootstrap fills the observed Fab placeholder-based version form', a
   assert.equal(fixture.mutations.filter((item) => item.pathname === '/api/save').length, 1);
 });
 
+test('format bootstrap accepts Fab Next buttons whose aria label omits the format name', async () => {
+  const { result, fixture } = await scenario({
+    state: { productFormats: [], formatChoiceNeedsNext: true, realObservedVersionForm: true, observedChooserNextAriaLabel: true },
+    mode: 'save',
+    saveDraftAuthorized: true,
+  });
+  assert.equal(result.result, 'PASS');
+  assert.equal(result.formatBootstrapCreated, true);
+  assert.equal(fixture.mutations.filter((item) => item.pathname === '/api/create-format').length, 1);
+});
+
 test('empty prefetched format inventory still exposes safe bootstrap beside an unrelated button', async () => {
   const { result, fixture } = await scenario({ state: { productFormats: [], strayFormatButton: true } });
   assert.equal(result.formatBootstrapRequired, true);

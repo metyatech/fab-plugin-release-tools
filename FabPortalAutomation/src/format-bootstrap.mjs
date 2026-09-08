@@ -62,7 +62,17 @@ function formatChoice(page) {
 
 async function advanceFormatChooser(page, formatName) {
   const chooser = formatChoice(page);
-  const next = await visibleCount(chooser.heading.locator('xpath=ancestor::*[@role="dialog"]').getByRole('button', { name: `Confirm selected option: ${formatName}`, exact: true }));
+  const dialog = chooser.heading.locator('xpath=ancestor::*[@role="dialog"]');
+  const candidates = dialog.getByRole('button');
+  const nextMatches = [];
+  for (let index = 0; index < await candidates.count(); index += 1) {
+    const candidate = candidates.nth(index);
+    if (!await candidate.isVisible().catch(() => false)) continue;
+    const text = (await candidate.innerText().catch(() => '')).trim();
+    const ariaLabel = (await candidate.getAttribute('aria-label')) ?? '';
+    if (text === 'Next' || /^Confirm selected option:\s*/i.test(ariaLabel)) nextMatches.push(candidate);
+  }
+  const next = nextMatches;
   if (next.length === 0) return false;
   if (next.length !== 1) throw new Error(`Format chooser Next control visible match count is ${next.length}.`);
   if (await next[0].isDisabled().catch(() => true)) throw new Error('Format chooser Next control was disabled after selecting Unreal Engine.');

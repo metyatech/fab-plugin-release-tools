@@ -39,7 +39,7 @@ function pageMarkup(state, listingId) {
     : state.formatChoiceButtonOnly
       ? `<button type="button" aria-label="Unreal Engine"${delayedChoiceStyle}>Unreal Engine</button>`
       : `<button type="button" role="option" aria-label="Unreal Engine"${delayedChoiceStyle}>Unreal Engine</button>`).join('');
-  const nextFormatButton = state.formatChoiceNeedsNext ? '<button type="button" aria-label="Confirm selected option: Unreal Engine" disabled>Next</button><button type="button" aria-label="Confirm" hidden>Confirm</button>' : '';
+  const nextFormatButton = state.formatChoiceNeedsNext ? `<button type="button" aria-label="${state.observedChooserNextAriaLabel ? 'Confirm selected option: ' : 'Confirm selected option: Unreal Engine'}" disabled>Next</button><button type="button" aria-label="Confirm" hidden>Confirm</button>` : '';
   const responsiveStyle = state.responsiveFormatNavigation ? '<style>[data-responsive-format-navigation]{display:block}@media (max-width: 1000px){[data-responsive-format-navigation]{display:none}}</style>' : '';
   const formatInventory = `<section aria-label="Included Files" data-testid="product-formats" data-responsive-format-navigation="${state.responsiveFormatNavigation ? 'true' : 'false'}" data-format-count="${productFormats.length}"${state.hideFormatInventory ? ' hidden' : ''}><h2>Included Files</h2>${productFormats.map((format) => `<button type="button" data-format-name="${html(format.name)}">${html(format.name)}</button>`).join('')}${addFormatButtons}</section>`;
   const portalPlatform = state.platformDisplay ?? (state.platforms?.[0] === 'Win64' ? 'Windows' : state.platforms?.[0] ?? 'Win64');
@@ -169,15 +169,15 @@ function pageMarkup(state, listingId) {
     document.querySelectorAll(${JSON.stringify(state.formatChoiceButtonOnly || state.formatChoiceWrapperAndButton ? '[role="dialog"][aria-label="Add new format"] button[aria-label="Unreal Engine"]' : '[role="option"][aria-label="Unreal Engine"]')}).forEach((choice) => choice.addEventListener('click', async () => {
       if (${JSON.stringify(Boolean(state.formatChoiceNeedsNext))}) {
         choice.setAttribute('aria-selected', 'true');
-        const next = document.querySelector('[role="dialog"][aria-label="Add new format"] [aria-label="Confirm selected option: Unreal Engine"]');
+        const next = document.querySelector('[role="dialog"][aria-label="Add new format"] [aria-label^="Confirm selected option:"]');
         if (next) next.disabled = false;
         return;
       }
       await createFormat();
     }));
-    document.querySelector('[role="dialog"][aria-label="Add new format"] [aria-label="Confirm selected option: Unreal Engine"]')?.addEventListener('click', () => {
+    document.querySelector('[role="dialog"][aria-label="Add new format"] [aria-label^="Confirm selected option:"]')?.addEventListener('click', () => {
       if (${JSON.stringify(Boolean(state.formatChoiceNeedsNext))}) {
-        const next = document.querySelector('[role="dialog"][aria-label="Add new format"] [aria-label="Confirm selected option: Unreal Engine"]');
+        const next = document.querySelector('[role="dialog"][aria-label="Add new format"] [aria-label^="Confirm selected option:"]');
         const confirm = document.querySelector('[role="dialog"][aria-label="Add new format"] [aria-label="Confirm"]');
         if (next) next.hidden = true;
         if (confirm) confirm.hidden = false;
