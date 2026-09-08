@@ -2269,6 +2269,15 @@ test('format bootstrap selects the visible button-only Fab chooser control befor
   assert.equal(fixture.mutations.filter((item) => item.pathname === '/api/save').length, 1);
 });
 
+test('format bootstrap clicks the nested Fab chooser button instead of its option wrapper', async () => {
+  const { result, fixture } = await scenario({ state: { productFormats: [], formatChoiceNeedsNext: true, formatChoiceWrapperAndButton: true }, mode: 'save', saveDraftAuthorized: true });
+  assert.equal(result.result, 'PASS');
+  assert.equal(result.formatBootstrapCreated, true);
+  assert.equal(fixture.state.productFormats.filter((format) => format.name === 'Unreal Engine').length, 1);
+  assert.equal(fixture.mutations.filter((item) => item.pathname === '/api/create-format').length, 1);
+  assert.equal(fixture.mutations.filter((item) => item.pathname === '/api/save').length, 1);
+});
+
 test('format bootstrap accepts Fab custom version combobox placeholders', async () => {
   const { result, fixture } = await scenario({ state: { productFormats: [], formatChoiceNeedsNext: true, customVersionControls: true }, mode: 'save', saveDraftAuthorized: true });
   assert.equal(result.result, 'PASS');

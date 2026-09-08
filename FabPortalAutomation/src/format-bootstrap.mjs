@@ -52,15 +52,17 @@ async function productFormatButtons(page) {
 }
 
 function formatChoice(page) {
+  const root = page.locator('[role="dialog"]:visible').first();
   return {
-    heading: page.getByRole('heading', { name: /(?:Choose a format|Add new format)/i }),
-    options: page.getByRole('option', { name: 'Unreal Engine', exact: true }),
-    buttons: page.getByRole('button', { name: 'Unreal Engine', exact: true }),
+    heading: root.getByRole('heading', { name: /(?:Choose a format|Add new format)/i }),
+    options: root.getByRole('option', { name: 'Unreal Engine', exact: true }),
+    buttons: root.getByRole('button', { name: 'Unreal Engine', exact: true }),
   };
 }
 
 async function advanceFormatChooser(page, formatName) {
-  const next = await visibleCount(page.getByRole('button', { name: `Confirm selected option: ${formatName}`, exact: true }));
+  const chooser = formatChoice(page);
+  const next = await visibleCount(chooser.heading.locator('xpath=ancestor::*[@role="dialog"]').getByRole('button', { name: `Confirm selected option: ${formatName}`, exact: true }));
   if (next.length === 0) return false;
   if (next.length !== 1) throw new Error(`Format chooser Next control visible match count is ${next.length}.`);
   if (await next[0].isDisabled().catch(() => true)) throw new Error('Format chooser Next control was disabled after selecting Unreal Engine.');
@@ -184,7 +186,7 @@ async function formatChooserActionEvidence(page) {
 async function readChooserState(page) {
   const choice = formatChoice(page);
   const options = await visibleCount(choice.options);
-  const buttons = options.length === 0 ? await visibleCount(choice.buttons) : [];
+  const buttons = await visibleCount(choice.buttons);
   const state = await page.evaluate(() => {
     const visible = (element) => Boolean(element?.getClientRects?.().length);
     const text = (element) => (element?.innerText ?? '').trim();
@@ -208,7 +210,7 @@ async function readChooserState(page) {
   });
   return {
     ...state,
-    optionCount: options.length + buttons.length,
+    optionCount: buttons.length > 0 ? buttons.length : options.length,
     options,
     buttons,
   };
@@ -224,7 +226,7 @@ export async function waitForFormatChooserReady(page, { timeoutMs = FORMAT_CHOOS
       return { ready: false, reason: 'ambiguous', ...last };
     }
     if (last.headingCount === 1 && last.skeletonCount === 0 && last.optionCount === 1) {
-      return { ready: true, ...last, choice: last.options[0] ?? last.buttons[0] };
+      return { ready: true, ...last, choice: last.buttons[0] ?? last.options[0] };
     }
     await page.waitForTimeout(pollMs);
   }
