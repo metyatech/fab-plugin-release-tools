@@ -4,6 +4,7 @@ import { loadSubmissionManifest } from './manifest.mjs';
 import { createStdinManualInteraction } from './manual-handoff.mjs';
 import { runPortalAutomation } from './portal.mjs';
 import { createRunDirectory, writeRunReport } from './report.mjs';
+import { FAB_WRITE_AUTOMATION_DISABLED_MESSAGE } from './write-policy.mjs';
 
 const VERSION = '1.0.0';
 
@@ -12,12 +13,9 @@ function help() {
 
 Usage:
   pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> -CdpEndpoint <endpoint>
-  pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> -CdpEndpoint <endpoint> -SaveDraft
-  pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> -CdpEndpoint <endpoint> -SaveDraft -SubmitForReview
 
-Default mode is read-only verification. Save Draft and Submit for review are
-explicit, guarded operations. Pending approval listings are never modified and
-Cancel submission is never invoked automatically. If a visible Cloudflare
+Fab Portal automation is read-only verification. Listing changes must be made
+by an interactive AI agent or the Fab Portal UI. If a visible Cloudflare
 challenge is detected, automation pauses without browser operations until you
 complete it manually and press Enter; q + Enter cancels the run.
 
@@ -25,8 +23,6 @@ Options:
   --manifest <path>       FabPortalSubmission.json (required)
   --cdp-endpoint <url>    Existing dedicated Chrome CDP endpoint (required)
   --output <directory>    Artifact root (default: ./artifacts)
-  --save-draft            Explicitly authorize Save Draft
-  --submit-for-review     Explicitly authorize Submit for review; requires --save-draft
   --json                  Emit one machine-readable result object
   --verbose               Emit additional non-secret diagnostics
   --help, -h              Show this help
@@ -50,7 +46,7 @@ function parseArgs(argv) {
       result[arg.slice(2).replaceAll('-', '')] = value;
     } else throw new Error(`Unknown option: ${arg}. Use --help.`);
   }
-  if (result.submitForReview && !result.saveDraft) throw new Error('--submit-for-review requires --save-draft.');
+  if (result.saveDraft || result.submitForReview) throw new Error(FAB_WRITE_AUTOMATION_DISABLED_MESSAGE);
   if (!result.help && !result.version && (!result.manifest || !result.cdpendpoint)) throw new Error('--manifest and --cdp-endpoint are required. Use --help.');
   return result;
 }

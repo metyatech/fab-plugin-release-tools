@@ -3,6 +3,7 @@ import { compareManifest, summarizeComparison } from './comparison.mjs';
 import { buildMutationPlan, executeMutationPlan, preflightMutationPlan } from './mutation-plan.mjs';
 import { createStdinManualInteraction, DEFAULT_MANUAL_CHALLENGE_MAX_CYCLES, normalizeManualInteractionDecision } from './manual-handoff.mjs';
 import { installNetworkGuard } from './network-guard.mjs';
+import { assertFabPortalReadOnly } from './write-policy.mjs';
 import { dangerousActionCandidates, listingEditUrl, resolveCandidate, saveCandidates, submitCandidates } from './locators.mjs';
 import { classifyFabView, isFormatView } from './view-detection.mjs';
 
@@ -661,6 +662,7 @@ async function executeSubmitFlow(page, guard, result) {
 }
 
 export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'verify', saveDraftAuthorized = false, outputDirectory = null, origin = 'https://www.fab.com', page: injectedPage = null, context: injectedContext = null, manualInteraction = null, maxManualChallengeCycles = DEFAULT_MANUAL_CHALLENGE_MAX_CYCLES }) {
+  assertFabPortalReadOnly(mode);
   if (mode === 'save' && !saveDraftAuthorized) throw new Error('Save Draft requires explicit Save Draft authorization.');
   if (mode === 'submit' && !saveDraftAuthorized) throw new Error('Submit for review requires explicit Save Draft authorization.');
   let browser = null;

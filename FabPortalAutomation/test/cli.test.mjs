@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { main } from '../src/cli.mjs';
+import { help, main } from '../src/cli.mjs';
 
 const manifestInfo = {
   manifest: { pluginName: 'FixturePlugin', listingId: '11111111-1111-4111-8111-111111111111', title: 'Fixture Product', portalReady: true },
@@ -43,22 +43,17 @@ test('actual CLI main path denies write authorization by default', async () => {
   assert.equal(typeof received.manualInteraction.waitForConfirmation, 'function');
 });
 
-test('actual CLI main path propagates explicit Save Draft authorization', async () => {
-  const { code, received, loadOptions } = await invoke(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', '--save-draft', '--json']);
+test('CLI help exposes read-only verification without write usage', async () => {
+  const { code } = await invoke(['--help']);
   assert.equal(code, 0);
-  assert.equal(received.mode, 'save');
-  assert.equal(received.saveDraftAuthorized, true);
-  assert.deepEqual(loadOptions, { requirePortalReady: true });
+  assert.doesNotMatch(help(), /-SaveDraft|-SubmitForReview|--save-draft|--submit-for-review/);
 });
 
-test('CLI rejects Submit for review without Save Draft before core execution', async () => {
-  await assert.rejects(() => invoke(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', '--submit-for-review', '--json']), /requires --save-draft/);
-});
-
-test('actual CLI main path propagates submit mode with Save Draft authorization', async () => {
-  const { code, received, loadOptions } = await invoke(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', '--save-draft', '--submit-for-review', '--json']);
-  assert.equal(code, 0);
-  assert.equal(received.mode, 'submit');
-  assert.equal(received.saveDraftAuthorized, true);
-  assert.deepEqual(loadOptions, { requirePortalReady: true });
+test('CLI rejects all write intents before loading or attaching to Fab', async () => {
+  for (const flags of [['--save-draft'], ['--submit-for-review'], ['--save-draft', '--submit-for-review']]) {
+    await assert.rejects(
+      () => invoke(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', ...flags, '--json']),
+      /Fab Portal write automation is disabled/,
+    );
+  }
 });

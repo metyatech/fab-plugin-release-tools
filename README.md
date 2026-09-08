@@ -332,41 +332,31 @@ pwsh .\Invoke-FabPortalSubmission.ps1 `
   -CdpEndpoint <http://127.0.0.1:port>
 ```
 
-The default is read-only verification. Explicit `-SaveDraft` enables a guarded
-draft save, and `-SaveDraft -SubmitForReview` additionally enables submission.
-Pending approval listings cannot be modified; Cancel submission is never
-invoked automatically. The automation never handles Cloudflare, credentials,
+Fab Portal automation is read-only. It verifies the currently open listing but
+does not modify listings. `-SaveDraft` and `-SubmitForReview` are rejected before
+manifest loading or browser attachment. Use an interactive AI agent or the Fab
+Portal UI for listing changes. The automation never handles Cloudflare, credentials,
 MFA, or browser storage. If a visible Cloudflare/security challenge appears,
 the automation enters a manual handoff: browser operations stop, you complete
 the challenge in the dedicated Chrome, then press Enter here to resume. Use
 `q` followed by Enter to cancel the run. A bounded number of handoff cycles is
-allowed; a challenge after staged mutations fails safely and requires a clean
-restart. Verify, Save Draft, and Submit modes all require exactly one already-
-open target listing page; the automation does not create a tab or navigate to
-repair the initial target before the handoff.
+allowed. Verify requires exactly one already-open target listing page; the
+automation does not create a tab or navigate to repair the initial target before
+the handoff.
 
 A verify-only `PASS` reports that observation completed without a proven
 mismatch; it does not imply write readiness. The run report records
-`writeReady` and `writeBlockers` when review-locked status or unresolved
-critical fields would block a future write.
+`writeReady` and `writeBlockers` as diagnostics only. This tool does not save,
+submit, publish, cancel, delete, unlist, create formats, edit fields, or upload
+media.
 
 Staging manifests with `portalReady: false` and unresolved package
 `projectFileLink: null` values are valid for read-only verification. They are
-never written to Fab; Save Draft and Submit for review require a manifest with
-`portalReady: true` and a verified HTTPS Project File Link for every package.
+never written to Fab.
 
-Save and submit safety requires every manifest-owned critical field to be
-readable and either already matching or backed by an approved writable locator,
-including descriptions, taxonomy, tags, format/engine/platform, license,
-prices, AI/content flags, activation, URLs, Technical Information text, media,
-and every package Project File Link. An empty `subcategory` is legitimately
-`NOT_APPLICABLE` when Fab exposes no distinct subcategory. Existing media whose
-identity cannot be proven remains a write blocker.
-
-Submit-for-review uses a scoped confirmation-dialog state machine when Fab
-requires confirmation. `submitInvoked` records execution of the final submit
-action, while `submitAccepted` is true only after the listing is read back in
-the accepted `Pending approval` state. Cancel submission is never used.
+An empty `subcategory` is legitimately `NOT_APPLICABLE` when Fab exposes no
+distinct subcategory. Existing media whose identity cannot be proven remains a
+diagnostic mismatch.
 
 ## Migration note
 

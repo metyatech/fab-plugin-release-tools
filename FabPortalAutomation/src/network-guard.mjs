@@ -1,3 +1,5 @@
+import { FAB_WRITE_AUTOMATION_DISABLED } from './write-policy.mjs';
+
 const SECRET_QUERY_KEYS = /^(?:token|access_token|auth|authorization|signature|sig|key|api[_-]?key)$/i;
 
 function sanitizeUrl(url) {
@@ -65,7 +67,7 @@ export function installNetworkGuard(context, { mode = 'verify' } = {}) {
     const intent = classifyRequestIntent(url, method, graph);
     const fabRequest = url.hostname === 'www.fab.com' || url.hostname.endsWith('.fab.com') || url.hostname === '127.0.0.1' || url.hostname === 'localhost';
     const mutation = isMutation(method, graph, intent);
-    const block = mutation && (!fabRequest || !phaseAllows(effectiveMode, state.phase, intent));
+    const block = mutation && (!fabRequest || FAB_WRITE_AUTOMATION_DISABLED || !phaseAllows(effectiveMode, state.phase, intent));
     if (fabRequest && mutation) state.observed += 1;
     if (fabRequest && state.requests.length < 1000) {
       state.requests.push({

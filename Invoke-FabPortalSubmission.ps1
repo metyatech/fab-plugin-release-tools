@@ -69,14 +69,15 @@ if ($Version) {
     exit $versionResult.ExitCode
 }
 
+if ($SaveDraft -or $SubmitForReview) {
+    throw 'Fab Portal write automation is disabled. Use an interactive AI agent or the Fab Portal UI to make listing changes.'
+}
+
 if ([string]::IsNullOrWhiteSpace($ManifestPath)) {
     throw 'ManifestPath is required. Use -Help for usage.'
 }
 if ([string]::IsNullOrWhiteSpace($CdpEndpoint)) {
     throw 'CdpEndpoint is required. Use -Help for usage.'
-}
-if ($SubmitForReview -and -not $SaveDraft) {
-    throw 'SubmitForReview requires SaveDraft.'
 }
 $runtime = Join-Path $PSScriptRoot 'FabPortalAutomation'
 if (-not (Test-Path -LiteralPath (Join-Path $runtime 'node_modules\playwright-core\package.json') -PathType Leaf)) {
@@ -92,8 +93,6 @@ if (-not [string]::IsNullOrWhiteSpace($OutputDirectory)) {
     [void]$arguments.Add('--output')
     [void]$arguments.Add([System.IO.Path]::GetFullPath($OutputDirectory))
 }
-if ($SaveDraft) { [void]$arguments.Add('--save-draft') }
-if ($SubmitForReview) { [void]$arguments.Add('--submit-for-review') }
 if ($Json) { [void]$arguments.Add('--json') }
 if ($VerboseOutput) { [void]$arguments.Add('--verbose') }
 $result = Invoke-NodeProcess -Arguments $arguments.ToArray() -Interactive
