@@ -397,11 +397,10 @@ Allow manually. The automation does not click that security prompt. If the
 connection is waiting for that approval, it pauses for the manual confirmation
 before retrying the same endpoint once.
 
-If you need to retry verification or saving without creating another browser
-connection, use session mode. It connects once, keeps the approved browser
-context open, and accepts only `verify`, `save`, and `quit` commands. A `save`
-command is the explicit Save Draft authorization for that command; session mode
-does not expose Submit for review, Publish, Cancel, Delete, or Unlist commands:
+If you need to retry verification without creating another browser connection,
+use session mode. It connects once, keeps the approved browser context open,
+and accepts only the read-only `verify`, `help`, and `quit` commands. Fab listing
+write automation is disabled in this repository:
 
 ```powershell
 pwsh .\Invoke-FabPortalSubmission.ps1 `
@@ -411,23 +410,20 @@ pwsh .\Invoke-FabPortalSubmission.ps1 `
 ```
 
 If Chrome shows its Remote Debugging approval for this connection, click Allow
-manually. Then type `verify` or `save` at the `fab-session>` prompt; both
-commands reuse the same approved connection. Type `quit` to close the
-automation connection. The endpoint is supplied only for this run and is never
-persisted.
+manually. Then type `verify` at the `fab-session>` prompt. Type `help` for the
+read-only command list or `quit` to close the automation connection. The
+endpoint is supplied only for this run and is never persisted.
 
-The default is read-only verification. Explicit `-SaveDraft` enables a guarded
-draft save, and `-SaveDraft -SubmitForReview` additionally enables submission.
-Pending approval listings cannot be modified; Cancel submission is never
-invoked automatically. The automation never handles Cloudflare, credentials,
-MFA, or browser storage. If a visible Cloudflare/security challenge appears,
-the automation enters a manual handoff: browser operations stop, you complete
-the challenge in the dedicated Chrome, then press Enter here to resume. Use
-`q` followed by Enter to cancel the run. A bounded number of handoff cycles is
-allowed; a challenge after staged mutations fails safely and requires a clean
-restart. Verify, Save Draft, and Submit modes all require exactly one already-
-open target listing page; the automation does not create a tab or navigate to
-repair the initial target before the handoff.
+The portal CLI is read-only. `-SaveDraft`, `-TagsOnly`, and
+`-SubmitForReview` are rejected before manifest loading or browser attachment.
+The same write-disabled policy protects direct Node-module calls and the
+network guard. Use an interactive AI agent or the Fab Portal UI for listing
+changes; this tool does not create formats, edit fields, upload media, save
+drafts, or submit listings. The automation never handles Cloudflare,
+credentials, MFA, or browser storage. If a visible Cloudflare/security
+challenge appears, the automation enters a manual handoff: browser operations
+stop, you complete the challenge in the dedicated Chrome, then press Enter
+here to resume. Use `q` followed by Enter to cancel the run.
 
 A verify-only `PASS` reports that observation completed without a proven
 mismatch; it does not imply write readiness. The run report records
@@ -442,16 +438,10 @@ missing, malformed, mismatched, or contradictory data remains unknown and
 fails closed. Verify reports `formatBootstrapRequired`, the proven
 `formatBootstrapFormatCount`, and `formatBootstrapAvailable`; it never creates
 a format. With explicit
-`-SaveDraft` authorization, the portal automation may create exactly one
-supported `Unreal Engine` product format when the listing UUID, title, Draft
-status, empty format inventory, Add new format control, chooser choice, and
-final creation action are all uniquely proven. Existing exact Unreal Engine
-formats are reused on retry. Ambiguous, duplicate, or unrelated formats fail
-closed without mutation. Format creation uses its own narrowly allowlisted
-`format-create` network phase and does not broaden permissions for Submit,
-Publish, Delete, Cancel, or other unknown mutations. If a later preflight fails
-after format creation, the tool stops without Save, Submit, or destructive
-rollback and reports the partial state.
+The former format-bootstrap and field-write paths remain guarded in source for
+regression coverage, but are disabled at runtime. Verify may report that a
+format bootstrap is available; it never creates a format or authorizes any
+listing mutation.
 
 Format navigation is observed independently from the prefetched inventory. If
 Fab's responsive layout does not mount EditionNav at the current viewport, the
@@ -468,25 +458,14 @@ error, or ambiguous option set fails closed; opening the chooser and waiting
 for readiness never authorizes a format mutation.
 
 Some new listings expose no format controls until a listing prerequisite has
-been persisted. The observed Fab Category autosave is supported only through
-the dedicated `listing-prerequisite-save` phase: the target UUID, exact
-category identity, listing type, title, complete payload key set, and every
-non-category sibling value must match the prefetched listing snapshot. Verify
-always blocks it, and no generic listing PATCH is admitted. This narrow path
-does not authorize format creation, Submit, Publish, Delete, or Cancel; an
-unexpected payload or phase fails closed.
+been persisted. The observed Category autosave contract is retained only as
+disabled regression coverage. Verify always blocks it, and no generic listing
+PATCH is admitted.
 
-Standard-license persistence uses separate guarded phases. A license-only
-payload is never treated as complete: an empty `licenses` array and partial
-Personal selection remain blocked. When Fab emits the observed three-step
-autosave sequence, `persistStandardLicensePricing` blocks those incomplete
-requests and admits exactly one final payload containing only the Personal and
-Professional `licenseId`/`priceTierId` entries selected from the manifest's
-exact USD price options. The `listing-license-pricing-save` phase still requires
-the exact target UUID, exact payload keys, exact tier identities, and unchanged
-sibling fields. Verify, generic listing updates, price changes outside this
-contract, and unknown payloads remain blocked; this path does not authorize
-format creation, Submit, Publish, Delete, or Cancel.
+Standard-license persistence and other listing-write contracts are retained as
+disabled regression coverage. Verify and the central write policy block them;
+no license, price, category, tag, format, media, or other listing mutation is
+available through this tool.
 
 Listing comparison preserves a visible empty rich-text editor as an observed
 empty value, so a non-empty manifest description is reported as `MISMATCH`
@@ -514,19 +493,18 @@ Staging manifests with `portalReady: false` and unresolved package
 never written to Fab; Save Draft and Submit for review require a manifest with
 `portalReady: true` and a verified HTTPS Project File Link for every package.
 
-Save and submit safety requires every manifest-owned critical field to be
-readable and either already matching or backed by an approved writable locator,
-including Draft-owned descriptions, taxonomy, tags, format/engine/platform,
-license, prices, AI/content flags, URLs, Technical Information text, media, and
-every package Project File Link. Activation is checked only at the explicit
-Submit boundary. An empty `subcategory` is legitimately
+The historical Save and submit safety model required every manifest-owned
+critical field to be readable and either already matching or backed by an
+approved writable locator, including Draft-owned descriptions, taxonomy, tags,
+format/engine/platform, license, prices, AI/content flags, URLs, Technical
+Information text, media, and every package Project File Link. That write model
+is currently disabled. Activation is checked only at the explicit Submit
+boundary in the retained regression model. An empty `subcategory` is legitimately
 `NOT_APPLICABLE` when Fab exposes no distinct subcategory. Existing media whose
 identity cannot be proven remains a write blocker.
 
-Submit-for-review uses a scoped confirmation-dialog state machine when Fab
-requires confirmation. `submitInvoked` records execution of the final submit
-action, while `submitAccepted` is true only after the listing is read back in
-the accepted `Pending approval` state. Cancel submission is never used.
+Submit-for-review handling is retained only as disabled regression coverage.
+This tool never invokes Submit, Publish, Cancel, Delete, or Unlist.
 
 ## Migration note
 

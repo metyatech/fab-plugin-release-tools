@@ -190,7 +190,7 @@ export function validateListingTagsPayload({ method, url, body }, expected) {
   return { ok: true };
 }
 
-export function installNetworkGuard(context, { mode = 'verify', listingPrerequisite = null, listingLicense = null, listingLicensePricing = null, listingTags = null, formatCreate = null } = {}) {
+export function installNetworkGuard(context, { mode = 'verify', writeAutomationEnabled = false, listingPrerequisite = null, listingLicense = null, listingLicensePricing = null, listingTags = null, formatCreate = null } = {}) {
   const effectiveMode = mode === 'write' ? 'save' : mode;
   const state = { mode: effectiveMode, phase: 'stage', phaseHistory: ['stage'], requests: [], observed: 0, blocked: 0 };
   const handler = async (route) => {
@@ -231,7 +231,7 @@ export function installNetworkGuard(context, { mode = 'verify', listingPrerequis
     }
     const fabRequest = url.hostname === 'www.fab.com' || url.hostname.endsWith('.fab.com') || url.hostname === '127.0.0.1' || url.hostname === 'localhost';
     const mutation = isMutation(method, graph, intent);
-    const block = mutation && (!fabRequest || !phaseAllows(effectiveMode, state.phase, intent));
+    const block = mutation && (!fabRequest || !writeAutomationEnabled || !phaseAllows(effectiveMode, state.phase, intent));
     if (fabRequest && mutation) state.observed += 1;
     if (fabRequest && state.requests.length < 1000) {
       state.requests.push({

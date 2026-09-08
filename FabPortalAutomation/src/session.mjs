@@ -6,11 +6,11 @@ import { runPortalAutomation, selectExistingTargetPage } from './portal.mjs';
 import { createRunDirectory, writeRunReport } from './report.mjs';
 import { connectBrowserTransport } from './transport.mjs';
 
-const SESSION_COMMANDS = new Set(['verify', 'save', 'quit', 'exit', 'q']);
+const SESSION_COMMANDS = new Set(['verify', 'help', 'quit', 'exit', 'q']);
 
 export function normalizeSessionCommand(value) {
   const command = String(value ?? '').trim().toLowerCase();
-  if (!SESSION_COMMANDS.has(command)) throw new Error('Unknown session command. Use verify, save, or quit.');
+  if (!SESSION_COMMANDS.has(command)) throw new Error('Unknown session command. This session is read-only; use verify, help, or quit.');
   if (command === 'exit' || command === 'q') return 'quit';
   return command;
 }
@@ -56,7 +56,7 @@ export async function runPortalSession({
 
   const prompt = readline.createInterface({ input, output });
   output.write('FAB PORTAL SESSION: READY\n');
-  output.write('The browser connection will stay open. Commands: verify, save, quit.\n');
+  output.write('The browser connection will stay open. This session is read-only. Commands: verify, help, quit.\n');
   let lastResult = null;
   try {
     while (true) {
@@ -69,13 +69,17 @@ export async function runPortalSession({
         continue;
       }
       if (command === 'quit') break;
+      if (command === 'help') {
+        output.write('This session is read-only. Commands: verify, help, quit. Fab listing writes are disabled.\n');
+        continue;
+      }
       try {
         const page = selectPage(context, manifestInfo.manifest, origin);
         const directory = await createDirectory(outputDirectory ?? undefined, manifestInfo.manifest.pluginName);
         const result = await run({
           manifestInfo,
           mode: command,
-          saveDraftAuthorized: command === 'save',
+          saveDraftAuthorized: false,
           outputDirectory: directory,
           origin,
           context,

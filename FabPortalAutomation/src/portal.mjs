@@ -2,6 +2,7 @@ import { compareManifest, summarizeComparison } from './comparison.mjs';
 import { buildMutationPlan, executeMutationPlan, preflightMutationPlan } from './mutation-plan.mjs';
 import { createStdinManualInteraction, DEFAULT_MANUAL_CHALLENGE_MAX_CYCLES, normalizeManualInteractionDecision } from './manual-handoff.mjs';
 import { installNetworkGuard } from './network-guard.mjs';
+import { assertFabWriteAutomationEnabled } from './write-policy.mjs';
 import { dangerousActionCandidates, listingEditUrl, resolveCandidate, saveCandidates, submitCandidates } from './locators.mjs';
 import { classifyFabView, isFormatView } from './view-detection.mjs';
 import { DEFERRED_FORMAT_FIELDS, executeFormatBootstrap, inspectFormatBootstrap } from './format-bootstrap.mjs';
@@ -684,7 +685,8 @@ async function executeSubmitFlow(page, guard, result) {
   }
 }
 
-export async function runPortalAutomation({ manifestInfo, cdpEndpoint = null, cdpWebSocketEndpoint = null, mode = 'verify', saveDraftAuthorized = false, outputDirectory = null, origin = 'https://www.fab.com', page: injectedPage = null, context: injectedContext = null, manualInteraction = null, maxManualChallengeCycles = DEFAULT_MANUAL_CHALLENGE_MAX_CYCLES }) {
+export async function runPortalAutomation({ manifestInfo, cdpEndpoint = null, cdpWebSocketEndpoint = null, mode = 'verify', saveDraftAuthorized = false, writeAutomationEnabled = false, outputDirectory = null, origin = 'https://www.fab.com', page: injectedPage = null, context: injectedContext = null, manualInteraction = null, maxManualChallengeCycles = DEFAULT_MANUAL_CHALLENGE_MAX_CYCLES }) {
+  assertFabWriteAutomationEnabled(mode, writeAutomationEnabled);
   if (mode === 'save' && !saveDraftAuthorized) throw new Error('Save Draft requires explicit Save Draft authorization.');
   if (mode === 'tags-only' && saveDraftAuthorized) throw new Error('Tags-only mode cannot authorize Save Draft.');
   if (mode === 'submit' && !saveDraftAuthorized) throw new Error('Submit for review requires explicit Save Draft authorization.');
@@ -715,7 +717,7 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint = null, cd
       return null;
     }
   })();
-  const guard = installNetworkGuard(context, { mode, listingTags: listingTagsContract, formatCreate: formatCreateContract });
+  const guard = installNetworkGuard(context, { mode, writeAutomationEnabled, listingTags: listingTagsContract, formatCreate: formatCreateContract });
   const result = {
     schemaVersion: 1,
     mode,

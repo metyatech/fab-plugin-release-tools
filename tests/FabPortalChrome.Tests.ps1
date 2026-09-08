@@ -5,7 +5,24 @@ $ErrorActionPreference = 'Stop'
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $modulePath = Join-Path $repositoryRoot 'FabPortalAutomation\src\fab-portal-chrome.psm1'
+$script:submissionScript = Join-Path $repositoryRoot 'Invoke-FabPortalSubmission.ps1'
 Import-Module $modulePath -Force
+
+Describe 'Fab portal write entrypoint policy' {
+    It 'rejects Save Draft before browser attachment' {
+        $output = (& pwsh -NoProfile -File $submissionScript -SaveDraft 2>&1 | Out-String)
+        $exitCode = $LASTEXITCODE
+        $exitCode | Should -Not -Be 0
+        $output | Should -Match 'Fab Portal write automation is disabled'
+    }
+
+    It 'rejects Submit for review before browser attachment' {
+        $output = (& pwsh -NoProfile -File $submissionScript -SubmitForReview 2>&1 | Out-String)
+        $exitCode = $LASTEXITCODE
+        $exitCode | Should -Not -Be 0
+        $output | Should -Match 'Fab Portal write automation is disabled'
+    }
+}
 
 Describe 'Fab dedicated Chrome launcher' {
     It 'rejects the default Chrome user-data directory and descendants' {

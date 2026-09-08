@@ -76,12 +76,16 @@ test('CLI session mode passes one run-scoped transport to the session host', asy
 });
 
 test('CLI session mode rejects write flags and JSON output', () => {
-  for (const flag of ['--save-draft', '--tags-only', '--submit-for-review', '--json']) {
+  for (const flag of ['--save-draft', '--tags-only', '--submit-for-review']) {
     assert.throws(
       () => parseArgs(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', '--session', flag]),
-      /--session accepts only interactive verify, save, and quit commands/,
+      /Fab Portal write automation is disabled/,
     );
   }
+  assert.throws(
+    () => parseArgs(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', '--session', '--json']),
+    /--session accepts only interactive verify, help, and quit commands/,
+  );
 });
 
 test('CLI rejects both transport endpoints', async () => {
@@ -91,34 +95,28 @@ test('CLI rejects both transport endpoints', async () => {
   );
 });
 
-test('actual CLI main path propagates explicit Save Draft authorization', async () => {
-  const { code, received, loadOptions } = await invoke(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', '--save-draft', '--json']);
-  assert.equal(code, 0);
-  assert.equal(received.mode, 'save');
-  assert.equal(received.saveDraftAuthorized, true);
-  assert.deepEqual(loadOptions, { requirePortalReady: true });
+test('CLI rejects Save Draft before loading or attaching to Fab', async () => {
+  await assert.rejects(
+    () => invoke(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', '--save-draft', '--json']),
+    /Fab Portal write automation is disabled/,
+  );
 });
 
-test('CLI exposes an explicit Tags-only mode without Save Draft authorization', async () => {
-  const { code, received, loadOptions } = await invoke(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', '--tags-only', '--json']);
-  assert.equal(code, 0);
-  assert.equal(received.mode, 'tags-only');
-  assert.equal(received.saveDraftAuthorized, false);
-  assert.deepEqual(loadOptions, { requirePortalReady: true });
+test('CLI rejects Tags-only write mode before loading or attaching to Fab', async () => {
+  await assert.rejects(
+    () => invoke(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', '--tags-only', '--json']),
+    /Fab Portal write automation is disabled/,
+  );
 });
 
-test('CLI rejects Tags-only mode combined with Save Draft', async () => {
-  await assert.rejects(() => invoke(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', '--tags-only', '--save-draft', '--json']), /cannot be combined/);
+test('CLI rejects every write mode before loading or attaching to Fab', async () => {
+  await assert.rejects(() => invoke(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', '--tags-only', '--save-draft', '--json']), /Fab Portal write automation is disabled/);
+  await assert.rejects(() => invoke(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', '--save-draft', '--submit-for-review', '--json']), /Fab Portal write automation is disabled/);
 });
 
-test('CLI rejects Submit for review without Save Draft before core execution', async () => {
-  await assert.rejects(() => invoke(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', '--submit-for-review', '--json']), /requires --save-draft/);
-});
-
-test('actual CLI main path propagates submit mode with Save Draft authorization', async () => {
-  const { code, received, loadOptions } = await invoke(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', '--save-draft', '--submit-for-review', '--json']);
-  assert.equal(code, 0);
-  assert.equal(received.mode, 'submit');
-  assert.equal(received.saveDraftAuthorized, true);
-  assert.deepEqual(loadOptions, { requirePortalReady: true });
+test('CLI rejects Submit for review before loading or attaching to Fab', async () => {
+  await assert.rejects(
+    () => invoke(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', '--submit-for-review', '--json']),
+    /Fab Portal write automation is disabled/,
+  );
 });

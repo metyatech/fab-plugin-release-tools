@@ -72,6 +72,10 @@ if ($Version) {
     exit $versionResult.ExitCode
 }
 
+if ($SaveDraft -or $TagsOnly -or $SubmitForReview) {
+    throw 'Fab Portal write automation is disabled. Use an interactive AI agent or manual Fab Portal workflow for listing changes.'
+}
+
 if ([string]::IsNullOrWhiteSpace($ManifestPath)) {
     throw 'ManifestPath is required. Use -Help for usage.'
 }
@@ -81,14 +85,8 @@ if ([string]::IsNullOrWhiteSpace($CdpEndpoint) -and [string]::IsNullOrWhiteSpace
 if (-not [string]::IsNullOrWhiteSpace($CdpEndpoint) -and -not [string]::IsNullOrWhiteSpace($CdpWebSocketEndpoint)) {
     throw 'CdpEndpoint and CdpWebSocketEndpoint are mutually exclusive.'
 }
-if ($SubmitForReview -and -not $SaveDraft) {
-    throw 'SubmitForReview requires SaveDraft.'
-}
-if ($TagsOnly -and ($SaveDraft -or $SubmitForReview)) {
-    throw 'TagsOnly cannot be combined with SaveDraft or SubmitForReview.'
-}
-if ($Session -and ($SaveDraft -or $TagsOnly -or $SubmitForReview -or $Json)) {
-    throw 'Session accepts only interactive verify, save, and quit commands; do not combine with SaveDraft, TagsOnly, SubmitForReview, or Json.'
+if ($Session -and $Json) {
+    throw 'Session accepts only interactive verify, help, and quit commands; do not combine with Json.'
 }
 $runtime = Join-Path $PSScriptRoot 'FabPortalAutomation'
 if (-not (Test-Path -LiteralPath (Join-Path $runtime 'node_modules\playwright-core\package.json') -PathType Leaf)) {
@@ -109,9 +107,6 @@ if (-not [string]::IsNullOrWhiteSpace($OutputDirectory)) {
     [void]$arguments.Add('--output')
     [void]$arguments.Add([System.IO.Path]::GetFullPath($OutputDirectory))
 }
-if ($SaveDraft) { [void]$arguments.Add('--save-draft') }
-if ($TagsOnly) { [void]$arguments.Add('--tags-only') }
-if ($SubmitForReview) { [void]$arguments.Add('--submit-for-review') }
 if ($Session) { [void]$arguments.Add('--session') }
 if ($Json) { [void]$arguments.Add('--json') }
 if ($VerboseOutput) { [void]$arguments.Add('--verbose') }

@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { PassThrough, Writable } from 'node:stream';
 import test from 'node:test';
-import { runPortalSession } from '../src/session.mjs';
+import { normalizeSessionCommand, runPortalSession } from '../src/session.mjs';
 
-test('session mode reuses one browser connection for verify and save commands', async () => {
+test('session mode reuses one browser connection for read-only commands', async () => {
   const calls = [];
   const reports = [];
   let outputText = '';
@@ -14,7 +14,7 @@ test('session mode reuses one browser connection for verify and save commands', 
     close: async () => { calls.push({ type: 'close' }); },
   };
   const input = new PassThrough();
-  const commands = ['verify\n', 'save\n', 'quit\n'];
+  const commands = ['verify\n', 'help\n', 'verify\n', 'quit\n'];
   let commandIndex = 0;
   const output = new Writable({
     write(chunk, _encoding, callback) {
@@ -60,7 +60,7 @@ test('session mode reuses one browser connection for verify and save commands', 
           mode: options.mode,
           result: 'PASS',
           formatBootstrapFormatCount: 0,
-          saveInvoked: options.mode === 'save',
+          saveInvoked: false,
           network: { networkMutationRequestsObserved: 0, networkMutationRequestsBlocked: 0 },
           blockers: [],
           comparison: null,
@@ -75,17 +75,21 @@ test('session mode reuses one browser connection for verify and save commands', 
   assert.equal(calls.filter((call) => call.type === 'connect').length, 1);
   assert.equal(calls.filter((call) => call.type === 'close').length, 1);
   const runs = calls.filter((call) => call.type === 'run');
-  assert.deepEqual(runs.map((call) => call.options.mode), ['verify', 'save']);
+  assert.deepEqual(runs.map((call) => call.options.mode), ['verify', 'verify']);
   assert.equal(runs[0].options.context, context);
   assert.equal(runs[1].options.context, context);
   assert.equal(runs[0].options.page, page);
   assert.equal(runs[1].options.page, page);
   assert.equal(runs[0].options.saveDraftAuthorized, false);
-  assert.equal(runs[1].options.saveDraftAuthorized, true);
+  assert.equal(runs[1].options.saveDraftAuthorized, false);
   assert.equal(reports.length, 2);
   assert.match(outputText, /FAB PORTAL SESSION: READY/);
   assert.match(outputText, /SESSION VERIFY: PASS/);
-  assert.match(outputText, /SESSION SAVE: PASS/);
+  assert.match(outputText, /This session is read-only/);
+});
+
+test('session rejects the former save command', () => {
+  assert.throws(() => normalizeSessionCommand('save'), /session is read-only/);
 });
 
 test('session command failure keeps the same browser connection for retry', async () => {

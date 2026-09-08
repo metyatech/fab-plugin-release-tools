@@ -35,7 +35,7 @@ async function scenario({ manifest = makeManifest(), state = {}, fixtureOptions 
   try {
     await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
     if (viewport) await page.setViewportSize(viewport);
-    const result = await runPortalAutomation({ manifestInfo: info, mode, saveDraftAuthorized, origin: fixture.origin, page, context, manualInteraction });
+    const result = await runPortalAutomation({ manifestInfo: info, mode, saveDraftAuthorized, writeAutomationEnabled: mode !== 'verify', origin: fixture.origin, page, context, manualInteraction });
     return { result, fixture };
   } finally {
     await context.close();
@@ -49,7 +49,7 @@ async function attachedRunSetup({ manifest = makeManifest(), state = {}, mode = 
   const page = await context.newPage();
   const info = await makeManifestInfo(manifest);
   await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit${query}`);
-  return { fixture, context, page, info, mode, saveDraftAuthorized, manualInteraction };
+  return { fixture, context, page, info, mode, saveDraftAuthorized, writeAutomationEnabled: mode !== 'verify', manualInteraction };
 }
 
 test('verify-only performs zero writes', async () => {
@@ -61,6 +61,16 @@ test('verify-only performs zero writes', async () => {
   assert.equal(result.submitAccepted, false);
   assert.equal(result.postSubmitStatus, null);
   assert.equal(fixture.mutations.length, 0);
+});
+
+test('write automation is disabled before direct module attachment', async () => {
+  const info = await makeManifestInfo(makeManifest());
+  for (const [mode, saveDraftAuthorized] of [['save', true], ['tags-only', false], ['submit', true]]) {
+    await assert.rejects(
+      () => runPortalAutomation({ manifestInfo: info, mode, saveDraftAuthorized }),
+      /Fab Portal write automation is disabled/,
+    );
+  }
 });
 
 test('verify-only compares portal-unready manifests without writing', async () => {
@@ -204,6 +214,7 @@ test('Save mode passively attaches the exact target before startup handoff', asy
     manifestInfo: info,
     mode: setup.mode,
     saveDraftAuthorized: setup.saveDraftAuthorized,
+    writeAutomationEnabled: setup.writeAutomationEnabled,
     origin: fixture.origin,
     context,
     manualInteraction: {
@@ -248,6 +259,7 @@ test('Submit mode passively attaches the exact target before startup handoff', a
     manifestInfo: info,
     mode: setup.mode,
     saveDraftAuthorized: setup.saveDraftAuthorized,
+    writeAutomationEnabled: setup.writeAutomationEnabled,
     origin: fixture.origin,
     context,
     manualInteraction: {
@@ -287,7 +299,7 @@ test('write mode chooses the exact target instead of the first Fab tab', async (
   try {
     await unrelated.goto(`${fixture.origin}/portal/listings/22222222-2222-4222-8222-222222222222/edit`);
     await target.goto(`${fixture.origin}/portal/listings/${listingId}/edit?foo=bar#section`);
-    const result = await runPortalAutomation({ manifestInfo: info, mode: 'save', saveDraftAuthorized: true, origin: fixture.origin, context });
+    const result = await runPortalAutomation({ manifestInfo: info, mode: 'save', saveDraftAuthorized: true, writeAutomationEnabled: true, origin: fixture.origin, context });
     assert.equal(result.result, 'PASS');
     assert.match(result.targetPageSelectionReason, /only existing page with the exact Fab hostname and listing pathname/i);
     assert.equal(context.pages().length, 2);
@@ -306,7 +318,7 @@ test('write mode fails without an exact existing target and does not create a pa
   try {
     await unrelated.goto(`${fixture.origin}/portal/listings/22222222-2222-4222-8222-222222222222/edit`);
     await assert.rejects(
-      () => runPortalAutomation({ manifestInfo: info, mode: 'save', saveDraftAuthorized: true, origin: fixture.origin, context }),
+      () => runPortalAutomation({ manifestInfo: info, mode: 'save', saveDraftAuthorized: true, writeAutomationEnabled: true, origin: fixture.origin, context }),
       /MANUAL ACTION REQUIRED.*exactly one already-open Fab listing page/i,
     );
     assert.equal(context.pages().length, 1);
@@ -548,7 +560,7 @@ test('listing tags mutation is allowed only in its dedicated save phase and is b
     await page.evaluate((id) => fetch(`/i/portal/listings/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(window.__payload) }).catch(() => undefined), listingId);
     assert.equal(verifyGuard.summary().networkMutationRequestsBlocked, 1);
     await verifyGuard.dispose();
-    const saveGuard = installNetworkGuard(context, { mode: 'save', listingTags: contract });
+    const saveGuard = installNetworkGuard(context, { mode: 'save', writeAutomationEnabled: true, listingTags: contract });
     saveGuard.setPhase('listing-tags-save');
     await page.evaluate((id) => fetch(`/i/portal/listings/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(window.__payload) }), listingId);
     const summary = saveGuard.summary();
@@ -570,7 +582,7 @@ test('Tags-only network mode admits only the dedicated tag phase', async () => {
   const contract = tagsContract(fixture.origin);
   try {
     await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
-    const guard = installNetworkGuard(context, { mode: 'tags-only', listingTags: contract });
+    const guard = installNetworkGuard(context, { mode: 'tags-only', writeAutomationEnabled: true, listingTags: contract });
     await page.evaluate((payload) => { window.__payload = payload; }, prerequisitePayload({ tags: approvedTagIds }));
     guard.setPhase('listing-tags-save');
     await page.evaluate((id) => fetch(`/i/portal/listings/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(window.__payload) }), listingId);
@@ -663,7 +675,7 @@ test('standard license pricing helper blocks incomplete autosaves and allows one
       document.querySelector('#personal-options [role="option"]').addEventListener('click', (event) => { personal.placeholder = '39.99 (USD)'; document.querySelector('#personal-options').hidden = true; send([contract.licensePayload[0]]); });
       document.querySelector('#professional-options [role="option"]').addEventListener('click', (event) => { professional.placeholder = '79.99 (USD)'; document.querySelector('#professional-options').hidden = true; send(contract.licensePayload); });
     }, { id: listingId, contract });
-    const guard = installNetworkGuard(context, { mode: 'save', listingLicensePricing: contract });
+    const guard = installNetworkGuard(context, { mode: 'save', writeAutomationEnabled: true, listingLicensePricing: contract });
     const result = await persistStandardLicensePricing(page, { guard, contract });
     assert.equal(result.mutationCount, 3);
     assert.equal(result.allowedMutationCount, 1);
@@ -683,7 +695,7 @@ test('exact listing license autosave is blocked outside its dedicated save phase
   const context = await browser.newContext();
   const page = await context.newPage();
   const contract = licenseContract(fixture.origin);
-  const guard = installNetworkGuard(context, { mode: 'save', listingLicense: contract });
+  const guard = installNetworkGuard(context, { mode: 'save', writeAutomationEnabled: true, listingLicense: contract });
   try {
     await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
     await page.evaluate(({ id, payload }) => fetch(`/i/portal/listings/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }).catch(() => undefined), { id: listingId, payload: prerequisitePayload({ licenses: ['standard'] }) });
@@ -705,7 +717,7 @@ test('listing license guard blocks phase mismatch, wrong value, sibling, and dan
   const fixture = await startFixture(fixtureState(makeManifest()));
   const context = await browser.newContext();
   const page = await context.newPage();
-  const guard = installNetworkGuard(context, { mode: 'save', listingLicense: licenseContract(fixture.origin) });
+  const guard = installNetworkGuard(context, { mode: 'save', writeAutomationEnabled: true, listingLicense: licenseContract(fixture.origin) });
   try {
     await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
     const send = (payload, path = `/i/portal/listings/${listingId}`, method = 'PATCH') => page.evaluate(({ path, method, payload }) => fetch(path, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }).catch(() => undefined), { path, method, payload });
@@ -731,7 +743,7 @@ test('standard license helper clicks one exact radio and waits for the guarded P
   const context = await browser.newContext();
   const page = await context.newPage();
   const contract = licenseContract(fixture.origin);
-  const guard = installNetworkGuard(context, { mode: 'save', listingLicense: contract });
+  const guard = installNetworkGuard(context, { mode: 'save', writeAutomationEnabled: true, listingLicense: contract });
   try {
     await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
     await page.evaluate(({ id, payload }) => {
@@ -757,7 +769,7 @@ test('listing prerequisite autosave is blocked in verify and stage phases', asyn
   const context = await browser.newContext();
   const page = await context.newPage();
   const contract = prerequisiteContract(fixture.origin);
-  const guard = installNetworkGuard(context, { mode: 'save', listingPrerequisite: contract });
+  const guard = installNetworkGuard(context, { mode: 'save', writeAutomationEnabled: true, listingPrerequisite: contract });
   try {
     await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
     await page.evaluate(({ id, payload }) => fetch(`/i/portal/listings/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }).catch(() => undefined), { id: listingId, payload: prerequisitePayload() });
@@ -796,7 +808,7 @@ test('listing prerequisite validator blocks wrong phase, wrong sibling, and unkn
   const fixture = await startFixture(fixtureState(makeManifest()));
   const context = await browser.newContext();
   const page = await context.newPage();
-  const guard = installNetworkGuard(context, { mode: 'save', listingPrerequisite: prerequisiteContract(fixture.origin) });
+  const guard = installNetworkGuard(context, { mode: 'save', writeAutomationEnabled: true, listingPrerequisite: prerequisiteContract(fixture.origin) });
   try {
     await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
     await page.evaluate(({ id, payload }) => fetch(`/i/portal/listings/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }).catch(() => undefined), { id: listingId, payload: prerequisitePayload({ description: 'unexpected' }) });
@@ -1034,6 +1046,7 @@ test('startup challenge can be cleared before a guarded Save Draft mutation', as
       manifestInfo: info,
       mode: 'save',
       saveDraftAuthorized: true,
+      writeAutomationEnabled: true,
       origin: fixture.origin,
       page,
       context,
@@ -1061,6 +1074,7 @@ test('startup challenge can be cleared before guarded Submit for review', async 
       manifestInfo: info,
       mode: 'submit',
       saveDraftAuthorized: true,
+      writeAutomationEnabled: true,
       origin: fixture.origin,
       page,
       context,
@@ -1114,7 +1128,7 @@ test('challenge after Save fails safely and is reported without repeating Save',
   const originalReload = page.reload.bind(page);
   page.reload = async (...args) => { reloadCount += 1; return originalReload(...args); };
   try {
-    const result = await runPortalAutomation({ manifestInfo: info, mode: 'save', saveDraftAuthorized: true, origin: fixture.origin, page, context, manualInteraction: { waitForConfirmation: async () => 'confirmed' } });
+    const result = await runPortalAutomation({ manifestInfo: info, mode: 'save', saveDraftAuthorized: true, writeAutomationEnabled: true, origin: fixture.origin, page, context, manualInteraction: { waitForConfirmation: async () => 'confirmed' } });
     assert.equal(result.result, 'FAIL');
     assert.equal(result.manualChallengeDetected, true);
     assert.equal(result.saveInvoked, true);
@@ -1140,7 +1154,7 @@ test('challenge after a format mutation fails before Back navigation', async () 
   const originalGoto = page.goto.bind(page);
   page.goto = async (...args) => { gotoCount += 1; return originalGoto(...args); };
   try {
-    const result = await runPortalAutomation({ manifestInfo: info, mode: 'save', saveDraftAuthorized: true, origin: fixture.origin, page, context, manualInteraction: { waitForConfirmation: async () => 'confirmed' } });
+    const result = await runPortalAutomation({ manifestInfo: info, mode: 'save', saveDraftAuthorized: true, writeAutomationEnabled: true, origin: fixture.origin, page, context, manualInteraction: { waitForConfirmation: async () => 'confirmed' } });
     assert.equal(result.result, 'FAIL');
     assert.equal(result.manualChallengeDetected, true);
     assert.equal(result.manualChallengeHandoffCount, 0);
@@ -1166,7 +1180,7 @@ test('challenge after a staged mutation fails safe without Save or Submit', asyn
   const info = await makeManifestInfo(manifest);
   await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
   try {
-    const result = await runPortalAutomation({ manifestInfo: info, mode: 'save', saveDraftAuthorized: true, origin: fixture.origin, page, context, manualInteraction: { waitForConfirmation: async () => 'confirmed' } });
+    const result = await runPortalAutomation({ manifestInfo: info, mode: 'save', saveDraftAuthorized: true, writeAutomationEnabled: true, origin: fixture.origin, page, context, manualInteraction: { waitForConfirmation: async () => 'confirmed' } });
     assert.equal(result.result, 'FAIL');
     assert.equal(result.manualChallengeDetected, true);
     assert.equal(result.manualChallengeHandoffCount, 0);
@@ -1381,7 +1395,7 @@ test('format view without singular back uses the observed listing summary contro
   try {
     await setup.page.getByRole('button', { name: 'Unreal Engine', exact: true }).click();
     assert.equal(await classifyFabView(setup.page), FAB_VIEW.FORMAT_VIEW);
-    const result = await runPortalAutomation({ manifestInfo: setup.info, mode: setup.mode, saveDraftAuthorized: setup.saveDraftAuthorized, origin: setup.fixture.origin, page: setup.page, context: setup.context, manualInteraction: setup.manualInteraction });
+    const result = await runPortalAutomation({ manifestInfo: setup.info, mode: setup.mode, saveDraftAuthorized: setup.saveDraftAuthorized, writeAutomationEnabled: setup.writeAutomationEnabled, origin: setup.fixture.origin, page: setup.page, context: setup.context, manualInteraction: setup.manualInteraction });
     assert.equal(result.result, 'PASS');
     assert.equal(result.hardNavigationCount, 0);
     assert.equal(result.writeInteractionsPerformed, 0);
@@ -1556,7 +1570,7 @@ test('post-save mismatch fails and prevents submit', async () => {
 });
 
 test('Submit cannot run without Save Draft authorization', () => {
-  assert.throws(() => parseArgs(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', '--submit-for-review']), /requires --save-draft/);
+  assert.throws(() => parseArgs(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', '--submit-for-review']), /Fab Portal write automation is disabled/);
 });
 
 test('Submit runs only after exact comparison success', async () => {
@@ -1687,6 +1701,23 @@ test('verify-only mutation request is blocked', async () => {
   assert.equal(summary.networkMutationRequestsBlocked, 1);
 });
 
+test('network guard blocks write mutations when write automation is disabled', async () => {
+  const fixture = await startFixture(fixtureState(makeManifest()));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+  const guard = installNetworkGuard(context, { mode: 'save' });
+  guard.setPhase('save');
+  await page.evaluate(() => fetch('/api/save', { method: 'POST', body: '{}' }).catch(() => undefined));
+  const summary = guard.summary();
+  await guard.dispose();
+  await context.close();
+  await fixture.close();
+  assert.equal(fixture.mutations.length, 0);
+  assert.equal(summary.networkMutationRequestsObserved, 1);
+  assert.equal(summary.networkMutationRequestsBlocked, 1);
+});
+
 test('GraphQL query is allowed while GraphQL mutation is blocked in verify mode', async () => {
   const fixture = await startFixture(fixtureState(makeManifest()));
   const context = await browser.newContext();
@@ -1712,7 +1743,7 @@ test('GraphQL Save mutation is allowed only in save phase', async () => {
   const context = await browser.newContext();
   const page = await context.newPage();
   await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
-  const guard = installNetworkGuard(context, { mode: 'save' });
+  const guard = installNetworkGuard(context, { mode: 'save', writeAutomationEnabled: true });
   guard.setPhase('save');
   await page.evaluate(() => fetch('/graphql', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: 'mutation SaveDraft { saveDraft { id } }', operationName: 'SaveDraft' }) }));
   const summary = guard.summary();
@@ -1729,7 +1760,7 @@ test('Submit is blocked in save phase and allowed only in submit phase', async (
   const context = await browser.newContext();
   const page = await context.newPage();
   await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
-  const guard = installNetworkGuard(context, { mode: 'submit' });
+  const guard = installNetworkGuard(context, { mode: 'submit', writeAutomationEnabled: true });
   guard.setPhase('save');
   await page.evaluate(() => fetch('/graphql', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: 'mutation SubmitForReview { submitForReview { id } }', operationName: 'SubmitForReview' }) }).catch(() => undefined));
   guard.setPhase('submit');
@@ -1748,7 +1779,7 @@ test('Cancel and Delete GraphQL mutations are always blocked', async () => {
   const context = await browser.newContext();
   const page = await context.newPage();
   await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
-  const guard = installNetworkGuard(context, { mode: 'submit' });
+  const guard = installNetworkGuard(context, { mode: 'submit', writeAutomationEnabled: true });
   guard.setPhase('submit');
   for (const operationName of ['CancelSubmission', 'DeleteProduct']) {
     await page.evaluate((name) => fetch('/graphql', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: `mutation ${name} { action { id } }`, operationName: name }) }).catch(() => undefined), operationName);
@@ -1767,7 +1798,7 @@ test('media upload network intent requires the explicit media-upload phase', asy
   const context = await browser.newContext();
   const page = await context.newPage();
   await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
-  const guard = installNetworkGuard(context, { mode: 'save' });
+  const guard = installNetworkGuard(context, { mode: 'save', writeAutomationEnabled: true });
   guard.setPhase('save');
   await page.evaluate(() => fetch('/api/media-upload', { method: 'POST', body: 'blocked-before-upload-phase' }).catch(() => undefined));
   guard.setPhase('media-upload');
@@ -1787,7 +1818,7 @@ test('submit mode permits media upload only in its explicit pre-save phase', asy
   const context = await browser.newContext();
   const page = await context.newPage();
   await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
-  const guard = installNetworkGuard(context, { mode: 'submit' });
+  const guard = installNetworkGuard(context, { mode: 'submit', writeAutomationEnabled: true });
   guard.setPhase('save');
   await page.evaluate(() => fetch('/api/media-upload', { method: 'POST', body: 'blocked-in-save' }).catch(() => undefined));
   guard.setPhase('media-upload');
@@ -2413,7 +2444,7 @@ test('exact format-create mutation is allowed only in format-create phase', asyn
   const fixture = await startFixture(fixtureState(makeManifest(), { productFormats: [] }));
   const context = await browser.newContext();
   const page = await context.newPage();
-  const guard = installNetworkGuard(context, { mode: 'save' });
+  const guard = installNetworkGuard(context, { mode: 'save', writeAutomationEnabled: true });
   try {
     await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
     await page.evaluate(() => fetch('/api/create-format', { method: 'POST' }).catch(() => undefined));

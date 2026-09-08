@@ -15,16 +15,13 @@ function help() {
 Usage:
   pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> -CdpEndpoint <endpoint>
   pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> -CdpWebSocketEndpoint <ws-endpoint>
-  pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> -CdpEndpoint <endpoint> -SaveDraft
-  pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> -CdpEndpoint <endpoint> -TagsOnly
-  pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> -CdpEndpoint <endpoint> -SaveDraft -SubmitForReview
   pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> -CdpWebSocketEndpoint <ws-endpoint> -Session
 
-Default mode is read-only verification. Save Draft and Submit for review are
-explicit, guarded operations. Pending approval listings are never modified and
-Cancel submission is never invoked automatically. If a visible Cloudflare
-challenge is detected, automation pauses without browser operations until you
-complete it manually and press Enter; q + Enter cancels the run.
+This tool is read-only. Fab listing write automation is disabled; use an
+interactive AI agent or manual Fab Portal workflow for listing changes. If a
+visible Cloudflare challenge is detected, automation pauses without browser
+operations until you complete it manually and press Enter; q + Enter cancels
+the run.
 
 Options:
   --manifest <path>       FabPortalSubmission.json (required)
@@ -32,10 +29,7 @@ Options:
   --cdp-websocket-endpoint <url>
                           Existing dedicated Chrome browser WebSocket endpoint
   --output <directory>    Artifact root (default: ./artifacts)
-  --save-draft            Explicitly authorize Save Draft
-  --tags-only             Persist and verify only canonical listing Tags; never creates a format or saves the draft
-  --submit-for-review     Explicitly authorize Submit for review; requires --save-draft
-  --session               Keep one approved browser connection open for verify/save/quit commands
+  --session               Keep one approved browser connection open for read-only verify/help/quit commands
   --json                  Emit one machine-readable result object
   --verbose               Emit additional non-secret diagnostics
   --help, -h              Show this help
@@ -64,11 +58,10 @@ function parseArgs(argv) {
       else result.output = value;
     } else throw new Error(`Unknown option: ${arg}. Use --help.`);
   }
-  if (result.session && (result.saveDraft || result.tagsOnly || result.submitForReview || result.json)) {
-    throw new Error('--session accepts only interactive verify, save, and quit commands; do not combine it with write mode flags or --json.');
+  if (result.saveDraft || result.tagsOnly || result.submitForReview) throw new Error('Fab Portal write automation is disabled. Use an interactive AI agent or manual Fab Portal workflow for listing changes.');
+  if (result.session && result.json) {
+    throw new Error('--session accepts only interactive verify, help, and quit commands; do not combine it with --json.');
   }
-  if (result.tagsOnly && (result.saveDraft || result.submitForReview)) throw new Error('--tags-only cannot be combined with --save-draft or --submit-for-review.');
-  if (result.submitForReview && !result.saveDraft) throw new Error('--submit-for-review requires --save-draft.');
   if (!result.help && !result.version && (!result.manifest || (!result.cdpEndpoint && !result.cdpWebSocketEndpoint))) throw new Error('--manifest and exactly one CDP transport endpoint are required. Use --help.');
   if (result.cdpEndpoint && result.cdpWebSocketEndpoint) throw new Error('Specify exactly one of --cdp-endpoint and --cdp-websocket-endpoint.');
   if (result.cdpWebSocketEndpoint) resolveBrowserTransport({ cdpWebSocketEndpoint: result.cdpWebSocketEndpoint });
@@ -110,7 +103,7 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
   const writeReportFile = dependencies.writeReport ?? writeRunReport;
   const run = dependencies.run ?? runPortalAutomation;
   const manualInteraction = dependencies.manualInteraction ?? createStdinManualInteraction();
-  const mode = args.submitForReview ? 'submit' : args.saveDraft ? 'save' : args.tagsOnly ? 'tags-only' : 'verify';
+  const mode = 'verify';
   const manifestInfo = await loadManifest(args.manifest, { requirePortalReady: mode !== 'verify' });
   const artifactDirectory = await createDirectory(args.output ?? path.resolve('artifacts'), manifestInfo.manifest.pluginName);
   const result = await run({ manifestInfo, cdpEndpoint: args.cdpEndpoint, cdpWebSocketEndpoint: args.cdpWebSocketEndpoint, mode, saveDraftAuthorized: args.saveDraft, outputDirectory: artifactDirectory, manualInteraction });
