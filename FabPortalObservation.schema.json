@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/metyatech/fab-plugin-release-tools/raw/master/FabPortalObservation.schema.json",
+  "title": "Fab Portal Observation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "source",
+    "manifestSha256",
+    "observedAtUtc",
+    "listingId",
+    "listingTitle",
+    "listingStatus",
+    "fields"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "source": { "enum": ["interactive-browser", "cdp"] },
+    "manifestSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "observedAtUtc": { "type": "string", "format": "date-time", "pattern": "Z$" },
+    "listingId": { "$ref": "#/$defs/lowercaseUuid" },
+    "listingTitle": { "type": "string", "minLength": 1 },
+    "listingStatus": { "type": "string", "minLength": 1 },
+    "fields": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/fieldObservation" }
+    }
+  },
+  "$defs": {
+    "lowercaseUuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "jsonValue": {
+      "anyOf": [
+        { "type": "null" },
+        { "type": "string" },
+        { "type": "number" },
+        { "type": "boolean" },
+        { "type": "array", "items": { "$ref": "#/$defs/jsonValue" } },
+        {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/jsonValue" }
+        }
+      ]
+    },
+    "fieldObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["manifestJsonPath", "state", "view"],
+      "properties": {
+        "manifestJsonPath": { "type": "string", "minLength": 1 },
+        "state": {
+          "enum": ["OBSERVED", "NOT_VISIBLE", "NOT_DISCOVERED", "NOT_APPLICABLE"]
+        },
+        "value": { "$ref": "#/$defs/jsonValue" },
+        "view": { "enum": ["listing", "format"] },
+        "note": { "type": "string", "minLength": 1, "maxLength": 500 }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "state": { "const": "OBSERVED" } },
+            "required": ["state"]
+          },
+          "then": { "required": ["value"] },
+          "else": { "not": { "required": ["value"] } }
+        }
+      ]
+    }
+  }
+}

@@ -43,6 +43,34 @@ test('actual CLI main path denies write authorization by default', async () => {
   assert.equal(typeof received.manualInteraction.waitForConfirmation, 'function');
 });
 
+test('CLI accepts observation-only verification without invoking the browser runner', async () => {
+  let runCalled = false;
+  const observation = {
+    source: 'interactive-browser',
+    listingId: manifestInfo.manifest.listingId,
+    listingTitle: manifestInfo.manifest.title,
+    listingStatus: 'Draft',
+  };
+  const code = await main(['--manifest', 'manifest.json', '--observation', 'observation.json', '--json'], {
+    loadManifest: async (_manifestPath, options) => {
+      assert.deepEqual(options, { requirePortalReady: false });
+      return { ...manifestInfo, manifest: { ...manifestInfo.manifest } };
+    },
+    createDirectory: async () => 'fixture-artifact-directory',
+    loadObservation: async () => ({ observation, observationSha256: 'b'.repeat(64) }),
+    compareObservation: () => ({ fields: [], counts: { MATCH: 0, MISMATCH: 0, NOT_VISIBLE: 0, NOT_DISCOVERED: 0, NOT_APPLICABLE: 0 }, mismatchCount: 0, unresolvedCritical: [] }),
+    run: async () => { runCalled = true; throw new Error('browser runner must not be called'); },
+    writeReport: async () => undefined,
+  });
+  assert.equal(code, 0);
+  assert.equal(runCalled, false);
+});
+
+test('CLI requires exactly one acquisition mode', async () => {
+  await assert.rejects(() => main(['--manifest', 'manifest.json', '--json'], {}), /Exactly one of --cdp-endpoint or --observation/);
+  await assert.rejects(() => main(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', '--observation', 'observation.json', '--json'], {}), /Exactly one of --cdp-endpoint or --observation/);
+});
+
 test('CLI help exposes read-only verification without write usage', async () => {
   const { code } = await invoke(['--help']);
   assert.equal(code, 0);

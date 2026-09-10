@@ -1,32 +1,40 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { compareObservation } from './comparison.mjs';
 import { loadSubmissionManifest } from './manifest.mjs';
 import { createStdinManualInteraction } from './manual-handoff.mjs';
+import { loadFabPortalObservation } from './observation.mjs';
 import { runPortalAutomation } from './portal.mjs';
 import { createRunDirectory, writeRunReport } from './report.mjs';
 import { FAB_WRITE_AUTOMATION_DISABLED_MESSAGE } from './write-policy.mjs';
 
-const VERSION = '1.0.0';
+const VERSION = '0.7.0';
 
 function help() {
   return `Fab Publisher Portal automation
 
 Usage:
-  pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> -CdpEndpoint <endpoint>
+  pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> (-CdpEndpoint <endpoint> | -ObservationPath <FabPortalObservation.json>)
 
 Fab Portal automation is read-only verification. Listing changes must be made
 by an interactive AI agent or the Fab Portal UI. If a visible Cloudflare
 challenge is detected, automation pauses without browser operations until you
 complete it manually and press Enter; q + Enter cancels the run.
 
+Acquisition modes (choose exactly one):
+  --cdp-endpoint <url>    Existing dedicated Chrome CDP endpoint
+  --observation <path>    Structured FabPortalObservation.json collected by a browser
+
 Options:
   --manifest <path>       FabPortalSubmission.json (required)
-  --cdp-endpoint <url>    Existing dedicated Chrome CDP endpoint (required)
   --output <directory>    Artifact root (default: ./artifacts)
   --json                  Emit one machine-readable result object
   --verbose               Emit additional non-secret diagnostics
   --help, -h              Show this help
   --version, -V           Show the version
+
+Observation mode compares the supplied facts offline and does not launch or
+attach to a browser. It is not cryptographic proof of Portal source bytes.
 `;
 }
 
@@ -40,14 +48,19 @@ function parseArgs(argv) {
     else if (arg === '--submit-for-review') result.submitForReview = true;
     else if (arg === '--json') result.json = true;
     else if (arg === '--verbose') result.verbose = true;
-    else if (['--manifest', '--cdp-endpoint', '--output'].includes(arg)) {
+    else if (['--manifest', '--cdp-endpoint', '--observation', '--output'].includes(arg)) {
       const value = argv[++index];
       if (!value || value.startsWith('--')) throw new Error(`${arg} requires a value.`);
       result[arg.slice(2).replaceAll('-', '')] = value;
     } else throw new Error(`Unknown option: ${arg}. Use --help.`);
   }
   if (result.saveDraft || result.submitForReview) throw new Error(FAB_WRITE_AUTOMATION_DISABLED_MESSAGE);
-  if (!result.help && !result.version && (!result.manifest || !result.cdpendpoint)) throw new Error('--manifest and --cdp-endpoint are required. Use --help.');
+  const hasCdp = Boolean(result.cdpendpoint);
+  const hasObservation = Boolean(result.observation);
+  if (!result.help && !result.version) {
+    if (!result.manifest) throw new Error('--manifest is required. Use --help.');
+    if (hasCdp === hasObservation) throw new Error('Exactly one of --cdp-endpoint or --observation is required. Use --help.');
+  }
   return result;
 }
 
@@ -56,7 +69,9 @@ function emit(value, json) {
   else {
     process.stdout.write(`FAB PORTAL AUTOMATION: ${value.result}\n`);
     process.stdout.write(`Mode: ${value.mode}\nListing: ${value.listingTitle} (${value.listingId})\nStatus: ${value.listingStatus ?? 'unknown'}\n`);
+    process.stdout.write(`verificationTransport=${value.verificationTransport ?? 'unknown'} observationSource=${value.observationSource ?? 'null'} observationSha256=${value.observationSha256 ?? 'null'}\n`);
     if (value.comparison?.counts) process.stdout.write(`MATCH=${value.comparison.counts.MATCH ?? 0} MISMATCH=${value.comparison.counts.MISMATCH ?? 0} NOT_VISIBLE=${value.comparison.counts.NOT_VISIBLE ?? 0} NOT_DISCOVERED=${value.comparison.counts.NOT_DISCOVERED ?? 0} NOT_APPLICABLE=${value.comparison.counts.NOT_APPLICABLE ?? 0}\n`);
+    process.stdout.write(`portalMismatchCount=${value.portalMismatchCount ?? 0} portalUnresolvedCount=${value.portalUnresolvedCount ?? 0} portalVerificationComplete=${value.portalVerificationComplete ?? false}\n`);
     process.stdout.write(`writeInteractionsPerformed=${value.writeInteractionsPerformed} Save=${value.saveInvoked} Submit=${value.submitInvoked}\n`);
     process.stdout.write(`submitAccepted=${value.submitAccepted} postSubmitStatus=${value.postSubmitStatus ?? 'null'}\n`);
     process.stdout.write(`writeReady=${value.writeReady} writeBlockers=${value.writeBlockers?.length ?? 0}\n`);
@@ -68,6 +83,57 @@ function emit(value, json) {
   }
 }
 
+function observationResult(manifestInfo, observationInfo, comparison) {
+  const { observation } = observationInfo;
+  const unresolved = comparison.unresolvedCritical ?? [];
+  const blockers = [];
+  if (comparison.mismatchCount > 0) blockers.push(`${comparison.mismatchCount} manifest mismatch(es).`);
+  if (unresolved.length > 0) blockers.push(`Unresolved portal fields: ${unresolved.join(', ')}.`);
+  return {
+    schemaVersion: 1,
+    mode: 'verify',
+    verificationTransport: 'observation',
+    observationSource: observation.source,
+    observationSha256: observationInfo.observationSha256,
+    listingId: observation.listingId,
+    listingTitle: observation.listingTitle,
+    listingStatus: observation.listingStatus,
+    manifestSha256: manifestInfo.manifestSha256,
+    portalReady: manifestInfo.manifest.portalReady,
+    comparison,
+    comparisonAfter: null,
+    portalMismatchCount: comparison.mismatchCount,
+    portalUnresolvedCount: unresolved.length,
+    portalVerificationComplete: comparison.mismatchCount === 0 && unresolved.length === 0,
+    plannedMutations: [],
+    executedMutations: [],
+    saveInvoked: false,
+    submitInvoked: false,
+    submitAccepted: false,
+    postSubmitStatus: null,
+    writeInteractionsPerformed: 0,
+    dangerousActionsFound: [],
+    blockers,
+    result: blockers.length === 0 ? 'PASS' : 'FAIL',
+    readOnlyUiActions: [],
+    writeReady: false,
+    writeBlockers: [],
+    selectedPageUrl: null,
+    targetPageSelectionReason: null,
+    initialNavigationPerformed: false,
+    hardNavigationCount: 0,
+    reloadCount: 0,
+    automationHardNavigationCount: 0,
+    humanObservedNavigationCount: 0,
+    manualChallengeDetected: false,
+    manualChallengeHandoffCount: 0,
+    manualChallengeCompleted: false,
+    manualChallengeCancelled: false,
+    passiveAttach: false,
+    network: { networkMutationRequestsObserved: 0, networkMutationRequestsBlocked: 0, requests: [] },
+  };
+}
+
 export async function main(argv = process.argv.slice(2), dependencies = {}) {
   const args = parseArgs(argv);
   if (args.help) { process.stdout.write(help()); return 0; }
@@ -76,11 +142,19 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
   const createDirectory = dependencies.createDirectory ?? createRunDirectory;
   const writeReportFile = dependencies.writeReport ?? writeRunReport;
   const run = dependencies.run ?? runPortalAutomation;
-  const manualInteraction = dependencies.manualInteraction ?? createStdinManualInteraction();
+  const loadObservation = dependencies.loadObservation ?? loadFabPortalObservation;
+  const compareObservationValue = dependencies.compareObservation ?? compareObservation;
+  const manualInteraction = args.observation ? null : dependencies.manualInteraction ?? createStdinManualInteraction();
   const mode = args.submitForReview ? 'submit' : args.saveDraft ? 'save' : 'verify';
   const manifestInfo = await loadManifest(args.manifest, { requirePortalReady: mode !== 'verify' });
   const artifactDirectory = await createDirectory(args.output ?? path.resolve('artifacts'), manifestInfo.manifest.pluginName);
-  const result = await run({ manifestInfo, cdpEndpoint: args.cdpendpoint, mode, saveDraftAuthorized: args.saveDraft, outputDirectory: artifactDirectory, manualInteraction });
+  let result;
+  if (args.observation) {
+    const observationInfo = await loadObservation(args.observation, manifestInfo);
+    result = observationResult(manifestInfo, observationInfo, compareObservationValue(manifestInfo, observationInfo.observation));
+  } else {
+    result = await run({ manifestInfo, cdpEndpoint: args.cdpendpoint, mode, saveDraftAuthorized: args.saveDraft, outputDirectory: artifactDirectory, manualInteraction });
+  }
   result.artifactDirectory = artifactDirectory;
   await writeReportFile({ directory: artifactDirectory, result, comparison: result.comparison, comparisonAfter: result.comparisonAfter, network: result.network, page: result.page });
   if (result.browser) await result.browser.close().catch(() => undefined);

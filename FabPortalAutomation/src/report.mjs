@@ -23,8 +23,14 @@ function markdown(result, comparison, after, network) {
 
 - Mode: ${result.mode}
 - Result: ${result.result}
+- Verification transport: ${result.verificationTransport ?? 'unknown'}
+- Observation source: ${result.observationSource ?? 'null'}
+- Observation SHA-256: ${result.observationSha256 ?? 'null'}
 - Listing: ${result.listingTitle} (${result.listingId})
 - Status: ${result.listingStatus ?? 'unknown'}
+- Portal mismatch count: ${result.portalMismatchCount ?? comparison?.mismatchCount ?? 0}
+- Portal unresolved count: ${result.portalUnresolvedCount ?? comparison?.unresolvedCritical?.length ?? 0}
+- Portal verification complete: ${result.portalVerificationComplete ?? false}
 - Save invoked: ${result.saveInvoked}
 - Submit invoked: ${result.submitInvoked}
 - Submit accepted: ${result.submitAccepted}
@@ -76,8 +82,14 @@ export async function writeRunReport({ directory, result, comparison, comparison
     listingTitle: result.listingTitle,
     listingStatus: result.listingStatus,
     manifestSha256: result.manifestSha256,
+    verificationTransport: result.verificationTransport ?? null,
+    observationSource: result.observationSource ?? null,
+    observationSha256: result.observationSha256 ?? null,
     portalReady: result.portalReady,
     comparisonCounts: comparison?.counts ?? null,
+    portalMismatchCount: result.portalMismatchCount ?? comparison?.mismatchCount ?? 0,
+    portalUnresolvedCount: result.portalUnresolvedCount ?? comparison?.unresolvedCritical?.length ?? 0,
+    portalVerificationComplete: result.portalVerificationComplete ?? false,
     plannedMutations: result.plannedMutations,
     executedMutations: result.executedMutations,
     saveInvoked: result.saveInvoked,

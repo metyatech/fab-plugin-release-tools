@@ -4,6 +4,7 @@
 param(
     [string]$ManifestPath,
     [string]$CdpEndpoint,
+    [string]$ObservationPath,
     [string]$OutputDirectory,
     [switch]$SaveDraft,
     [switch]$SubmitForReview,
@@ -76,8 +77,10 @@ if ($SaveDraft -or $SubmitForReview) {
 if ([string]::IsNullOrWhiteSpace($ManifestPath)) {
     throw 'ManifestPath is required. Use -Help for usage.'
 }
-if ([string]::IsNullOrWhiteSpace($CdpEndpoint)) {
-    throw 'CdpEndpoint is required. Use -Help for usage.'
+$hasCdpEndpoint = -not [string]::IsNullOrWhiteSpace($CdpEndpoint)
+$hasObservationPath = -not [string]::IsNullOrWhiteSpace($ObservationPath)
+if ($hasCdpEndpoint -eq $hasObservationPath) {
+    throw 'Exactly one of CdpEndpoint or ObservationPath is required. Use -Help for usage.'
 }
 $runtime = Join-Path $PSScriptRoot 'FabPortalAutomation'
 if (-not (Test-Path -LiteralPath (Join-Path $runtime 'node_modules\playwright-core\package.json') -PathType Leaf)) {
@@ -87,8 +90,14 @@ $arguments = [System.Collections.Generic.List[string]]::new()
 [void]$arguments.Add((Join-Path $runtime 'src\cli.mjs'))
 [void]$arguments.Add('--manifest')
 [void]$arguments.Add([System.IO.Path]::GetFullPath($ManifestPath))
-[void]$arguments.Add('--cdp-endpoint')
-[void]$arguments.Add($CdpEndpoint)
+if ($hasCdpEndpoint) {
+    [void]$arguments.Add('--cdp-endpoint')
+    [void]$arguments.Add($CdpEndpoint)
+}
+else {
+    [void]$arguments.Add('--observation')
+    [void]$arguments.Add([System.IO.Path]::GetFullPath($ObservationPath))
+}
 if (-not [string]::IsNullOrWhiteSpace($OutputDirectory)) {
     [void]$arguments.Add('--output')
     [void]$arguments.Add([System.IO.Path]::GetFullPath($OutputDirectory))

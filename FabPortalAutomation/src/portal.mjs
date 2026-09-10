@@ -689,8 +689,14 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     listingTitle: manifestInfo.manifest.title,
     listingStatus: null,
     manifestSha256: manifestInfo.manifestSha256,
+    verificationTransport: 'cdp',
+    observationSource: 'cdp',
+    observationSha256: null,
     portalReady: manifestInfo.manifest.portalReady,
     comparison: null,
+    portalMismatchCount: 0,
+    portalUnresolvedCount: 0,
+    portalVerificationComplete: false,
     comparisonAfter: null,
     plannedMutations: [],
     executedMutations: [],
@@ -772,6 +778,9 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     const collected = collectedResult.value;
     result.readOnlyUiActions.push(...collected.readOnlyUiActions);
     result.comparison = collected.comparison;
+    result.portalMismatchCount = result.comparison.mismatchCount;
+    result.portalUnresolvedCount = result.comparison.unresolvedCritical.length;
+    result.portalVerificationComplete = result.portalMismatchCount === 0 && result.portalUnresolvedCount === 0;
     ({ writeReady: result.writeReady, writeBlockers: result.writeBlockers } = writeReadiness(result.listingStatus, result.comparison, manifestInfo.manifest));
     if (mode === 'verify') {
       if (result.comparison.mismatchCount > 0) result.blockers.push(`${result.comparison.mismatchCount} manifest mismatch(es).`);

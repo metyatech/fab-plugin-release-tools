@@ -394,15 +394,30 @@ formats only staged PowerShell files and restages them before a commit.
 ## Fab Portal automation
 
 `FabPortalSubmission.json` is the sole production input to the guarded portal
-automation. Install its pinned Node dependency with `npm ci` from
-`FabPortalAutomation`, then connect to an already authenticated dedicated
-Chrome CDP endpoint:
+verification. Install its pinned Node dependency with `npm ci` from
+`FabPortalAutomation`, then choose exactly one read-only acquisition mode:
 
 ```powershell
 pwsh .\Invoke-FabPortalSubmission.ps1 `
   -ManifestPath <FabPortalSubmission.json> `
   -CdpEndpoint <http://127.0.0.1:port>
 ```
+
+When an authenticated interactive browser is available but a CDP browser is
+not, that browser may record a structured, non-secret observation. The same
+central comparison then runs without a browser connection:
+
+```powershell
+pwsh .\Invoke-FabPortalSubmission.ps1 `
+  -ManifestPath <FabPortalSubmission.json> `
+  -ObservationPath <FabPortalObservation.json>
+```
+
+Observation mode does not navigate or modify Fab. It records only values
+actually exposed by the browser and is not cryptographic proof of Portal
+source bytes. CDP remains supported for environments where its authenticated
+connection works. No mode bypasses Cloudflare or handles credentials, MFA, or
+browser storage.
 
 Fab Portal automation is read-only. It verifies the currently open listing but
 does not modify listings. `-SaveDraft` and `-SubmitForReview` are rejected before
@@ -427,8 +442,8 @@ Staging manifests with `portalReady: false` and unresolved package
 never written to Fab.
 
 An empty `subcategory` is legitimately `NOT_APPLICABLE` when Fab exposes no
-distinct subcategory. Existing media whose identity cannot be proven remains a
-diagnostic mismatch.
+distinct subcategory. Portal observations verify only visible media count,
+roles, and order; local media approval and source-byte hashes remain separate.
 
 ## Migration note
 

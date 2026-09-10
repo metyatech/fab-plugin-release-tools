@@ -13,7 +13,7 @@ function writeTargetFor(field, view, target) {
   return { ...target, view, locator: target.locator ?? null };
 }
 
-function normalizeText(value) {
+export function normalizeText(value) {
   return String(value ?? '').replace(/\s+/g, ' ').trim();
 }
 
@@ -44,7 +44,7 @@ export function comparePriceClassification(portalValue, manifestValue) {
   return portalCents === manifestCents ? 'MATCH' : 'MISMATCH';
 }
 
-function normalizeRichText(value) {
+export function normalizeRichText(value) {
   return normalizeText(value).replace(/\s*([*_`#>-])\s*/g, '$1');
 }
 
@@ -410,4 +410,80 @@ export function comparePlatformClassification(portalValue, manifestPlatforms) {
   return JSON.stringify(portalPlatforms.sort()) === JSON.stringify(desired) ? 'MATCH' : 'MISMATCH';
 }
 
-export { normalizeText, normalizeRichText, readLocator, fieldResult };
+function compareObservationArray(current, desired, { sort = true } = {}) {
+  if (!Array.isArray(current)) return 'MISMATCH';
+  const left = current.map((value) => normalizeText(value));
+  const right = desired.map((value) => normalizeText(value));
+  if (sort) {
+    left.sort();
+    right.sort();
+  }
+  return JSON.stringify(left) === JSON.stringify(right) ? 'MATCH' : 'MISMATCH';
+}
+
+function compareObservationScalar(current, desired, { rich = false } = {}) {
+  return semanticState(current, desired, { rich });
+}
+
+function observationField({ entry, manifestJsonPath, portalLabel, desired, view, compare, note = '' }) {
+  if (!entry) {
+    const result = fieldResult({ manifestJsonPath, portalLabel, desired, current: null, state: 'NOT_DISCOVERED', resolved: null, editableControlAvailable: false, notes: 'The observation omitted this expected field.', writeTarget: null });
+    result.view = view;
+    return result;
+  }
+  if (entry.state !== 'OBSERVED') {
+    const result = fieldResult({ manifestJsonPath, portalLabel, desired, current: null, state: entry.state, resolved: null, editableControlAvailable: false, notes: entry.note ?? '', writeTarget: null });
+    result.view = view;
+    return result;
+  }
+  const current = entry.value;
+  const state = compare(current, desired);
+  const result = fieldResult({ manifestJsonPath, portalLabel, desired, current, state, resolved: null, editableControlAvailable: false, notes: [note, entry.note].filter(Boolean).join(' '), writeTarget: null });
+  result.view = view;
+  return result;
+}
+
+function compareObservationMedia(current, manifestMedia) {
+  const desired = manifestMedia.map((item) => ({ order: item.order, role: item.role }));
+  if (!current || typeof current !== 'object' || Array.isArray(current) || current.count !== desired.length || !Array.isArray(current.items)) return 'MISMATCH';
+  const actual = current.items.map((item) => ({ order: item.order, role: item.role }));
+  return JSON.stringify(actual) === JSON.stringify(desired) ? 'MATCH' : 'MISMATCH';
+}
+
+export function compareObservation(manifestInfo, observation) {
+  const { manifest } = manifestInfo;
+  const entries = new Map((observation?.fields ?? []).map((entry) => [entry.manifestJsonPath, entry]));
+  const field = (manifestJsonPath, portalLabel, desired, compare, note = '') => observationField({ entry: entries.get(manifestJsonPath), manifestJsonPath, portalLabel, desired, view: fieldView(manifestJsonPath), compare, note });
+  const fields = [
+    field('title', 'Title', manifest.title, (current, expected) => compareObservationScalar(current, expected)),
+    field('shortDescription', 'Short description', manifest.shortDescription, (current, expected) => compareObservationScalar(current, expected)),
+    field('longDescription', 'Description', manifest.longDescription, (current, expected) => compareObservationScalar(current, expected, { rich: true })),
+    field('productType', 'Product type', manifest.productType, (current, expected) => compareObservationScalar(current, expected)),
+    field('category', 'Category', manifest.category, (current, expected) => compareObservationScalar(current, expected)),
+    field('subcategory', 'Subcategory', manifest.subcategory, (current, expected) => compareObservationArray(current, expected)),
+    field('tags', 'Tags', manifest.tags, (current, expected) => compareObservationArray(current, expected)),
+    field('includedFormat', 'Included format', manifest.includedFormat, (current, expected) => compareObservationScalar(current, expected)),
+    field('engineVersions', 'Engine versions', manifest.engineVersions, (current, expected) => compareObservationArray(current, expected)),
+    field('platforms', 'Platforms', manifest.platforms, (current, expected) => comparePlatformClassification(Array.isArray(current) ? current.join(' ') : current, expected)),
+    field('license', 'License', manifest.license, (current, expected) => current && /standard license/i.test(current) && /standard license/i.test(expected) ? 'MATCH' : compareObservationScalar(current, expected)),
+    field('personalPriceUsd', 'Personal price', manifest.personalPriceUsd, (current, expected) => comparePriceClassification(current, expected)),
+    field('professionalPriceUsd', 'Professional price', manifest.professionalPriceUsd, (current, expected) => comparePriceClassification(current, expected)),
+    field('matureContent', 'Mature content', manifest.matureContent, (current, expected) => current === expected ? 'MATCH' : 'MISMATCH'),
+    field('generatedWithAi', 'Generated with AI', manifest.generatedWithAi, (current, expected) => current === expected ? 'MATCH' : 'MISMATCH'),
+    field('allowsUsageWithAi', 'Allows usage with AI', manifest.allowsUsageWithAi, (current, expected) => current === expected ? 'MATCH' : 'MISMATCH'),
+    field('promotionalContent', 'Promotional content', manifest.promotionalContent, (current, expected) => current === expected ? 'MATCH' : 'MISMATCH'),
+    field('forumPost', 'Forum post', manifest.forumPost, (current, expected) => current === expected ? 'MATCH' : 'MISMATCH'),
+    field('activation', 'Activation', manifest.activation, (current, expected) => compareObservationScalar(current, expected)),
+    field('documentationUrl', 'Documentation', manifest.documentationUrl, (current, expected) => compareObservationScalar(current, expected)),
+    field('supportUrl', 'Support', manifest.supportUrl, (current, expected) => compareObservationScalar(current, expected)),
+    field('technicalInformationFile', 'Technical information', manifestInfo.technicalInformationText, (current, expected) => compareObservationScalar(current, expected, { rich: true }), 'The observed value is the visible technical text; the manifest path is provenance.'),
+    field('media', 'Media', manifest.media.map((item) => ({ order: item.order, role: item.role })), (current) => compareObservationMedia(current, manifest.media), 'Portal observation covers visible count/order/roles only; local approval owns source-byte hashes.'),
+  ];
+  for (const [index, pkg] of manifest.packages.entries()) {
+    const manifestJsonPath = `packages[${index}].projectFileLink`;
+    fields.push(field(manifestJsonPath, `Project file link (${pkg.engineVersion})`, pkg.projectFileLink, (current, expected) => expected === null ? 'NOT_APPLICABLE' : compareObservationScalar(current, expected)));
+  }
+  return summarizeComparison(fields);
+}
+
+export { readLocator, fieldResult };

@@ -5,6 +5,13 @@ Keep a Changelog and the project uses Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-11
+
+- Added strict, hash-bound `FabPortalObservation.json` support for interactive
+  browser collection and offline central comparison.
+- Kept CDP collection available while making it optional for read-only portal
+  verification.
+
 ## [0.6.0] - 2026-09-10
 
 - Added centralized Fab media technical validation and a hash-bound human
