@@ -22,6 +22,7 @@ example is in
 | `pluginName` | string | yes | Starts with an ASCII letter or digit; remaining characters are ASCII letters, digits, or `_`. |
 | `descriptorFile` | relative path | yes | Must exactly equal `<pluginName>.uplugin`. |
 | `engineVersions` | string array | yes | Non-empty, unique `5.x` values; the requested engine must be present. |
+| `versionTitles` | object | yes | Exactly one non-empty, unique title per `engineVersions` key; titles are copied to each generated Fab package entry. |
 | `platforms` | string array | yes | Version 1 requires exactly `["Win64"]`. |
 | `distributionModules` | string array | yes | Non-empty and case-insensitively unique. Only these modules ship. |
 | `enabledPluginDependencies` | string array | yes | Case-insensitively unique; use `[]` when there are no dependencies. |

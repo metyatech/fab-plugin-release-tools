@@ -14,6 +14,7 @@ InModuleScope FabPluginReleaseTools {
                 pluginName                 = 'TestPlugin'
                 descriptorFile             = 'TestPlugin.uplugin'
                 engineVersions             = @('5.8')
+                versionTitles              = [ordered]@{ '5.8' = 'UE 5.8' }
                 platforms                  = @('Win64')
                 distributionModules        = @('TestPlugin')
                 enabledPluginDependencies  = @()
@@ -334,6 +335,31 @@ InModuleScope FabPluginReleaseTools {
             Save-TestConfiguration -Configuration (Get-TestConfigurationObject) -Path $configurationPath
             $result = Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8'
             $result.pluginName | Should -BeExactly 'TestPlugin'
+        }
+
+        It 'requires versionTitles to match engineVersions exactly and remain unique' {
+            $cases = @(
+                [ordered]@{
+                    engineVersions = @('5.7', '5.8')
+                    versionTitles = [ordered]@{ '5.8' = 'UE 5.8' }
+                },
+                [ordered]@{
+                    engineVersions = @('5.8')
+                    versionTitles = [ordered]@{ '5.7' = 'UE 5.7'; '5.8' = 'UE 5.8' }
+                },
+                [ordered]@{
+                    engineVersions = @('5.7', '5.8')
+                    versionTitles = [ordered]@{ '5.7' = 'UE'; '5.8' = 'UE' }
+                }
+            )
+            foreach ($case in $cases) {
+                $configuration = Get-TestConfigurationObject
+                $configuration.engineVersions = $case.engineVersions
+                $configuration.versionTitles = $case.versionTitles
+                Save-TestConfiguration -Configuration $configuration -Path $configurationPath
+                { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                    Should -Throw
+            }
         }
 
         It 'accepts plugin content mode without a pack folder' {

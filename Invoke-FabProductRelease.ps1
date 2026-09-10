@@ -65,6 +65,42 @@ function Import-FabProductConfiguration {
     return Read-FabProductJson -Path $ConfigPath
 }
 
+function Assert-FabProductVersionTitle {
+    param(
+        [Parameter(Mandatory)]
+        [object]$Configuration
+    )
+
+    $engineVersions = @($Configuration.engineVersions | ForEach-Object { [string]$_ })
+    $properties = @($Configuration.versionTitles.PSObject.Properties)
+    if ($properties.Count -ne $engineVersions.Count) {
+        throw 'versionTitles must contain exactly one title for every engineVersions entry.'
+    }
+
+    $versionTitles = [ordered]@{}
+    foreach ($property in $properties) {
+        $version = [string]$property.Name
+        $title = [string]$property.Value
+        if ($engineVersions -cnotcontains $version) {
+            throw "versionTitles contains an engine version not present in engineVersions: '$version'."
+        }
+        if ([string]::IsNullOrWhiteSpace($title)) {
+            throw "versionTitles contains an empty title for engine version '$version'."
+        }
+        $versionTitles[$version] = $title
+    }
+    foreach ($version in $engineVersions) {
+        if (-not $versionTitles.Contains($version)) {
+            throw "versionTitles is missing engine version '$version'."
+        }
+    }
+    $titleValues = @($versionTitles.Values)
+    if (@($titleValues | Sort-Object -Unique).Count -ne $titleValues.Count) {
+        throw 'versionTitles values must be unique.'
+    }
+    return $versionTitles
+}
+
 function Import-FabProductListingJson {
     param(
         [Parameter(Mandatory)]
@@ -1491,7 +1527,10 @@ function Copy-FabProductPackage {
         [string]$BundleRoot,
 
         [Parameter(Mandatory)]
-        [object]$ProjectFileLinks
+        [object]$ProjectFileLinks,
+
+        [Parameter(Mandatory)]
+        [object]$VersionTitles
     )
 
     $items = [System.Collections.Generic.List[object]]::new()
@@ -1503,8 +1542,15 @@ function Copy-FabProductPackage {
             [System.IO.File]::Copy($sourcePath, (Join-Path $packageDirectory ([System.IO.Path]::GetFileName($sourcePath))), $false)
         }
         $bundleRelative = "packages/$directoryName/$([System.IO.Path]::GetFileName($release.ZipPath))"
+        $versionTitle = if ($VersionTitles.Contains([string]$release.EngineVersion)) {
+            [string]$VersionTitles[[string]$release.EngineVersion]
+        }
+        else {
+            throw "No canonical version title is configured for UE$($release.EngineVersion)."
+        }
         $items.Add([ordered]@{
                 engineVersion       = $release.EngineVersion
+                versionTitle        = $versionTitle
                 bundleRelativePath  = $bundleRelative
                 sha256              = $release.Sha256
                 projectFileLink     = if ($ProjectFileLinks.Contains($release.EngineVersion)) {
@@ -1661,6 +1707,7 @@ function Invoke-FabProductReleaseCore {
     }
     $engineVersions = @($configuration.engineVersions | ForEach-Object { [string]$_ }) |
         Sort-Object { [version]$_ }
+    $versionTitles = Assert-FabProductVersionTitle -Configuration $configuration
     $artifactRoot = if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
         [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'artifacts'))
     }
@@ -1746,7 +1793,8 @@ function Invoke-FabProductReleaseCore {
         }
         $mediaManifest = @(Copy-FabProductMedia -Media @($listing.Media) -BundleRoot $stagingRoot)
         $packageManifest = @(Copy-FabProductPackage -Releases $releaseResults.ToArray() `
-            -BundleRoot $stagingRoot -ProjectFileLinks $projectFileLinks)
+            -BundleRoot $stagingRoot -ProjectFileLinks $projectFileLinks `
+            -VersionTitles $versionTitles)
         $manifest = [ordered]@{
             schemaVersion            = 2
             pluginName               = [string]$configuration.pluginName

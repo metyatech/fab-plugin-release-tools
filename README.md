@@ -102,8 +102,9 @@ unchanged.
 ## Release a product
 
 The preferred product-level command reads every version in
-`FabPluginRelease.json.engineVersions`, builds them in numeric Unreal minor
-version order, runs submission preflight for every generated ZIP, and creates
+`FabPluginRelease.json.engineVersions`, uses the matching
+`FabPluginRelease.json.versionTitles` values for each generated package, builds
+them in numeric Unreal minor version order, runs submission preflight for every generated ZIP, and creates
 one atomic `FabSubmission` bundle:
 
 ```powershell
