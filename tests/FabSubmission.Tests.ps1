@@ -145,7 +145,7 @@ Describe 'Fab submission preflight' {
         Initialize-SubmissionFixture -Root $root -DescriptorModuleType 'DeveloperTool' -MetadataModuleType 'Unsupported'
         $result = Invoke-SubmissionFixture -Root $root
         $result.ExitCode | Should -Be 1
-        $result.Output | Should -Match '(?i)schema'
+        $result.Output | Should -Match '(?i)schema|Value should match one of the values specified by the enum'
     }
 
     It 'fails an explicit plugin-location hardcode' {

@@ -699,6 +699,24 @@ function Invoke-NativeProcessCapture {
     }
 }
 
+function Get-BundledDotNetPath {
+    param(
+        [Parameter(Mandatory)]
+        [string]$EngineRoot
+    )
+
+    $candidates = @(Get-ChildItem -LiteralPath (Join-Path $EngineRoot 'Engine\Binaries\ThirdParty\DotNet') -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Name -in @('dotnet.exe', 'dotnet.bat', 'dotnet.cmd') -and
+            $_.FullName -like '*\win-x64\*'
+        } |
+        Sort-Object @{ Expression = { if ($_.Extension -ieq '.exe') { 0 } else { 1 } } }, FullName)
+    if ($candidates.Count -ne 1) {
+        throw "Expected exactly one bundled win-x64 dotnet runtime for $EngineRoot; found $($candidates.Count)."
+    }
+    return $candidates[0].FullName
+}
+
 function Get-GitRepositoryInformation {
     param(
         [Parameter(Mandatory)]
@@ -2228,6 +2246,144 @@ function Invoke-UatProcess {
     }
 }
 
+function Invoke-ForcedUnityBuild {
+    param(
+        [Parameter(Mandatory)]
+        [string]$EngineRoot,
+
+        [Parameter(Mandatory)]
+        [string]$StagedPluginRoot,
+
+        [Parameter(Mandatory)]
+        [string]$SessionRoot,
+
+        [Parameter(Mandatory)]
+        [object]$Configuration,
+
+        [Parameter(Mandatory)]
+        [string]$EngineVersion,
+
+        [Parameter(Mandatory)]
+        [string]$LogPath,
+
+        [int]$TimeoutSeconds = 1800
+    )
+
+    $ubt = Join-Path $EngineRoot 'Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.dll'
+    if (-not [System.IO.File]::Exists($ubt)) {
+        throw "UnrealBuildTool.dll was not found for UE ${EngineVersion}: $ubt"
+    }
+    $dotnet = Get-BundledDotNetPath -EngineRoot $EngineRoot
+
+    $unityHostRoot = Join-Path $SessionRoot 'unity-host'
+    $unityPluginRoot = Join-Path $unityHostRoot "Plugins\$($Configuration.pluginName)"
+    [System.IO.Directory]::CreateDirectory($unityHostRoot) | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $unityHostRoot 'UnityBuildHost.uproject'),
+        '{ "FileVersion": 3, "Plugins": [ { "Name": "' + $Configuration.pluginName + '", "Enabled": true } ] }' + [Environment]::NewLine,
+        [System.Text.UTF8Encoding]::new($false))
+    Copy-SafeDirectoryTree -SourceRoot $StagedPluginRoot -DestinationRoot $unityPluginRoot
+
+    $projectFile = Join-Path $unityHostRoot 'UnityBuildHost.uproject'
+    $pluginFile = Join-Path $unityPluginRoot $Configuration.descriptorFile
+    $engineLogPath = Join-Path $SessionRoot 'unity-build.engine.log'
+    $commandParts = @(
+        'call',
+        (ConvertTo-CmdQuotedArgument -Value $dotnet),
+        (ConvertTo-CmdQuotedArgument -Value $ubt),
+        'UnrealEditor',
+        'Win64',
+        'Development',
+        (ConvertTo-CmdQuotedArgument -Value "-Project=$projectFile"),
+        (ConvertTo-CmdQuotedArgument -Value "-plugin=$pluginFile"),
+        '-noubtmakefiles',
+        '-nohotreload',
+        '-ForceUnity',
+        '-DisableAdaptiveUnity',
+        '-Rebuild',
+        (ConvertTo-CmdQuotedArgument -Value "-log=$engineLogPath")
+    )
+    $command = [string]::Join(' ', $commandParts)
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = (Join-Path $env:SystemRoot 'System32\cmd.exe')
+    $startInfo.WorkingDirectory = $unityHostRoot
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.Arguments = "/d /s /v:off /c `"$command`""
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $timedOut = $false
+    $started = $false
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        if (-not $process.Start()) {
+            throw 'Failed to start forced Unity Build UBT process.'
+        }
+        $started = $true
+        $stdoutEnded = $false
+        $stderrEnded = $false
+        $stdoutTask = $process.StandardOutput.ReadLineAsync()
+        $stderrTask = $process.StandardError.ReadLineAsync()
+        while (-not ($process.HasExited -and $stdoutEnded -and $stderrEnded)) {
+            if (-not $stdoutEnded -and $stdoutTask.IsCompleted) {
+                $line = $stdoutTask.GetAwaiter().GetResult()
+                if ($null -eq $line) {
+                    $stdoutEnded = $true
+                }
+                else {
+                    $lines.Add($line)
+                    Write-ReleaseLog -LogPath $LogPath -Message $line
+                    $stdoutTask = $process.StandardOutput.ReadLineAsync()
+                }
+            }
+            if (-not $stderrEnded -and $stderrTask.IsCompleted) {
+                $line = $stderrTask.GetAwaiter().GetResult()
+                if ($null -eq $line) {
+                    $stderrEnded = $true
+                }
+                else {
+                    $lines.Add($line)
+                    Write-ReleaseLog -LogPath $LogPath -Message "STDERR: $line"
+                    $stderrTask = $process.StandardError.ReadLineAsync()
+                }
+            }
+            if (-not $process.HasExited -and $stopwatch.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
+                $timedOut = $true
+                $process.Kill($true)
+            }
+            if (-not $process.HasExited) {
+                [void]$process.WaitForExit(25)
+            }
+        }
+        $process.WaitForExit()
+        $result = [pscustomobject]@{
+            Command  = "cmd.exe /d /s /v:off /c $command"
+            ExitCode = $process.ExitCode
+            TimedOut = $timedOut
+            Lines    = $lines.ToArray()
+        }
+        if ($result.TimedOut) {
+            throw "Forced Unity Build timed out after $TimeoutSeconds seconds."
+        }
+        if ($result.ExitCode -ne 0) {
+            $tail = [string]::Join([Environment]::NewLine, @($result.Lines | Select-Object -Last 40))
+            throw "Forced Unity Build failed with exit code $($result.ExitCode).`n$tail"
+        }
+        return $result
+    }
+    finally {
+        $stopwatch.Stop()
+        if ($started -and -not $process.HasExited) {
+            $process.Kill($true)
+            $process.WaitForExit()
+        }
+        $process.Dispose()
+    }
+}
+
 function Invoke-UatBuildPlugin {
     param(
         [Parameter(Mandatory)]
@@ -2760,6 +2916,11 @@ function Invoke-FabPluginReleaseCore {
             exitCode = $null
             timedOut = $false
             warnings = @()
+            unity    = [ordered]@{
+                command  = $null
+                exitCode = $null
+                timedOut = $false
+            }
         }
         workingDirectory = if ($KeepWorkingDirectory) { $sessionRoot } else { $null }
     }
@@ -2861,35 +3022,46 @@ function Invoke-FabPluginReleaseCore {
         $report.build.timedOut = $buildResult.timedOut
         $report.build.warnings = @($buildResult.warnings)
 
+        $unityBuildResult = Invoke-ReleaseGate -Context $context `
+            -Name '7. Forced Unity Build compilation' -Action {
+            Invoke-ForcedUnityBuild -EngineRoot $preflight.EngineRoot `
+                -StagedPluginRoot $stagedPluginRoot -SessionRoot $sessionRoot `
+                -Configuration $configuration -EngineVersion $EngineVersion `
+                -LogPath $context.LogPath -TimeoutSeconds 1800
+        }
+        $report.build.unity.command = $unityBuildResult.Command
+        $report.build.unity.exitCode = $unityBuildResult.ExitCode
+        $report.build.unity.timedOut = $unityBuildResult.TimedOut
+
         $temporaryZip = Join-Path $sessionRoot 'candidate.zip'
-        Invoke-ReleaseGate -Context $context -Name '7. Deterministic ZIP creation' -Action {
+        Invoke-ReleaseGate -Context $context -Name '8. Deterministic ZIP creation' -Action {
             New-DeterministicFabZip -PluginRoot $stagedPluginRoot `
                 -PluginName ([string]$configuration.pluginName) -ZipPath $temporaryZip
         }
-        Invoke-ReleaseGate -Context $context -Name '8. Direct ZIP structure validation' -Action {
+        Invoke-ReleaseGate -Context $context -Name '9. Direct ZIP structure validation' -Action {
             if ($null -ne $zipInspectionHook) {
                 & $zipInspectionHook $temporaryZip
             }
             Assert-FabZipDirectly -ZipPath $temporaryZip `
                 -Configuration $configuration -EngineVersion $EngineVersion
         }
-        Invoke-ReleaseGate -Context $context -Name '9. Safe ZIP extraction' -Action {
+        Invoke-ReleaseGate -Context $context -Name '10. Safe ZIP extraction' -Action {
             Expand-FabZipSafely -ZipPath $temporaryZip -DestinationRoot $extractedRoot
         }
         $extractedPluginRoot = Join-Path $extractedRoot $configuration.pluginName
-        Invoke-ReleaseGate -Context $context -Name '10. Extracted package revalidation' -Action {
+        Invoke-ReleaseGate -Context $context -Name '11. Extracted package revalidation' -Action {
             Assert-FabPackage -PluginRoot $extractedPluginRoot `
                 -Configuration $configuration -EngineVersion $EngineVersion
         }
         $stagedManifest = @(Invoke-ReleaseGate -Context $context `
-            -Name '11. SHA-256 manifest comparison' -Action {
+            -Name '12. SHA-256 manifest comparison' -Action {
             $expectedManifest = @(Get-FabFileManifest -PluginRoot $stagedPluginRoot)
             $actualManifest = @(Get-FabFileManifest -PluginRoot $extractedPluginRoot)
             Assert-FabManifestsEqual -Expected $expectedManifest -Actual $actualManifest
             $expectedManifest
         })
 
-        Invoke-ReleaseGate -Context $context -Name '12. Artifact finalization' -Action {
+        Invoke-ReleaseGate -Context $context -Name '13. Artifact finalization' -Action {
             $zipName = "$($configuration.pluginName)_$($sourceDescriptor.VersionName)_UE${EngineVersion}_Win64.zip"
             $finalZip = Join-Path $context.OutputPath $zipName
             $hashPath = "$finalZip.sha256"

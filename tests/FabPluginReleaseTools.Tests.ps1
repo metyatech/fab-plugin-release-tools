@@ -155,6 +155,16 @@ InModuleScope FabPluginReleaseTools {
             [System.IO.File]::WriteAllText(
                 (Join-Path $Root 'Engine\Build\Build.version'),
                 '{"MajorVersion":5,"MinorVersion":8}')
+            $ubtDirectory = Join-Path $Root 'Engine\Binaries\DotNET\UnrealBuildTool'
+            $dotnetDirectory = Join-Path $Root 'Engine\Binaries\ThirdParty\DotNet\Fake\win-x64'
+            [System.IO.Directory]::CreateDirectory($ubtDirectory) | Out-Null
+            [System.IO.Directory]::CreateDirectory($dotnetDirectory) | Out-Null
+            [System.IO.File]::WriteAllText(
+                (Join-Path $ubtDirectory 'UnrealBuildTool.dll'),
+                'fake UBT marker')
+            [System.IO.File]::WriteAllLines(
+                (Join-Path $dotnetDirectory 'dotnet.bat'),
+                @('@echo off', 'exit /b 0'))
             $body = @(
                 '@echo off',
                 'setlocal EnableExtensions DisableDelayedExpansion',
@@ -193,6 +203,68 @@ InModuleScope FabPluginReleaseTools {
                 }
             }
             [System.IO.File]::WriteAllLines((Join-Path $batchDirectory 'RunUAT.bat'), $body)
+        }
+
+        function Invoke-UnityCollisionFixtureSetup {
+            param(
+                [Parameter(Mandatory)]
+                [string]$Root,
+
+                [switch]$Fixed
+            )
+
+            Invoke-TestPluginSetup -Root $Root
+            $descriptor = Get-TestDescriptorObject
+            $descriptor.Modules = @(
+                [ordered]@{
+                    Name              = 'TestPlugin'
+                    Type              = 'Runtime'
+                    LoadingPhase      = 'Default'
+                    PlatformAllowList = @('Win64')
+                })
+            [System.IO.File]::WriteAllText(
+                (Join-Path $Root 'TestPlugin.uplugin'),
+                (($descriptor | ConvertTo-Json -Depth 30) + [Environment]::NewLine),
+                [System.Text.UTF8Encoding]::new($false))
+            [System.IO.File]::WriteAllText(
+                (Join-Path $Root 'Source\TestPlugin\TestPlugin.Build.cs'),
+                ('// Copyright (c) 2026 metyatech. All rights reserved.' + [Environment]::NewLine +
+                    'using UnrealBuildTool;' + [Environment]::NewLine +
+                    'public class TestPlugin : ModuleRules { public TestPlugin(ReadOnlyTargetRules Target) : base(Target) { PublicDependencyModuleNames.Add("Core"); } }' + [Environment]::NewLine))
+            $firstHelperName = 'IsApprovable'
+            $secondHelperName = if ($Fixed) { 'IsBaselineApprovable' } else { 'IsApprovable' }
+            [System.IO.File]::WriteAllText(
+                (Join-Path $Root 'Source\TestPlugin\First.cpp'),
+                ('// Copyright (c) 2026 metyatech. All rights reserved.' + [Environment]::NewLine +
+                    '#include "CoreMinimal.h"' + [Environment]::NewLine +
+                    "namespace { bool $firstHelperName(int Value) { return Value > 0; } }" + [Environment]::NewLine +
+                    "int FirstUnityProbe() { return $firstHelperName(1) ? 0 : 1; }" + [Environment]::NewLine))
+            [System.IO.File]::WriteAllText(
+                (Join-Path $Root 'Source\TestPlugin\Second.cpp'),
+                ('// Copyright (c) 2026 metyatech. All rights reserved.' + [Environment]::NewLine +
+                    '#include "CoreMinimal.h"' + [Environment]::NewLine +
+                    "namespace { bool $secondHelperName(int Value) { return Value > 0; } }" + [Environment]::NewLine +
+                    "int SecondUnityProbe() { return $secondHelperName(1) ? 0 : 1; }" + [Environment]::NewLine))
+        }
+
+        function Get-UnityCollisionStagedFixture {
+            param(
+                [Parameter(Mandatory)]
+                [string]$SourceRoot,
+
+                [Parameter(Mandatory)]
+                [string]$StagedRoot
+            )
+
+            $configuration = Import-TestConfiguration -Directory $SourceRoot
+            Copy-FabPluginAllowList -PluginPath $SourceRoot -DestinationRoot $StagedRoot `
+                -Configuration $configuration
+            $sourceDescriptor = Read-PluginDescriptor -DescriptorPath (
+                Join-Path $SourceRoot 'TestPlugin.uplugin')
+            [void](ConvertTo-SalesPluginDescriptor -SourceDescriptor $sourceDescriptor `
+                    -Configuration $configuration -EngineVersion '5.8' `
+                    -DestinationPath (Join-Path $StagedRoot 'TestPlugin.uplugin'))
+            return $configuration
         }
 
         function Import-TestConfiguration {
@@ -2138,6 +2210,50 @@ const char* Text = "UPROPERTY(EditAnywhere)";
         }
     }
 
+    Describe 'Actual forced Unity Build regression' {
+        It 'passes isolated BuildPlugin, fails the duplicate anonymous helper under Unity, and passes after the rename' {
+            $engineRoot = Resolve-FabEngineRoot -EngineVersion '5.8'
+            $collisionSource = Join-Path $TestDrive 'UnityCollisionSource'
+            $collisionStaged = Join-Path $TestDrive 'UnityCollisionStaged'
+            $collisionBuildInput = Join-Path $TestDrive 'UnityCollisionBuildInput'
+            $collisionBuildOutput = Join-Path $TestDrive 'UnityCollisionBuildOutput'
+            $collisionLog = Join-Path $TestDrive 'UnityCollision.log'
+            Invoke-UnityCollisionFixtureSetup -Root $collisionSource
+            $collisionConfiguration = Get-UnityCollisionStagedFixture `
+                -SourceRoot $collisionSource -StagedRoot $collisionStaged
+            $normalResult = Invoke-UatBuildPlugin -EngineRoot $engineRoot `
+                -StagedPluginRoot $collisionStaged -BuildInputPluginRoot $collisionBuildInput `
+                -BuildOutputRoot $collisionBuildOutput -Configuration $collisionConfiguration `
+                -EngineVersion '5.8' -LogPath $collisionLog -TimeoutSeconds 900
+            $normalResult.exitCode | Should -Be 0
+            $normalResult.timedOut | Should -BeFalse
+
+            $collisionSession = Join-Path $TestDrive 'UnityCollisionSession'
+            [System.IO.Directory]::CreateDirectory($collisionSession) | Out-Null
+            { Invoke-ForcedUnityBuild -EngineRoot $engineRoot `
+                    -StagedPluginRoot $collisionStaged -SessionRoot $collisionSession `
+                    -Configuration $collisionConfiguration -EngineVersion '5.8' `
+                    -LogPath $collisionLog -TimeoutSeconds 900 } |
+                Should -Throw '*Forced Unity Build failed*'
+
+            $fixedSource = Join-Path $TestDrive 'UnityCollisionFixedSource'
+            $fixedStaged = Join-Path $TestDrive 'UnityCollisionFixedStaged'
+            $fixedSession = Join-Path $TestDrive 'UnityCollisionFixedSession'
+            $fixedLog = Join-Path $TestDrive 'UnityCollisionFixed.log'
+            Invoke-UnityCollisionFixtureSetup -Root $fixedSource -Fixed
+            $fixedConfiguration = Get-UnityCollisionStagedFixture `
+                -SourceRoot $fixedSource -StagedRoot $fixedStaged
+            [System.IO.Directory]::CreateDirectory($fixedSession) | Out-Null
+            $fixedResult = Invoke-ForcedUnityBuild -EngineRoot $engineRoot `
+                -StagedPluginRoot $fixedStaged -SessionRoot $fixedSession `
+                -Configuration $fixedConfiguration -EngineVersion '5.8' `
+                -LogPath $fixedLog -TimeoutSeconds 900
+            $fixedResult.ExitCode | Should -Be 0
+            $fixedResult.TimedOut | Should -BeFalse
+            $fixedResult.Command | Should -Match '(?i)-ForceUnity'
+        }
+    }
+
     Describe 'Separate-process release entry point' {
         BeforeAll {
             function Invoke-TestEntryPoint {
@@ -2340,7 +2456,7 @@ exit $exitCode
             @($reportFile).Count | Should -Be 1
             @(Get-ChildItem -LiteralPath $outputRoot -File -Filter '*.log').Count | Should -Be 1
             $report = Get-Content -Raw $reportFile.FullName | ConvertFrom-Json
-            @($report.gates)[-1].name | Should -BeLike '8.*'
+            @($report.gates)[-1].name | Should -BeLike '9.*'
             @($report.gates)[-1].status | Should -BeExactly 'FAIL'
         }
     }

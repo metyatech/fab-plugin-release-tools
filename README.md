@@ -220,14 +220,21 @@ The command runs these gates in order and stops at the first failure:
 4. sales descriptor normalization
 5. complete staged package validation
 6. real UAT `BuildPlugin` against a separate staging copy
-7. deterministic ZIP creation
-8. direct ZIP structure and descriptor validation
-9. zip-slip-safe extraction
-10. identical package validation on extracted content
-11. staged/extracted byte-size and SHA-256 manifest comparison
-12. atomic artifact finalization
+7. forced Unity Build compilation through UBT against an isolated temporary host project
+8. deterministic ZIP creation
+9. direct ZIP structure and descriptor validation
+10. zip-slip-safe extraction
+11. identical package validation on extracted content
+12. staged/extracted byte-size and SHA-256 manifest comparison
+13. atomic artifact finalization
 
 There is no build-skip or validation-skip option.
+
+The Unity gate is independent of plugin `Build.cs` settings. Unreal Engine
+5.5-5.8 expose the official UBT `-ForceUnity` target argument; the release
+tool runs that argument against a temporary host project after the normal UAT
+`BuildPlugin` succeeds. This catches translation-unit collisions that an
+isolated compile can miss while preserving the normal BuildPlugin gate.
 
 Copyright validation uses `publisher.copyrightNotice` as the required single
 notice for every source file by default. A configuration may add
