@@ -34,14 +34,10 @@ export function makeManifest(overrides = {}) {
     supportUrl: 'https://example.com/support',
     technicalInformationFile: 'submission/FabTechnicalInformation.txt',
     media: [{ order: 1, role: 'thumbnail', bundleRelativePath: 'media/001.jpg', sha256: 'a'.repeat(64) }],
-    packages: [{ engineVersion: '5.8', versionTitle: 'UE 5.8', bundleRelativePath: 'packages/UE5.8/package.zip', sha256: 'b'.repeat(64), projectFileLink: 'https://example.com/package.zip' }],
+    packages: [{ engineVersion: '5.8', bundleRelativePath: 'packages/UE5.8/package.zip', sha256: 'b'.repeat(64), projectFileLink: 'https://example.com/package.zip' }],
     portalReady: true,
   };
-  const manifest = structuredClone({ ...base, ...overrides });
-  for (const packageInfo of manifest.packages ?? []) {
-    if (!packageInfo.versionTitle && packageInfo.engineVersion) packageInfo.versionTitle = `UE ${packageInfo.engineVersion}`;
-  }
-  return manifest;
+  return structuredClone({ ...base, ...overrides });
 }
 
 export function fixtureState(manifest, overrides = {}) {

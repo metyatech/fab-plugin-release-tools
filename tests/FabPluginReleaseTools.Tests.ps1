@@ -14,7 +14,6 @@ InModuleScope FabPluginReleaseTools {
                 pluginName                 = 'TestPlugin'
                 descriptorFile             = 'TestPlugin.uplugin'
                 engineVersions             = @('5.8')
-                versionTitles              = [ordered]@{ '5.8' = 'UE 5.8' }
                 platforms                  = @('Win64')
                 distributionModules        = @('TestPlugin')
                 enabledPluginDependencies  = @()

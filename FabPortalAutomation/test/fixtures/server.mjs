@@ -18,53 +18,16 @@ function pageMarkup(state, listingId) {
   const statusMarkup = state.statusRendering === 'plain-text'
     ? `<div data-status-value>${html(state.status)}</div>`
     : `<div data-testid="listing-status" data-status-value>${html(state.status)}</div>`;
-  const productFormats = state.productFormats ?? [{ name: 'Unreal Engine' }];
-  const prefetchedFormats = state.prefetchedAssetFormats === 'missing'
-    ? undefined
-    : state.prefetchedAssetFormats ?? productFormats.map((format) => ({ assetFormatType: { code: format.code ?? format.name.toLowerCase().replaceAll(' ', '-'), name: format.name } }));
-  const prefetchedListing = {
-    uid: listingId,
-    ...(state.prefetchedListingFields ?? {}),
-    ...(prefetchedFormats === undefined ? {} : { assetFormats: prefetchedFormats }),
-  };
-  const prefetchedKey = state.prefetchedListingId ?? listingId;
-  const prefetchedData = JSON.stringify({
-    [`/i/portal/listings/${prefetchedKey}`]: prefetchedListing,
-    ...(state.prefetchedCategoryEntries ? { '/i/taxonomy/categories/tree': { results: { 'tool-and-plugin': state.prefetchedCategoryEntries } } } : {}),
-  }).replaceAll('<', '\\u003c');
-  const addFormatButtons = Array.from({ length: state.addFormatButtonCount ?? 1 }, () => '<button type="button" aria-label="Add new format">Add new format</button>').join('');
-  const delayedChoiceStyle = state.formatChoiceDelayMs ? ' style="display:none"' : '';
-  const formatChoices = Array.from({ length: state.formatChoiceCount ?? 1 }, () => state.formatChoiceWrapperAndButton
-    ? `<li role="option" aria-label="Unreal Engine"${delayedChoiceStyle}><button type="button" aria-label="Unreal Engine">Unreal Engine</button></li>`
-    : state.formatChoiceButtonOnly
-      ? `<button type="button" aria-label="Unreal Engine"${delayedChoiceStyle}>Unreal Engine</button>`
-      : `<button type="button" role="option" aria-label="Unreal Engine"${delayedChoiceStyle}>Unreal Engine</button>`).join('');
-  const nextFormatButton = state.formatChoiceNeedsNext ? `<button type="button" aria-label="${state.observedChooserNextAriaLabel ? 'Confirm selected option: ' : 'Confirm selected option: Unreal Engine'}" disabled>Next</button><button type="button" aria-label="Confirm" hidden>Confirm</button>` : '';
-  const responsiveStyle = state.responsiveFormatNavigation ? '<style>[data-responsive-format-navigation]{display:block}@media (max-width: 1000px){[data-responsive-format-navigation]{display:none}}</style>' : '';
-  const formatInventory = `<section aria-label="Included Files" data-testid="product-formats" data-responsive-format-navigation="${state.responsiveFormatNavigation ? 'true' : 'false'}" data-format-count="${productFormats.length}"${state.hideFormatInventory ? ' hidden' : ''}><h2>Included Files</h2>${productFormats.map((format) => `<button type="button" data-format-name="${html(format.name)}">${html(format.name)}</button>`).join('')}${addFormatButtons}</section>`;
-  const portalPlatform = state.platformDisplay ?? (state.platforms?.[0] === 'Win64' ? 'Windows' : state.platforms?.[0] ?? 'Win64');
-  const versionTextFields = state.realObservedVersionForm
-    ? '<input placeholder="Enter version title" required><input placeholder="www.filesharing.com/link/to/project" required>'
-    : '<label>Version title *<input aria-label="Version title *"></label><label>Project file link *<input aria-label="Project file link *"></label>';
-  const versionSelectors = state.realObservedVersionForm
-    ? `<input role="combobox" aria-label="Support Unreal Engine versions multi select field with search" placeholder="Search or select engine versions" readonly><div role="option" aria-label="${html(state.engineVersions[0] ?? '5.8')}">${html(state.engineVersions[0] ?? '5.8')}</div><input role="combobox" aria-label="Support target platforms multi select field with search" placeholder="Search or select target platforms" readonly><div role="option" aria-label="${html(portalPlatform)}" aria-selected="${state.preselectedPlatform ? 'true' : 'false'}">${html(portalPlatform)}</div><button type="button" aria-label="Remove ${html(portalPlatform)}"${state.preselectedPlatform ? '' : ' hidden'}>Remove ${html(portalPlatform)}</button>`
-    : state.customVersionControls
-      ? `<input role="combobox" aria-label="Supported engine version *" placeholder="Search or select engine versions" readonly><div role="option" aria-label="${html(state.engineVersions[0] ?? '5.8')}">${html(state.engineVersions[0] ?? '5.8')}</div><input role="combobox" aria-label="Supported target platforms *" placeholder="Search or select target platforms" readonly><div role="option" aria-label="${html(portalPlatform)}">${html(portalPlatform)}</div>`
-      : `<label>Supported engine version *<select aria-label="Supported engine version *"><option>${html(state.engineVersions[0] ?? '5.8')}</option></select></label><label>Supported target platforms *<select aria-label="Supported target platforms *"><option>${html(portalPlatform)}</option></select></label>`;
-  const versionForm = state.formatChoiceNeedsNext ? `<h2>Add Unreal Engine version</h2>${versionTextFields}${versionSelectors}` : '';
-  const formatChooser = `<div role="dialog" aria-label="Add new format" hidden><h2>Add new format</h2>${formatChoices}${nextFormatButton}${versionForm}</div>`;
-  const strayFormatButton = state.strayFormatButton ? '<button type="button" aria-label="Unreal Engine">Unreal Engine</button>' : '';
   const listingControls = `
-    <input role="combobox" aria-label="Search" disabled>
     <h1>${html(state.title)}</h1>
     ${statusMarkup}
     <label>Title *<input aria-label="Title *" value="${html(state.title)}" ${state.disableFields?.includes('title') ? 'disabled' : ''}></label>
     <label>Short description *<input aria-label="Short description *" value="${html(state.shortDescription)}" ${state.disableFields?.includes('shortDescription') ? 'disabled' : ''}></label>
     <label>Description *<div role="textbox" aria-label="Description *" contenteditable="true">${html(state.longDescription)}</div></label>
-    <label>Product type *<select aria-label="Product type *">${(state.productTypeOptions ?? [state.productType]).map((option) => `<option${option === state.productType ? ' selected' : ''}>${html(option)}</option>`).join('')}</select></label>
+    <label>Product type *<select aria-label="Product type *"><option selected>${html(state.productType)}</option></select></label>
     <label>Category *<input role="combobox" aria-label="Category selection" value="${html(state.category)}"></label>
-    <label>Tags *<input aria-label="Tags *" value="${html(state.tags[0] ?? '')}"${state.tagsEditable ? '' : ' readonly'}>${state.tagsCount ? `<input role="combobox" aria-label="${html(state.tagSearchAriaLabel ?? 'Search a tag')}" placeholder="${html(state.tagSearchPlaceholder ?? 'Search a tag')}"><span id="tagsCount">${html(state.tagsCount)}</span>${(state.tagOptions ?? []).map((tag) => `<div role="option" aria-label="${html(tag)}">${html(tag)}</div>`).join('')}` : ''}</label>
-    ${formatInventory}${strayFormatButton}
+    <label>Tags *<input aria-label="Tags *" value="${html(state.tags[0] ?? '')}" readonly></label>
+    <button type="button" data-testid="included-format">Unreal Engine</button>
     ${state.mainProjectVersionsVisible ? '<h2>Project Versions*</h2><a href="/portal/listings">Back to listings</a>' : ''}
     ${radio('Standard License (Free or Paid)', true)}
     <label>Personal price *<input aria-label="Personal price *" value="${html(state.personalPriceUsd)}"></label>
@@ -80,7 +43,7 @@ function pageMarkup(state, listingId) {
     <button type="button" data-testid="submit">Submit for review</button>
     <button type="button" data-testid="cancel">Cancel submission</button>
     ${unrelatedDialog}
-    ${confirmationDialog}${formatChooser}`;
+    ${confirmationDialog}`;
   const formatControls = `
     ${state.omitFormatBack ? '' : '<button type="button" aria-label="Back to listing">Back to listing</button>'}
     ${state.formatListingSummaryVisible ? `<button type="button" data-testid="format-listing-summary">${html(state.title)} Tools &amp; Plugins From $29.99</button>` : ''}
@@ -98,12 +61,11 @@ function pageMarkup(state, listingId) {
     </section>
     <section data-testid="media-gallery" data-existing="${html(state.mediaExisting)}" data-order="${html(state.mediaOrder ?? '')}" data-upload-order="${html(initialStateMediaOrder(state))}">${html(state.mediaExisting === 'existing' ? 'Existing media' : state.mediaExisting === 'known' || state.mediaExisting === 'uploaded' ? '001 thumbnail 002 gallery' : 'Empty gallery')}</section>
     <input type="file" data-testid="media-upload" multiple>`;
-  return `<!doctype html><html><head><title>Fab fixture</title>${responsiveStyle}</head><body>
-  <script id="js-json-data-prefetched-data" type="application/json">${prefetchedData}</script>
+  return `<!doctype html><html><head><title>Fab fixture</title></head><body>
   <main id="listing-view">${listingControls}</main>
   <main id="format-view" hidden>${formatControls}</main>
   ${challengeMarkup}
-    <script>
+  <script>
     const listingView = document.querySelector('#listing-view');
     const formatView = document.querySelector('#format-view');
     const value = (selector) => document.querySelector(selector)?.value ?? '';
@@ -145,63 +107,7 @@ function pageMarkup(state, listingId) {
       mediaExisting: document.querySelector('[data-testid="media-gallery"]')?.dataset.existing ?? 'existing',
       mediaOrder: document.querySelector('[data-testid="media-gallery"]')?.dataset.order ?? ''
     });
-    document.querySelectorAll('[data-format-name]').forEach((button) => button.addEventListener('click', () => setView('format')));
-    document.querySelectorAll('[aria-label="Add new format"]').forEach((button) => button.addEventListener('click', () => {
-      const dialog = document.querySelector('[role="dialog"][aria-label="Add new format"]');
-      dialog.hidden = false;
-      if (${JSON.stringify(state.formatChoiceDelayMs ?? 0)} > 0) {
-        setTimeout(() => dialog.querySelectorAll('[role="option"]').forEach((choice) => { choice.style.display = ''; }), ${JSON.stringify(state.formatChoiceDelayMs ?? 0)});
-      }
-    }));
-    const createFormat = async () => {
-      if (${JSON.stringify(Boolean(state.challengeAfterFormatCreate))}) revealChallenge();
-      await fetch(${JSON.stringify(state.formatCreateRequestPath ?? '/api/create-format')}, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Unreal Engine' }) });
-      const inventory = document.querySelector('[data-testid="product-formats"]');
-      inventory.dataset.formatCount = '1';
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.dataset.formatName = 'Unreal Engine';
-      button.textContent = 'Unreal Engine';
-      button.addEventListener('click', () => setView('format'));
-      inventory.insertBefore(button, inventory.querySelector('[aria-label="Add new format"]'));
-      document.querySelector('[role="dialog"][aria-label="Add new format"]').hidden = true;
-    };
-    document.querySelectorAll(${JSON.stringify(state.formatChoiceButtonOnly || state.formatChoiceWrapperAndButton ? '[role="dialog"][aria-label="Add new format"] button[aria-label="Unreal Engine"]' : '[role="option"][aria-label="Unreal Engine"]')}).forEach((choice) => choice.addEventListener('click', async () => {
-      if (${JSON.stringify(Boolean(state.formatChoiceNeedsNext))}) {
-        choice.setAttribute('aria-selected', 'true');
-        const next = document.querySelector('[role="dialog"][aria-label="Add new format"] [aria-label^="Confirm selected option:"]');
-        if (next) next.disabled = false;
-        return;
-      }
-      await createFormat();
-    }));
-    document.querySelector('[role="dialog"][aria-label="Add new format"] [aria-label^="Confirm selected option:"]')?.addEventListener('click', () => {
-      if (${JSON.stringify(Boolean(state.formatChoiceNeedsNext))}) {
-        const next = document.querySelector('[role="dialog"][aria-label="Add new format"] [aria-label^="Confirm selected option:"]');
-        const confirm = document.querySelector('[role="dialog"][aria-label="Add new format"] [aria-label="Confirm"]');
-        if (next) next.hidden = true;
-        if (confirm) {
-          if (${JSON.stringify(Number(state.confirmDelayMs ?? 0))} > 0) setTimeout(() => { confirm.hidden = false; }, ${JSON.stringify(Number(state.confirmDelayMs ?? 0))});
-          else confirm.hidden = false;
-        }
-        return;
-      }
-      createFormat();
-    });
-    document.querySelector('[role="dialog"][aria-label="Add new format"] [aria-label="Confirm"]')?.addEventListener('click', createFormat);
-    if (${JSON.stringify(Boolean(state.realObservedVersionForm || state.customVersionControls))}) {
-      const versionComboboxes = document.querySelectorAll('[role="dialog"][aria-label="Add new format"] [role="combobox"]');
-      const versionOptions = document.querySelectorAll('[role="dialog"][aria-label="Add new format"] [role="option"]');
-      const engineOption = [...versionOptions].find((option) => option.getAttribute('aria-label') === ${JSON.stringify(state.engineVersions?.[0] ?? '5.8')});
-      const platformOption = [...versionOptions].find((option) => option.getAttribute('aria-label') === ${JSON.stringify(portalPlatform)});
-      engineOption?.addEventListener('click', () => { if (versionComboboxes[0]) versionComboboxes[0].value = engineOption.getAttribute('aria-label') ?? ''; });
-      platformOption?.addEventListener('click', () => {
-        const selected = platformOption.getAttribute('aria-selected') === 'true';
-        platformOption.setAttribute('aria-selected', selected ? 'false' : 'true');
-        if (versionComboboxes[1]) versionComboboxes[1].value = selected ? '' : (platformOption.getAttribute('aria-label') ?? '');
-        document.querySelector('[aria-label="Remove ${html(portalPlatform)}"]')?.toggleAttribute('hidden', selected);
-      });
-    }
+    document.querySelector('[data-testid="included-format"]').addEventListener('click', () => setView('format'));
     document.querySelector('[aria-label="Back to listing"]')?.addEventListener('click', () => setView('listing'));
     document.querySelector('[data-testid="format-listing-summary"]')?.addEventListener('click', () => setView('listing'));
     document.querySelector('[data-testid="save"]').addEventListener('click', () => { syncFormatState(); if (${JSON.stringify(Boolean(state.challengeAfterSave))}) revealChallenge(); fetch('/api/save', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload()) }); });
@@ -232,9 +138,6 @@ function pageMarkup(state, listingId) {
       document.getElementById(toggle.getAttribute('aria-controls')).hidden = false;
     }));
     document.querySelector('[data-testid="media-upload"]').addEventListener('change', () => { const gallery = document.querySelector('[data-testid="media-gallery"]'); gallery.dataset.existing = 'uploaded'; gallery.dataset.order = gallery.dataset.uploadOrder; gallery.textContent = '001 thumbnail 002 gallery'; });
-    const revealFormatAfterField = ${JSON.stringify(state.revealFormatAfterField ?? null)};
-    if (revealFormatAfterField) document.querySelectorAll('input,select,[contenteditable="true"]').forEach((control) => control.addEventListener('input', () => { if (control.getAttribute('aria-label') === revealFormatAfterField) document.querySelector('[data-testid="product-formats"]')?.removeAttribute('hidden'); }));
-    if (revealFormatAfterField) document.querySelectorAll('select').forEach((control) => control.addEventListener('change', () => { if (control.getAttribute('aria-label') === revealFormatAfterField) document.querySelector('[data-testid="product-formats"]')?.removeAttribute('hidden'); }));
   </script>
   </body></html>`;
 }
@@ -267,26 +170,11 @@ export async function startFixture(initialState, { dropSaveFields = [], redirect
       response.end(pageMarkup(state, listingId));
       return;
     }
-    if (request.method === 'PATCH' && url.pathname.startsWith('/i/portal/listings/')) {
-      const body = JSON.parse(await readBody(request) || '{}');
-      mutations.push({ method: 'PATCH', pathname: url.pathname, body });
-      response.writeHead(200, { 'content-type': 'application/json' });
-      response.end('{}');
-      return;
-    }
     if (request.method === 'POST' && url.pathname === '/api/save') {
       const body = JSON.parse(await readBody(request) || '{}');
       mutations.push({ method: 'POST', pathname: url.pathname, body });
       for (const [key, value] of Object.entries(body)) if (!dropSaveFields.includes(key)) state[key] = value;
       if (state.challengeAfterSave) state.challengeVisible = true;
-      response.writeHead(200, { 'content-type': 'application/json' });
-      response.end('{}');
-      return;
-    }
-    if (request.method === 'POST' && url.pathname === (state.formatCreateRequestPath ?? '/api/create-format')) {
-      const body = JSON.parse(await readBody(request) || '{}');
-      mutations.push({ method: 'POST', pathname: url.pathname, body });
-      if (body.name === 'Unreal Engine' && !(state.productFormats ?? []).some((format) => format.name === 'Unreal Engine')) state.productFormats = [...(state.productFormats ?? []), { name: 'Unreal Engine' }];
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end('{}');
       return;

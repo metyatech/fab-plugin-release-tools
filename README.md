@@ -102,9 +102,8 @@ unchanged.
 ## Release a product
 
 The preferred product-level command reads every version in
-`FabPluginRelease.json.engineVersions`, uses the matching
-`FabPluginRelease.json.versionTitles` values for each generated package, builds
-them in numeric Unreal minor version order, runs submission preflight for every generated ZIP, and creates
+`FabPluginRelease.json.engineVersions`, builds them in numeric Unreal minor
+version order, runs submission preflight for every generated ZIP, and creates
 one atomic `FabSubmission` bundle:
 
 ```powershell
@@ -331,187 +330,40 @@ formats only staged PowerShell files and restages them before a commit.
 
 `FabPortalSubmission.json` is the sole production input to the guarded portal
 automation. Install its pinned Node dependency with `npm ci` from
-`FabPortalAutomation`.
-
-For a dedicated Fab browser session, launch the repository helper. It uses a
-persistent non-default Chrome user-data directory outside the repository and
-discovers the actual localhost CDP port from Chrome's `DevToolsActivePort`
-file; it never copies or reads the default Chrome profile, cookies, passwords,
-or browser storage:
-
-```powershell
-$session = pwsh .\Start-FabPortalChrome.ps1 `
-  -ListingUrl <Fab-listing-edit-URL> `
-  -Json | ConvertFrom-Json
-$session.CdpEndpoint
-$session.CdpWebSocketEndpoint
-```
-
-If the CDP-enabled window cannot pass an authentication security check, start
-the same profile without remote debugging and complete the login manually:
-
-```powershell
-pwsh .\Start-FabPortalChrome.ps1 `
-  -Mode ManualLogin `
-  -ListingUrl <Fab-listing-edit-URL>
-```
-
-This mode emits no CDP endpoint and never automates the login. Close the
-dedicated Chrome window normally after authentication, then start the default
-Automation mode again to discover a fresh endpoint from the same profile.
-
-Automation mode removes only a stale `DevToolsActivePort` file when no Chrome
-process uses the dedicated profile and the profile is not locked. It never
-removes that metadata while Chrome is running, never removes cookies or other
-profile data, and accepts a new endpoint only after the metadata is fresh for
-the newly launched browser process. Close the dedicated Chrome normally before
-restarting Automation mode; the helper will fail closed if the profile is
-still in use or the fresh metadata does not appear within its bounded wait.
-
-Keep the Chrome window open. If the dedicated profile is not authenticated,
-complete Fab login, MFA, or a Cloudflare/security challenge manually in that
-window. The helper does not handle credentials or challenges. The same healthy
-dedicated profile can be reused; an ambiguous or unhealthy existing session is
-reported without killing a process or deleting a profile. Do not point the
-helper at the normal Chrome `User Data` directory or a child of it.
-
-After login, make sure the target listing edit URL is open in exactly one tab,
-then connect the guarded automation to one returned endpoint. The HTTP endpoint
-keeps the traditional path:
+`FabPortalAutomation`, then connect to an already authenticated dedicated
+Chrome CDP endpoint:
 
 ```powershell
 pwsh .\Invoke-FabPortalSubmission.ps1 `
   -ManifestPath <FabPortalSubmission.json> `
-  -CdpEndpoint $session.CdpEndpoint
+  -CdpEndpoint <http://127.0.0.1:port>
 ```
 
-When Chrome's live Remote Debugging permission has been approved and the fresh
-browser WebSocket path is available, the direct browser transport can be used
-instead:
-
-```powershell
-pwsh .\Invoke-FabPortalSubmission.ps1 `
-  -ManifestPath <FabPortalSubmission.json> `
-  -CdpWebSocketEndpoint $session.CdpWebSocketEndpoint
-```
-
-The two endpoint parameters are mutually exclusive. Browser WebSocket input
-must be a run-scoped `ws://127.0.0.1:<port>/devtools/browser/<id>` value from
-fresh `DevToolsActivePort` metadata; remote hosts, credentials, query strings,
-and fragments are rejected and the endpoint is never persisted. If Chrome
-shows “Chrome allows remote debugging?” / “Allow remote debugging?”, click
-Allow manually. The automation does not click that security prompt. If the
-connection is waiting for that approval, it pauses for the manual confirmation
-before retrying the same endpoint once.
-
-If you need to retry verification without creating another browser connection,
-use session mode. It connects once, keeps the approved browser context open,
-and accepts only the read-only `verify`, `help`, and `quit` commands. Fab listing
-write automation is disabled in this repository:
-
-```powershell
-pwsh .\Invoke-FabPortalSubmission.ps1 `
-  -ManifestPath <FabPortalSubmission.json> `
-  -CdpWebSocketEndpoint <fresh-browser-websocket-endpoint> `
-  -Session
-```
-
-If Chrome shows its Remote Debugging approval for this connection, click Allow
-manually. Then type `verify` at the `fab-session>` prompt. Type `help` for the
-read-only command list or `quit` to close the automation connection. The
-endpoint is supplied only for this run and is never persisted.
-
-The portal CLI is read-only. `-SaveDraft`, `-TagsOnly`, and
-`-SubmitForReview` are rejected before manifest loading or browser attachment.
-The same write-disabled policy protects direct Node-module calls and the
-network guard. Use an interactive AI agent or the Fab Portal UI for listing
-changes; this tool does not create formats, edit fields, upload media, save
-drafts, or submit listings. The automation never handles Cloudflare,
-credentials, MFA, or browser storage. If a visible Cloudflare/security
-challenge appears, the automation enters a manual handoff: browser operations
-stop, you complete the challenge in the dedicated Chrome, then press Enter
-here to resume. Use `q` followed by Enter to cancel the run.
+Fab Portal automation is read-only. It verifies the currently open listing but
+does not modify listings. `-SaveDraft` and `-SubmitForReview` are rejected before
+manifest loading or browser attachment. Use an interactive AI agent or the Fab
+Portal UI for listing changes. The automation never handles Cloudflare, credentials,
+MFA, or browser storage. If a visible Cloudflare/security challenge appears,
+the automation enters a manual handoff: browser operations stop, you complete
+the challenge in the dedicated Chrome, then press Enter here to resume. Use
+`q` followed by Enter to cancel the run. A bounded number of handoff cycles is
+allowed. Verify requires exactly one already-open target listing page; the
+automation does not create a tab or navigate to repair the initial target before
+the handoff.
 
 A verify-only `PASS` reports that observation completed without a proven
 mismatch; it does not imply write readiness. The run report records
-`writeReady` and `writeBlockers` when review-locked status or unresolved
-critical fields would block a future write.
-
-For a new Draft listing with zero product formats, Verify performs a
-read-only inventory check. When Fab exposes its normal
-`js-json-data-prefetched-data` payload, the exact listing UUID and
-`assetFormats` array are used as the `prefetched-listing-data` evidence source;
-missing, malformed, mismatched, or contradictory data remains unknown and
-fails closed. Verify reports `formatBootstrapRequired`, the proven
-`formatBootstrapFormatCount`, and `formatBootstrapAvailable`; it never creates
-a format. With explicit
-The former format-bootstrap and field-write paths remain guarded in source for
-regression coverage, but are disabled at runtime. Verify may report that a
-format bootstrap is available; it never creates a format or authorizes any
-listing mutation.
-
-Format navigation is observed independently from the prefetched inventory. If
-Fab's responsive layout does not mount EditionNav at the current viewport, the
-automation leases a bounded `1440x900` viewport only for observation, waits for
-the exact format navigation evidence, and restores the original dimensions in
-all exit paths. Verify remains mutation-free; the run report records the
-original, observation, and restored viewport values. A wide viewport alone
-never proves a format exists or authorizes format creation.
-
-The Add new format chooser is also readiness-gated. The automation waits a
-bounded interval for the chooser heading, disappearance of loading skeletons,
-and exactly one enabled supported format option. A timeout, visible chooser
-error, or ambiguous option set fails closed; opening the chooser and waiting
-for readiness never authorizes a format mutation.
-
-Some new listings expose no format controls until a listing prerequisite has
-been persisted. The observed Category autosave contract is retained only as
-disabled regression coverage. Verify always blocks it, and no generic listing
-PATCH is admitted.
-
-Standard-license persistence and other listing-write contracts are retained as
-disabled regression coverage. Verify and the central write policy block them;
-no license, price, category, tag, format, media, or other listing mutation is
-available through this tool.
-
-Listing comparison preserves a visible empty rich-text editor as an observed
-empty value, so a non-empty manifest description is reported as `MISMATCH`
-with its approved contenteditable write target rather than being mistaken for
-an unreadable control. For Tags, the page's exact prefetched `tags` array is
-usable only when the target UUID and listing snapshot validate and the visible
-Fab tag-count control agrees with that array. Missing, malformed, or
-contradictory tag evidence remains `NOT_VISIBLE` and fails closed; the empty
-search box is never treated as the persisted tag set. The current Fab portal's
-tag control is identified by its exact `Search a tag` placeholder/accessible
-name; the separate global `Search` combobox is never used for Tags.
-Even when the persisted array and tag count agree, the comparison does not
-create a generic text mutation target: selected-tag option identities and a
-dedicated safe tag mutation contract must be proven before Tags can be staged.
-
-The manifest may also retain release metadata that the current Draft editor
-does not own. An independent `shortDescription` control is not required for
-Draft comparison or Save Draft, and `activation` is deferred to the explicitly
-authorized Submit-for-review publication choice. Neither value is synthesized
-or written through a generic listing mutation; an unproven Submit-phase
-activation control remains fail closed.
+`writeReady` and `writeBlockers` as diagnostics only. This tool does not save,
+submit, publish, cancel, delete, unlist, create formats, edit fields, or upload
+media.
 
 Staging manifests with `portalReady: false` and unresolved package
 `projectFileLink: null` values are valid for read-only verification. They are
-never written to Fab; Save Draft and Submit for review require a manifest with
-`portalReady: true` and a verified HTTPS Project File Link for every package.
+never written to Fab.
 
-The historical Save and submit safety model required every manifest-owned
-critical field to be readable and either already matching or backed by an
-approved writable locator, including Draft-owned descriptions, taxonomy, tags,
-format/engine/platform, license, prices, AI/content flags, URLs, Technical
-Information text, media, and every package Project File Link. That write model
-is currently disabled. Activation is checked only at the explicit Submit
-boundary in the retained regression model. An empty `subcategory` is legitimately
-`NOT_APPLICABLE` when Fab exposes no distinct subcategory. Existing media whose
-identity cannot be proven remains a write blocker.
-
-Submit-for-review handling is retained only as disabled regression coverage.
-This tool never invokes Submit, Publish, Cancel, Delete, or Unlist.
+An empty `subcategory` is legitimately `NOT_APPLICABLE` when Fab exposes no
+distinct subcategory. Existing media whose identity cannot be proven remains a
+diagnostic mismatch.
 
 ## Migration note
 

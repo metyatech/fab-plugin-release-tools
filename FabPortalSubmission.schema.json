@@ -101,10 +101,9 @@
     },
     "packageItem": {
       "type": "object",
-      "required": ["engineVersion", "versionTitle", "bundleRelativePath", "sha256", "projectFileLink"],
+      "required": ["engineVersion", "bundleRelativePath", "sha256", "projectFileLink"],
       "properties": {
         "engineVersion": { "type": "string", "minLength": 1 },
-        "versionTitle": { "type": "string", "minLength": 1, "pattern": "\\S" },
         "bundleRelativePath": { "$ref": "#/$defs/relativePath" },
         "sha256": { "$ref": "#/$defs/sha256" },
         "projectFileLink": {

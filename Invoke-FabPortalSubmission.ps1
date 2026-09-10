@@ -4,12 +4,9 @@
 param(
     [string]$ManifestPath,
     [string]$CdpEndpoint,
-    [string]$CdpWebSocketEndpoint,
     [string]$OutputDirectory,
     [switch]$SaveDraft,
-    [switch]$TagsOnly,
     [switch]$SubmitForReview,
-    [switch]$Session,
     [switch]$Json,
     [switch]$VerboseOutput,
     [switch]$Help,
@@ -72,21 +69,15 @@ if ($Version) {
     exit $versionResult.ExitCode
 }
 
-if ($SaveDraft -or $TagsOnly -or $SubmitForReview) {
-    throw 'Fab Portal write automation is disabled. Use an interactive AI agent or manual Fab Portal workflow for listing changes.'
+if ($SaveDraft -or $SubmitForReview) {
+    throw 'Fab Portal write automation is disabled. Use an interactive AI agent or the Fab Portal UI to make listing changes.'
 }
 
 if ([string]::IsNullOrWhiteSpace($ManifestPath)) {
     throw 'ManifestPath is required. Use -Help for usage.'
 }
-if ([string]::IsNullOrWhiteSpace($CdpEndpoint) -and [string]::IsNullOrWhiteSpace($CdpWebSocketEndpoint)) {
-    throw 'Exactly one of CdpEndpoint or CdpWebSocketEndpoint is required. Use -Help for usage.'
-}
-if (-not [string]::IsNullOrWhiteSpace($CdpEndpoint) -and -not [string]::IsNullOrWhiteSpace($CdpWebSocketEndpoint)) {
-    throw 'CdpEndpoint and CdpWebSocketEndpoint are mutually exclusive.'
-}
-if ($Session -and $Json) {
-    throw 'Session accepts only interactive verify, help, and quit commands; do not combine with Json.'
+if ([string]::IsNullOrWhiteSpace($CdpEndpoint)) {
+    throw 'CdpEndpoint is required. Use -Help for usage.'
 }
 $runtime = Join-Path $PSScriptRoot 'FabPortalAutomation'
 if (-not (Test-Path -LiteralPath (Join-Path $runtime 'node_modules\playwright-core\package.json') -PathType Leaf)) {
@@ -96,18 +87,12 @@ $arguments = [System.Collections.Generic.List[string]]::new()
 [void]$arguments.Add((Join-Path $runtime 'src\cli.mjs'))
 [void]$arguments.Add('--manifest')
 [void]$arguments.Add([System.IO.Path]::GetFullPath($ManifestPath))
-if (-not [string]::IsNullOrWhiteSpace($CdpEndpoint)) {
-    [void]$arguments.Add('--cdp-endpoint')
-    [void]$arguments.Add($CdpEndpoint)
-} else {
-    [void]$arguments.Add('--cdp-websocket-endpoint')
-    [void]$arguments.Add($CdpWebSocketEndpoint)
-}
+[void]$arguments.Add('--cdp-endpoint')
+[void]$arguments.Add($CdpEndpoint)
 if (-not [string]::IsNullOrWhiteSpace($OutputDirectory)) {
     [void]$arguments.Add('--output')
     [void]$arguments.Add([System.IO.Path]::GetFullPath($OutputDirectory))
 }
-if ($Session) { [void]$arguments.Add('--session') }
 if ($Json) { [void]$arguments.Add('--json') }
 if ($VerboseOutput) { [void]$arguments.Add('--verbose') }
 $result = Invoke-NodeProcess -Arguments $arguments.ToArray() -Interactive

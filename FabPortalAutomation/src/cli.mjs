@@ -4,8 +4,7 @@ import { loadSubmissionManifest } from './manifest.mjs';
 import { createStdinManualInteraction } from './manual-handoff.mjs';
 import { runPortalAutomation } from './portal.mjs';
 import { createRunDirectory, writeRunReport } from './report.mjs';
-import { mainSession } from './session.mjs';
-import { resolveBrowserTransport } from './transport.mjs';
+import { FAB_WRITE_AUTOMATION_DISABLED_MESSAGE } from './write-policy.mjs';
 
 const VERSION = '1.0.0';
 
@@ -14,22 +13,16 @@ function help() {
 
 Usage:
   pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> -CdpEndpoint <endpoint>
-  pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> -CdpWebSocketEndpoint <ws-endpoint>
-  pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> -CdpWebSocketEndpoint <ws-endpoint> -Session
 
-This tool is read-only. Fab listing write automation is disabled; use an
-interactive AI agent or manual Fab Portal workflow for listing changes. If a
-visible Cloudflare challenge is detected, automation pauses without browser
-operations until you complete it manually and press Enter; q + Enter cancels
-the run.
+Fab Portal automation is read-only verification. Listing changes must be made
+by an interactive AI agent or the Fab Portal UI. If a visible Cloudflare
+challenge is detected, automation pauses without browser operations until you
+complete it manually and press Enter; q + Enter cancels the run.
 
 Options:
   --manifest <path>       FabPortalSubmission.json (required)
-  --cdp-endpoint <url>    Existing dedicated Chrome HTTP CDP endpoint
-  --cdp-websocket-endpoint <url>
-                          Existing dedicated Chrome browser WebSocket endpoint
+  --cdp-endpoint <url>    Existing dedicated Chrome CDP endpoint (required)
   --output <directory>    Artifact root (default: ./artifacts)
-  --session               Keep one approved browser connection open for read-only verify/help/quit commands
   --json                  Emit one machine-readable result object
   --verbose               Emit additional non-secret diagnostics
   --help, -h              Show this help
@@ -38,33 +31,23 @@ Options:
 }
 
 function parseArgs(argv) {
-  const result = { output: null, saveDraft: false, tagsOnly: false, submitForReview: false, session: false, json: false, verbose: false, cdpEndpoint: null, cdpWebSocketEndpoint: null };
+  const result = { output: null, saveDraft: false, submitForReview: false, json: false, verbose: false };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--help' || arg === '-h') result.help = true;
     else if (arg === '--version' || arg === '-V') result.version = true;
     else if (arg === '--save-draft') result.saveDraft = true;
-    else if (arg === '--tags-only') result.tagsOnly = true;
     else if (arg === '--submit-for-review') result.submitForReview = true;
-    else if (arg === '--session') result.session = true;
     else if (arg === '--json') result.json = true;
     else if (arg === '--verbose') result.verbose = true;
-    else if (['--manifest', '--cdp-endpoint', '--cdp-websocket-endpoint', '--output'].includes(arg)) {
+    else if (['--manifest', '--cdp-endpoint', '--output'].includes(arg)) {
       const value = argv[++index];
       if (!value || value.startsWith('--')) throw new Error(`${arg} requires a value.`);
-      if (arg === '--manifest') result.manifest = value;
-      else if (arg === '--cdp-endpoint') result.cdpEndpoint = value;
-      else if (arg === '--cdp-websocket-endpoint') result.cdpWebSocketEndpoint = value;
-      else result.output = value;
+      result[arg.slice(2).replaceAll('-', '')] = value;
     } else throw new Error(`Unknown option: ${arg}. Use --help.`);
   }
-  if (result.saveDraft || result.tagsOnly || result.submitForReview) throw new Error('Fab Portal write automation is disabled. Use an interactive AI agent or manual Fab Portal workflow for listing changes.');
-  if (result.session && result.json) {
-    throw new Error('--session accepts only interactive verify, help, and quit commands; do not combine it with --json.');
-  }
-  if (!result.help && !result.version && (!result.manifest || (!result.cdpEndpoint && !result.cdpWebSocketEndpoint))) throw new Error('--manifest and exactly one CDP transport endpoint are required. Use --help.');
-  if (result.cdpEndpoint && result.cdpWebSocketEndpoint) throw new Error('Specify exactly one of --cdp-endpoint and --cdp-websocket-endpoint.');
-  if (result.cdpWebSocketEndpoint) resolveBrowserTransport({ cdpWebSocketEndpoint: result.cdpWebSocketEndpoint });
+  if (result.saveDraft || result.submitForReview) throw new Error(FAB_WRITE_AUTOMATION_DISABLED_MESSAGE);
+  if (!result.help && !result.version && (!result.manifest || !result.cdpendpoint)) throw new Error('--manifest and --cdp-endpoint are required. Use --help.');
   return result;
 }
 
@@ -77,9 +60,6 @@ function emit(value, json) {
     process.stdout.write(`writeInteractionsPerformed=${value.writeInteractionsPerformed} Save=${value.saveInvoked} Submit=${value.submitInvoked}\n`);
     process.stdout.write(`submitAccepted=${value.submitAccepted} postSubmitStatus=${value.postSubmitStatus ?? 'null'}\n`);
     process.stdout.write(`writeReady=${value.writeReady} writeBlockers=${value.writeBlockers?.length ?? 0}\n`);
-    process.stdout.write(`formatBootstrapRequired=${value.formatBootstrapRequired} formatBootstrapAvailable=${value.formatBootstrapAvailable} formatBootstrapInvoked=${value.formatBootstrapInvoked} formatBootstrapCreated=${value.formatBootstrapCreated} formatCount=${value.formatBootstrapFormatCount ?? 'unknown'}\n`);
-    process.stdout.write(`responsiveFallbackUsed=${value.portalViewport?.temporaryWideViewportUsed ?? false} originalViewport=${value.portalViewport?.originalWidth ?? 'unknown'}x${value.portalViewport?.originalHeight ?? 'unknown'} observationViewport=${value.portalViewport?.observationWidth ?? 'unknown'}x${value.portalViewport?.observationHeight ?? 'unknown'} viewportRestored=${value.portalViewport?.restored ?? false}\n`);
-    process.stdout.write(`formatInventorySource=${value.formatInventorySource ?? 'unknown'} formatInventoryStatus=${value.formatInventoryStatus ?? 'unknown'}\n`);
     process.stdout.write(`manualChallengeDetected=${value.manualChallengeDetected} manualChallengeHandoffCount=${value.manualChallengeHandoffCount} manualChallengeCompleted=${value.manualChallengeCompleted} manualChallengeCancelled=${value.manualChallengeCancelled}\n`);
     process.stdout.write(`automationHardNavigationCount=${value.automationHardNavigationCount} humanObservedNavigationCount=${value.humanObservedNavigationCount}\n`);
     process.stdout.write(`networkMutationRequestsObserved=${value.network?.networkMutationRequestsObserved ?? 0} networkMutationRequestsBlocked=${value.network?.networkMutationRequestsBlocked ?? 0}\n`);
@@ -92,21 +72,15 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
   const args = parseArgs(argv);
   if (args.help) { process.stdout.write(help()); return 0; }
   if (args.version) { process.stdout.write(`${VERSION}\n`); return 0; }
-  if (args.session) {
-    const endpoint = args.cdpWebSocketEndpoint ?? args.cdpEndpoint;
-    const kind = args.cdpWebSocketEndpoint ? 'websocket' : 'http';
-    const runSession = dependencies.runSession ?? mainSession;
-    return runSession({ manifestPath: args.manifest, endpoint, kind, outputDirectory: args.output, dependencies });
-  }
   const loadManifest = dependencies.loadManifest ?? loadSubmissionManifest;
   const createDirectory = dependencies.createDirectory ?? createRunDirectory;
   const writeReportFile = dependencies.writeReport ?? writeRunReport;
   const run = dependencies.run ?? runPortalAutomation;
   const manualInteraction = dependencies.manualInteraction ?? createStdinManualInteraction();
-  const mode = 'verify';
+  const mode = args.submitForReview ? 'submit' : args.saveDraft ? 'save' : 'verify';
   const manifestInfo = await loadManifest(args.manifest, { requirePortalReady: mode !== 'verify' });
   const artifactDirectory = await createDirectory(args.output ?? path.resolve('artifacts'), manifestInfo.manifest.pluginName);
-  const result = await run({ manifestInfo, cdpEndpoint: args.cdpEndpoint, cdpWebSocketEndpoint: args.cdpWebSocketEndpoint, mode, saveDraftAuthorized: args.saveDraft, outputDirectory: artifactDirectory, manualInteraction });
+  const result = await run({ manifestInfo, cdpEndpoint: args.cdpendpoint, mode, saveDraftAuthorized: args.saveDraft, outputDirectory: artifactDirectory, manualInteraction });
   result.artifactDirectory = artifactDirectory;
   await writeReportFile({ directory: artifactDirectory, result, comparison: result.comparison, comparisonAfter: result.comparisonAfter, network: result.network, page: result.page });
   if (result.browser) await result.browser.close().catch(() => undefined);

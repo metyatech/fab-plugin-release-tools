@@ -509,30 +509,6 @@ function Import-FabPluginReleaseConfiguration {
             throw "engineVersions contains an invalid Unreal Engine version: '$configuredVersion'"
         }
     }
-    $versionTitleProperties = @($configuration.versionTitles.PSObject.Properties)
-    if ($versionTitleProperties.Count -ne $engineVersions.Count) {
-        throw 'versionTitles must contain exactly one title for every engineVersions entry.'
-    }
-    $versionTitles = [ordered]@{}
-    foreach ($property in $versionTitleProperties) {
-        $version = [string]$property.Name
-        $title = [string]$property.Value
-        if ($engineVersions -cnotcontains $version) {
-            throw "versionTitles contains an engine version not present in engineVersions: '$version'."
-        }
-        if ([string]::IsNullOrWhiteSpace($title)) {
-            throw "versionTitles contains an empty title for engine version '$version'."
-        }
-        $versionTitles[$version] = $title
-    }
-    foreach ($version in $engineVersions) {
-        if (-not $versionTitles.Contains($version)) {
-            throw "versionTitles is missing engine version '$version'."
-        }
-    }
-    Assert-UniqueStringSet -Values @($versionTitles.Values) `
-        -PropertyName 'versionTitles values' -CaseSensitive
-    $configuration.versionTitles = [pscustomobject]$versionTitles
     if ($engineVersions -cnotcontains $EngineVersion) {
         throw "EngineVersion '$EngineVersion' is not allowed by engineVersions."
     }

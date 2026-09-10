@@ -62,7 +62,6 @@ Describe 'Fab submission preflight' {
   "pluginName": "TestPlugin",
   "descriptorFile": "TestPlugin.uplugin",
   "engineVersions": ["5.8"],
-  "versionTitles": { "5.8": "UE 5.8" },
   "platforms": ["Win64"],
   "distributionModules": ["TestPlugin"],
   "documentationUrl": "https://github.com/metyatech",
@@ -145,7 +144,7 @@ Describe 'Fab submission preflight' {
         Initialize-SubmissionFixture -Root $root -DescriptorModuleType 'DeveloperTool' -MetadataModuleType 'Unsupported'
         $result = Invoke-SubmissionFixture -Root $root
         $result.ExitCode | Should -Be 1
-        $result.Output | Should -Match '(?i)schema|Value should match|enum'
+        $result.Output | Should -Match '(?i)schema|Value should match one of the values specified by the[\s|]+enum'
     }
 
     It 'fails an explicit plugin-location hardcode' {
