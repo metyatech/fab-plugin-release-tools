@@ -658,7 +658,7 @@ public sealed class FabProductTestHttpMessageHandler : HttpMessageHandler
             Should -Throw '*schema.json*'
     }
 
-    It 'sets portalReady and maps a configured project_file_link exactly' {
+    It 'keeps portalReady false until human media approval exists' {
         $root = Join-Path $TestDrive 'ConfiguredLink'
         $outputRoot = Join-Path $TestDrive 'ConfiguredLinkArtifacts'
         Initialize-ProductFixture -Root $root -EngineVersions @('5.8') | Out-Null
@@ -674,10 +674,10 @@ public sealed class FabProductTestHttpMessageHandler : HttpMessageHandler
         Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot | Out-Null
         $manifest = Get-Content -Raw -LiteralPath (
             Join-Path $outputRoot 'TestPlugin\FabSubmission\FabPortalSubmission.json') | ConvertFrom-Json
-        $manifest.portalReady | Should -BeTrue
+        $manifest.portalReady | Should -BeFalse
         $manifest.packages[0].projectFileLink | Should -BeExactly $listing.project_file_link
         (Get-Content -Raw -LiteralPath (Join-Path $outputRoot 'TestPlugin\FabSubmission\SubmissionChecklist.txt')) |
-            Should -Match 'PASS - portal automation input ready'
+            Should -Match 'PENDING - Human media approval'
     }
 
     It 'streams remote content and computes its SHA-256' {
@@ -770,7 +770,7 @@ public sealed class FabProductTestHttpMessageHandler : HttpMessageHandler
         Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot | Out-Null
         $manifest = Get-Content -Raw -LiteralPath (
             Join-Path $outputRoot 'TestPlugin\FabSubmission\FabPortalSubmission.json') | ConvertFrom-Json
-        $manifest.portalReady | Should -BeTrue
+        $manifest.portalReady | Should -BeFalse
         $manifest.packages[0].sha256 | Should -BeExactly $matchingHash
     }
 
@@ -848,7 +848,7 @@ public sealed class FabProductTestHttpMessageHandler : HttpMessageHandler
             -PublishProjectFiles | Out-Null
         $manifest = Get-Content -Raw -LiteralPath (
             Join-Path $outputRoot 'TestPlugin\FabSubmission\FabPortalSubmission.json') | ConvertFrom-Json
-        $manifest.portalReady | Should -BeTrue
+        $manifest.portalReady | Should -BeFalse
         @($manifest.packages.projectFileLink) | Should -BeExactly @(
             'https://github.com/metyatech/TestPlugin/releases/download/fab-v1.0.0/TestPlugin_1.0.0_UE5.8_Win64.zip',
             'https://github.com/metyatech/TestPlugin/releases/download/fab-v1.0.0/TestPlugin_1.0.0_UE5.9_Win64.zip')

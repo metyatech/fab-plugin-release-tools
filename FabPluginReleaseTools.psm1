@@ -2,8 +2,9 @@
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'FabSubmissionCommon.ps1')
 
-$script:ToolVersion = '0.5.0'
+$script:ToolVersion = '0.6.0'
 $script:MaximumPackageBytes = 15L * 1024L * 1024L * 1024L
 $script:CopyrightExtensions = @('.h', '.hh', '.hpp', '.inl', '.ipp', '.cpp', '.cc', '.cxx')
 $script:ForbiddenTopLevelDirectories = @('Binaries', 'Build', 'Intermediate', 'Saved', 'DerivedDataCache')
@@ -565,6 +566,9 @@ function Import-FabPluginReleaseConfiguration {
     Assert-HttpsUrl -Url ([string]$configuration.publisher.url) -PropertyName 'publisher.url'
     Assert-HttpsUrl -Url ([string]$configuration.documentationUrl) -PropertyName 'documentationUrl'
     Assert-HttpsUrl -Url ([string]$configuration.supportUrl) -PropertyName 'supportUrl'
+    if ($null -ne $configuration.PSObject.Properties['projectFilePublishing']) {
+        [void](Assert-FabProjectFilePublishingConfiguration -Configuration $configuration)
+    }
 
     $sourceCopyrightOverridesProperty = $configuration.PSObject.Properties['sourceCopyrightOverrides']
     if ($null -eq $sourceCopyrightOverridesProperty) {

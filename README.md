@@ -173,7 +173,71 @@ GitHub SHA-256 digests, publishes the release, and verifies each public
 existing releases that resolve to another source commit fail before any remote
 release mutation. Matching assets are reused on retry. A successful
 `portalReady` value means every current automation field, media item, package,
-and public project file link has passed validation.
+and public project file link has passed validation. It is true only when the
+current media bytes also match a human-approved `FabMediaApproval.json`.
+
+## Guarded submission preparation
+
+Generate a fresh local media review for a human reviewer:
+
+```powershell
+pwsh .\New-FabMediaReview.ps1 -PluginPath <path>
+```
+
+The review validates JPEG/PNG decoding, minimum 1920x1080 dimensions, strict
+per-file and combined byte limits, order, duplicates, and SHA-256 values. It
+opens standalone local HTML and always reports `APPROVED=false`. The tool or
+AI must not decide whether an image is attractive, suitable, or accepted by
+Fab.
+
+Only after the human reviewer has inspected the exact review and explicitly
+said OK may this command be run:
+
+```powershell
+pwsh .\Approve-FabMedia.ps1 -PluginPath <path> `
+  -ReviewManifestPath <review>\FabMediaReview.json -ConfirmHumanApproval
+```
+
+Approval is hash-bound to the current media path, order, role, dimensions,
+size, and bytes; a one-byte change makes it stale. This tool must not create
+`FabMediaApproval.json` or call the approval command on a user's behalf.
+
+The guarded state-machine entry point is:
+
+```powershell
+pwsh .\Invoke-FabSubmissionPreparation.ps1 -PluginPath <path>
+```
+
+It stops at `MEDIA_APPROVAL_REQUIRED`, `SOURCE_COMMIT_REQUIRED`,
+`DRAFT_CREATION_REQUIRED`, or `PORTAL_VERIFY_READY` and never creates a Fab
+Draft or submits to Fab. Use `Set-FabListingId.ps1` only with the actual
+lowercase UUID returned by Fab; it never infers an ID from a title or URL.
+
+Products with `projectFilePublishing` can publish canonical ZIPs to an
+existing Cloudflare R2 bucket using `Publish-FabProjectFiles.ps1`. The
+publisher uses existing Wrangler authentication, refuses conflicting remote
+bytes, verifies anonymous downloads after upload, and changes
+`FabListingFields.json` only with `-UpdateListingFields`.
+
+For product-specific Unreal UI evidence, use the fresh temporary-host harness:
+
+```powershell
+pwsh .\Invoke-FabUnrealEditorCapture.ps1 -PluginPath <path> `
+  -EngineVersion 5.8 -ScenarioSource Source\CaptureScenario.cpp `
+  -AutomationTestName Fab.MyPlugin.Capture
+```
+
+The harness runs the product Automation Test after editor initialization with
+normal RHI settings and does not use `NullRHI`, `RenderOffscreen`, or
+startup-time capture defaults.
+
+The scenario source is product-owned C++ and must register the named
+Automation Test. It owns product-specific setup such as demo state or an MRQ
+queue; the shared harness owns the temporary host, normal-RHI launch, test
+command, report directory, and failure retention. The generated helper module
+exposes the intended common operations for opening a Nomad tab, finding and
+clicking Slate controls, waiting for visible text/frames, collecting visible
+text, and saving a screenshot.
 
 `FabPortalSubmission.json` is the sole structured input contract for future
 Playwright Fab Portal automation. Its paths are forward-slash paths relative

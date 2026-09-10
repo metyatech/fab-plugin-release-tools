@@ -14,6 +14,29 @@ The authoritative machine-readable definition is
 example is in
 [`examples/RuntimeAssetImport/FabPluginRelease.json`](../examples/RuntimeAssetImport/FabPluginRelease.json).
 
+## Optional project file publishing
+
+To publish canonical ZIPs to an existing Cloudflare R2 bucket, add this
+optional object. It is not required for ordinary product release validation:
+
+```json
+"projectFilePublishing": {
+  "provider": "CloudflareR2",
+  "cloudflareR2": {
+    "bucket": "metyatech-fab-project-files",
+    "publicBaseUrl": "https://pub-xxxxxxxx.r2.dev",
+    "objectPrefix": "my-product"
+  }
+}
+```
+
+`provider` is currently exactly `CloudflareR2`. The bucket must be non-blank,
+the public base URL must be absolute HTTPS, and `objectPrefix` must be a
+relative POSIX-style key prefix without `..`, a leading/trailing slash, or a
+backslash. Credentials, tokens, and account IDs are never stored in this
+configuration. The publisher uses existing Wrangler authentication and does
+not create buckets or enable development URLs.
+
 ## Root properties
 
 | Property | Type | Required | Allowed values and failure conditions |

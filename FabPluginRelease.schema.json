@@ -89,6 +89,28 @@
     },
     "documentationUrl": { "$ref": "#/definitions/httpsUrl" },
     "supportUrl": { "$ref": "#/definitions/httpsUrl" },
+    "projectFilePublishing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "cloudflareR2"],
+      "properties": {
+        "provider": { "const": "CloudflareR2" },
+        "cloudflareR2": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["bucket", "publicBaseUrl", "objectPrefix"],
+          "properties": {
+            "bucket": { "type": "string", "minLength": 1, "pattern": "\\S" },
+            "publicBaseUrl": { "$ref": "#/definitions/httpsUrl" },
+            "objectPrefix": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?!.*//$)(?!.*\\/$).+$"
+            }
+          }
+        }
+      }
+    },
     "content": {
       "oneOf": [
         {

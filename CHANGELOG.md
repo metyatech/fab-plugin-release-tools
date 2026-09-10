@@ -5,6 +5,14 @@ Keep a Changelog and the project uses Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-10
+
+- Added centralized Fab media technical validation and a hash-bound human
+  media approval gate.
+- Added guarded submission preparation, Cloudflare R2 project-file
+  publication, authoritative listing ID synchronization, and the temporary
+  Unreal Editor capture harness.
+
 ## [0.5.0] - 2026-09-02
 
 - Added canonical Fab TPS declaration validation and submission artifact

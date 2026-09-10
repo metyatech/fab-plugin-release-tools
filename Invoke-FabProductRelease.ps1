@@ -28,6 +28,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 Import-Module (Join-Path $PSScriptRoot 'FabPluginReleaseTools.psd1') -Force
+. (Join-Path $PSScriptRoot 'FabSubmissionCommon.ps1')
 
 function Read-FabProductJson {
     param(
@@ -62,7 +63,11 @@ function Import-FabProductConfiguration {
     catch {
         throw "Configuration does not conform to FabPluginRelease.schema.json: $ConfigPath. $($_.Exception.Message)"
     }
-    return Read-FabProductJson -Path $ConfigPath
+    $configuration = Read-FabProductJson -Path $ConfigPath
+    if ($null -ne $configuration.PSObject.Properties['projectFilePublishing']) {
+        [void](Assert-FabProjectFilePublishingConfiguration -Configuration $configuration)
+    }
+    return $configuration
 }
 
 function Assert-FabProductVersionTitle {
@@ -1629,6 +1634,9 @@ function Write-FabProductChecklist {
         [Parameter(Mandatory)]
         [bool]$PortalReady,
 
+        [Parameter(Mandatory)]
+        [string]$MediaApprovalStatus,
+
         [bool]$TpsValidationEnabled
     )
 
@@ -1641,6 +1649,14 @@ function Write-FabProductChecklist {
     $lines.Add('PASS - listing/config consistency')
     $lines.Add('PASS - technical information consistency')
     $lines.Add("PASS - media integrity ($($Media.Count) ordered file(s))")
+    switch ($MediaApprovalStatus) {
+        'approved' { $lines.Add('PASS - Human media approval') }
+        'stale' {
+            $lines.Add('PENDING - Human media approval')
+            $lines.Add('PENDING - Human media approval is stale because media changed')
+        }
+        default { $lines.Add('PENDING - Human media approval') }
+    }
     $lines.Add('PASS - manifest integrity')
     if ($TpsValidationEnabled) {
         $lines.Add('PASS - TPS declaration data validation')
@@ -1659,6 +1675,9 @@ function Write-FabProductChecklist {
     }
     $lines.Add('')
     $lines.Add('Future browser automation / Fab human review:')
+    if ($MediaApprovalStatus -ne 'approved') {
+        $lines.Add('- Have a human reviewer inspect the exact local media review before approval.')
+    }
     if (-not $PortalReady) {
         $lines.Add('- Resolve the pending Project File Links before starting portal automation.')
     }
@@ -1668,6 +1687,59 @@ function Write-FabProductChecklist {
     $lines.Add('- Enter or confirm listing content, pricing, availability, and portal declarations.')
     $lines.Add('- Complete Fab human review and publish the listing.')
     Write-FabProductTextFile -Path $Path -Text (([string]::Join("`n", $lines)) + "`n")
+}
+
+function Get-FabProductMediaApproval {
+    param(
+        [Parameter(Mandatory)]
+        [string]$PluginRoot,
+
+        [Parameter(Mandatory)]
+        [object]$Listing
+    )
+
+    $approvalPath = Join-Path $PluginRoot 'FabMediaApproval.json'
+    if (-not [System.IO.File]::Exists($approvalPath)) {
+        return [pscustomobject]@{ Status = 'pending'; Valid = $false; ReviewId = $null }
+    }
+    Assert-FabSubmissionSchema -Path $approvalPath `
+        -SchemaPath (Join-Path $PSScriptRoot 'FabMediaApproval.schema.json') `
+        -Description 'FabMediaApproval'
+    $approval = Read-FabSubmissionJson -Path $approvalPath
+    if ([string]$approval.product -cne [string]$Listing.Raw.product) {
+        throw 'FabMediaApproval product does not match the current listing.'
+    }
+    if ([string]$approval.version -cne [string]$Listing.ProductVersion) {
+        throw 'FabMediaApproval version does not match the current product.'
+    }
+    $currentMedia = @(Get-FabMediaTechnicalManifest -PluginPath $PluginRoot `
+        -MediaOrder @($Listing.Raw.media_order))
+    $actual = @($currentMedia | ForEach-Object {
+            [ordered]@{
+                order        = [int]$_.Order
+                role         = [string]$_.Role
+                relativePath = [string]$_.RelativePath
+                width        = [int]$_.Width
+                height       = [int]$_.Height
+                sizeBytes    = [long]$_.SizeBytes
+                sha256       = [string]$_.Sha256
+            }
+        })
+    try {
+        Compare-FabSubmissionMedia -Expected @($approval.media) -Actual $actual
+    }
+    catch {
+        return [pscustomobject]@{
+            Status   = 'stale'
+            Valid    = $false
+            ReviewId = [string]$approval.reviewId
+        }
+    }
+    return [pscustomobject]@{
+        Status   = 'approved'
+        Valid    = $true
+        ReviewId = [string]$approval.reviewId
+    }
 }
 
 function Invoke-FabProductReleaseCore {
@@ -1708,6 +1780,7 @@ function Invoke-FabProductReleaseCore {
     $engineVersions = @($configuration.engineVersions | ForEach-Object { [string]$_ }) |
         Sort-Object { [version]$_ }
     $versionTitles = Assert-FabProductVersionTitle -Configuration $configuration
+    $mediaApproval = Get-FabProductMediaApproval -PluginRoot $resolvedPluginPath -Listing $listing
     $artifactRoot = if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
         [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'artifacts'))
     }
@@ -1825,7 +1898,11 @@ function Invoke-FabProductReleaseCore {
             technicalInformationFile = 'submission/FabTechnicalInformation.txt'
             media                    = @($mediaManifest)
             packages                 = @($packageManifest)
-            portalReady              = [bool]$projectLinkState.Verified
+            portalReady              = [bool]($projectLinkState.Verified -and $mediaApproval.Valid)
+            mediaApproval            = [ordered]@{
+                status  = $mediaApproval.Status
+                reviewId = $mediaApproval.ReviewId
+            }
             generatedAtUtc           = [DateTimeOffset]::UtcNow.ToString('O')
         }
         $manifestPath = Join-Path $stagingRoot 'FabPortalSubmission.json'
@@ -1833,7 +1910,8 @@ function Invoke-FabProductReleaseCore {
             -Text (($manifest | ConvertTo-Json -Depth 100) + [Environment]::NewLine)
         Write-FabProductChecklist -Path (Join-Path $stagingRoot 'SubmissionChecklist.txt') `
             -EngineVersions $engineVersions -Media @($listing.Media) `
-            -ProjectLinks $projectFileLinks -PortalReady $projectLinkState.Verified `
+            -ProjectLinks $projectFileLinks -PortalReady $manifest.portalReady `
+            -MediaApprovalStatus $mediaApproval.Status `
             -TpsValidationEnabled:$tpsValidationEnabled
 
         $backupBundle = "$publicBundle.__previous_$([guid]::NewGuid().ToString('N'))"
