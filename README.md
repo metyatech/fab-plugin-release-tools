@@ -419,6 +419,19 @@ source bytes. CDP remains supported for environments where its authenticated
 connection works. No mode bypasses Cloudflare or handles credentials, MFA, or
 browser storage.
 
+Draft verification follows the Fab field lifecycle. `activation` is a
+Submit-for-review decision and is therefore `NOT_APPLICABLE` while a listing
+is Draft. `shortDescription` is retained as source metadata when Fab does not
+expose a distinct Draft field. `supportUrl` is source metadata whose exact
+destination must be present in the buyer-visible Draft Description; it is not
+assumed to be a standalone Portal field. Tag observations must be complete;
+Fab-generated extra tags are allowed, but every manifest tag must be visible.
+
+For authenticated portals where a CDP browser is blocked by Cloudflare, an
+interactive browser can collect the structured observation and the same
+central verifier can compare it offline. This is a transport option, not a
+Cloudflare bypass or cryptographic proof of Portal state.
+
 Fab Portal automation is read-only. It verifies the currently open listing but
 does not modify listings. `-SaveDraft` and `-SubmitForReview` are rejected before
 manifest loading or browser attachment. Use an interactive AI agent or the Fab

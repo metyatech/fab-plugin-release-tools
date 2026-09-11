@@ -3,8 +3,9 @@ import { writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { compareObservation } from '../src/comparison.mjs';
+import { compareObservation, compareTagsClassification } from '../src/comparison.mjs';
 import { loadFabPortalObservation } from '../src/observation.mjs';
+import { assertSubmitActivationDecision, portalFieldLifecycle } from '../src/lifecycle.mjs';
 import { makeManifest, makeManifestInfo } from './helpers.mjs';
 
 const manifest = makeManifest({
@@ -49,7 +50,7 @@ function makeObservation(manifestInfo, overrides = {}) {
     'packages[1].projectFileLink': manifest.packages[1].projectFileLink,
     'packages[2].projectFileLink': manifest.packages[2].projectFileLink,
   };
-  return {
+  const observation = {
     schemaVersion: 1,
     source: 'interactive-browser',
     manifestSha256: manifestInfo.manifestSha256,
@@ -60,6 +61,17 @@ function makeObservation(manifestInfo, overrides = {}) {
     fields: Object.entries({ ...values, ...(overrides.values ?? {}) }).map(([manifestJsonPath, value]) => field(manifestJsonPath, value)),
     ...overrides,
   };
+  for (const manifestJsonPath of ['shortDescription', 'activation', 'supportUrl']) {
+    const entry = observation.fields.find((item) => item.manifestJsonPath === manifestJsonPath);
+    entry.state = 'NOT_APPLICABLE';
+    delete entry.value;
+    entry.note = manifestJsonPath === 'activation'
+      ? 'Activation is selected after Submit for review.'
+      : manifestJsonPath === 'supportUrl'
+        ? 'Support is derived from the Draft Description.'
+        : 'Source-only metadata; no distinct Draft field.';
+  }
+  return observation;
 }
 
 async function fixture() {
@@ -98,6 +110,7 @@ for (const [name, mutator, pattern] of [
   ['OBSERVED without value', (value) => { delete value.fields[0].value; }, /require value/],
   ['wrong field type', (value) => { value.fields.find((item) => item.manifestJsonPath === 'platforms').value = 'Windows'; }, /platforms/],
   ['invalid package index', (value) => { value.fields[0].manifestJsonPath = 'packages[9].projectFileLink'; value.fields[0].view = 'format'; }, /unsupported manifestJsonPath/],
+  ['submit-time field observed', (value) => { const entry = value.fields.find((item) => item.manifestJsonPath === 'activation'); entry.state = 'OBSERVED'; entry.value = 'Manual activation'; }, /activation.*NOT_APPLICABLE/],
   ['NOT_VISIBLE with authoritative value', (value) => { value.fields[0].state = 'NOT_VISIBLE'; }, /must not provide value/],
   ['missing expected field', (value) => { value.fields = value.fields.slice(1); }, /missing expected field observations/],
 ]) {
@@ -110,16 +123,17 @@ for (const [name, mutator, pattern] of [
 test('pure comparator matches normalized rich text, USD, Windows, engine sets, URLs, and links', async () => {
   const { manifestInfo } = await fixture();
   const observation = makeObservation(manifestInfo);
-  observation.fields.find((item) => item.manifestJsonPath === 'longDescription').value = 'Fixture   long\ndescription';
+  observation.fields.find((item) => item.manifestJsonPath === 'longDescription').value = 'Fixture   long\ndescription\nSupport: https://example.com/support';
   const comparison = compareObservation(manifestInfo, observation);
   assert.equal(comparison.mismatchCount, 0);
-  assert.equal(comparison.counts.MATCH, 26);
+  assert.equal(comparison.counts.MATCH, 24);
+  assert.equal(comparison.counts.NOT_APPLICABLE, 2);
 });
 
 test('pure comparator reports changed long description and price as mismatches', async () => {
   const { manifestInfo } = await fixture();
   const observation = makeObservation(manifestInfo);
-  observation.fields.find((item) => item.manifestJsonPath === 'longDescription').value = 'Changed description';
+  observation.fields.find((item) => item.manifestJsonPath === 'longDescription').value = 'Changed description\nSupport: https://example.com/support';
   observation.fields.find((item) => item.manifestJsonPath === 'personalPriceUsd').value = '$10.00';
   const comparison = compareObservation(manifestInfo, observation);
   assert.equal(comparison.mismatchCount, 2);
@@ -147,4 +161,19 @@ test('missing expected field cannot disappear in the pure comparator', async () 
   const comparison = compareObservation(manifestInfo, observation);
   assert.equal(comparison.fields.find((item) => item.manifestJsonPath === 'supportUrl').classification, 'NOT_DISCOVERED');
   assert.equal(comparison.unresolvedCritical.includes('supportUrl'), true);
+});
+
+test('Fab-generated extra tags are allowed but desired tags remain mandatory', () => {
+  assert.equal(compareTagsClassification(['Rendering', 'Movie'], ['Rendering', 'Movie']), 'MATCH');
+  assert.equal(compareTagsClassification(['Rendering', 'Movie', 'Editorutilities'], ['Rendering', 'Movie']), 'MATCH');
+  assert.equal(compareTagsClassification(['Editorutilities'], ['Rendering', 'Movie']), 'MISMATCH');
+  assert.equal(compareTagsClassification(['Rendering'], ['Rendering', 'Movie'], { complete: false }), 'NOT_DISCOVERED');
+});
+
+test('portal lifecycle keeps activation deferred and source-only metadata intact', () => {
+  assert.equal(portalFieldLifecycle('activation'), 'SUBMIT_TIME');
+  assert.equal(portalFieldLifecycle('shortDescription'), 'SOURCE_ONLY');
+  assert.equal(portalFieldLifecycle('supportUrl'), 'DERIVED');
+  assert.equal(assertSubmitActivationDecision('Manual activation', 'Manual activation'), 'Manual activation');
+  assert.throws(() => assertSubmitActivationDecision(null), /explicit activation decision/);
 });

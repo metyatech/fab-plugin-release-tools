@@ -37,7 +37,11 @@ export function makeManifest(overrides = {}) {
     packages: [{ engineVersion: '5.8', bundleRelativePath: 'packages/UE5.8/package.zip', sha256: 'b'.repeat(64), projectFileLink: 'https://example.com/package.zip' }],
     portalReady: true,
   };
-  return structuredClone({ ...base, ...overrides });
+  const manifest = structuredClone({ ...base, ...overrides });
+  if (!Object.prototype.hasOwnProperty.call(overrides, 'longDescription')) {
+    manifest.longDescription = `Fixture long description\nSupport: ${manifest.supportUrl}`;
+  }
+  return manifest;
 }
 
 export function fixtureState(manifest, overrides = {}) {

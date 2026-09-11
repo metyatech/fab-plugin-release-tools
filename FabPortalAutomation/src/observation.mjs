@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fieldView, normalizeText } from './comparison.mjs';
+import { portalFieldLifecycle } from './lifecycle.mjs';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
@@ -125,6 +126,10 @@ function validateObservation(observation, manifestInfo) {
       validateObservedValue(field.manifestJsonPath, field.value, manifestInfo.manifest);
     } else if (hasValue) {
       fail(`fields[${index}] ${field.state} entries must not provide value.`);
+    }
+    const lifecycle = portalFieldLifecycle(field.manifestJsonPath);
+    if (['SOURCE_ONLY', 'SUBMIT_TIME', 'DERIVED'].includes(lifecycle) && field.state !== 'NOT_APPLICABLE') {
+      fail(`${field.manifestJsonPath} must be NOT_APPLICABLE because its Portal lifecycle is ${lifecycle}.`);
     }
     if (Object.prototype.hasOwnProperty.call(field, 'note')) {
       if (typeof field.note !== 'string' || field.note.trim() === '' || field.note.length > 500 || /[<>]/.test(field.note)) fail(`fields[${index}].note must be a short non-secret text note.`);

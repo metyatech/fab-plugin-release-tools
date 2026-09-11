@@ -5,6 +5,16 @@ Keep a Changelog and the project uses Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-09-11
+
+- Aligned Draft verification with Fab field lifecycle ownership.
+- Deferred activation to the Submit-for-review decision and treated
+  short-description metadata as source-only when no distinct Draft field is
+  exposed.
+- Derived support verification from the buyer-visible Description and allowed
+  Fab-generated tag extras while still requiring every desired tag.
+- Kept CDP optional and added no Cloudflare bypass behavior.
+
 ## [0.7.0] - 2026-09-11
 
 - Added strict, hash-bound `FabPortalObservation.json` support for interactive

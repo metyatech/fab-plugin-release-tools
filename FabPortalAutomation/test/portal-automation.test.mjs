@@ -430,7 +430,7 @@ test('format view without singular back uses the observed listing summary contro
   }
 });
 
-test('format evidence merges documentation and support when the listing view is unresolved', () => {
+test('format evidence merges documentation while support remains Description-derived', () => {
   const manifest = makeManifest();
   const makeField = (path, classification, view) => ({ manifestJsonPath: path, classification, view, currentVisibleValue: classification === 'MATCH' ? manifest[path] : null });
   const main = { fields: [makeField('documentationUrl', 'NOT_VISIBLE', 'listing'), makeField('supportUrl', 'NOT_DISCOVERED', 'listing')] };
@@ -438,8 +438,8 @@ test('format evidence merges documentation and support when the listing view is 
   const merged = mergeListingAndFormatComparisons(main, format, manifest);
   assert.equal(merged.fields.find((field) => field.manifestJsonPath === 'documentationUrl').classification, 'MATCH');
   assert.equal(merged.fields.find((field) => field.manifestJsonPath === 'documentationUrl').view, 'format');
-  assert.equal(merged.fields.find((field) => field.manifestJsonPath === 'supportUrl').classification, 'MATCH');
-  assert.equal(merged.fields.find((field) => field.manifestJsonPath === 'supportUrl').view, 'format');
+  assert.equal(merged.fields.find((field) => field.manifestJsonPath === 'supportUrl').classification, 'NOT_DISCOVERED');
+  assert.equal(merged.fields.find((field) => field.manifestJsonPath === 'supportUrl').view, 'listing');
   const mainMatch = { fields: [makeField('documentationUrl', 'MATCH', 'listing')] };
   const weakFormat = { fields: [makeField('documentationUrl', 'NOT_VISIBLE', 'format')] };
   assert.equal(mergeListingAndFormatComparisons(mainMatch, weakFormat, manifest).fields[0].view, 'listing');
@@ -452,7 +452,7 @@ test('fixture format technical details recover documentation and support values'
   assert.equal(documentation.classification, 'MATCH');
   assert.equal(documentation.view, 'format');
   assert.equal(support.classification, 'MATCH');
-  assert.equal(support.view, 'format');
+  assert.equal(support.view, 'listing');
 });
 
 
@@ -474,8 +474,8 @@ test('listing locator cannot be preflighted while format view is active', async 
 
 
 test('preflight never falls back from the comparison-approved locator', async () => {
-  const manifest = makeManifest({ shortDescription: 'Changed short description' });
-  const fixture = await startFixture(fixtureState(manifest, { shortDescription: 'Old short description' }));
+  const manifest = makeManifest({ title: 'Changed title' });
+  const fixture = await startFixture(fixtureState(manifest, { title: 'Old title' }));
   const context = await browser.newContext();
   const page = await context.newPage();
   const info = await makeManifestInfo(manifest);
@@ -485,9 +485,9 @@ test('preflight never falls back from the comparison-approved locator', async ()
     const mutation = buildMutationPlan(comparison, info);
     assert.equal(mutation.plan[0].locator.strategy, 'getByLabel');
     await page.evaluate(() => {
-      document.querySelector('[aria-label="Short description *"]').closest('label').remove();
+      document.querySelector('[aria-label="Title *"]').closest('label').remove();
       const fallback = document.createElement('input');
-      fallback.setAttribute('aria-label', 'Short description');
+      fallback.setAttribute('aria-label', 'Title');
       fallback.value = 'Fallback control';
       document.body.append(fallback);
     });

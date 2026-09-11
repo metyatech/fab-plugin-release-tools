@@ -8,7 +8,7 @@ import { runPortalAutomation } from './portal.mjs';
 import { createRunDirectory, writeRunReport } from './report.mjs';
 import { FAB_WRITE_AUTOMATION_DISABLED_MESSAGE } from './write-policy.mjs';
 
-const VERSION = '0.7.0';
+const VERSION = '0.7.1';
 
 function help() {
   return `Fab Publisher Portal automation

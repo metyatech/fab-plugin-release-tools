@@ -1,5 +1,6 @@
 import { chromium } from 'playwright-core';
 import { compareManifest, summarizeComparison } from './comparison.mjs';
+import { assertSubmitActivationDecision } from './lifecycle.mjs';
 import { buildMutationPlan, executeMutationPlan, preflightMutationPlan } from './mutation-plan.mjs';
 import { createStdinManualInteraction, DEFAULT_MANUAL_CHALLENGE_MAX_CYCLES, normalizeManualInteractionDecision } from './manual-handoff.mjs';
 import { installNetworkGuard } from './network-guard.mjs';
@@ -26,10 +27,10 @@ const MANUAL_CHALLENGE_TEXT = [
 // before a Save Draft or Submit for review operation can begin. Subcategory=[] is
 // intentionally excluded because Fab may expose no distinct control for it.
 const CRITICAL_OWNED_FIELDS = new Set([
-  'shortDescription', 'longDescription', 'productType', 'category', 'tags',
+  'longDescription', 'productType', 'category', 'tags',
   'includedFormat', 'engineVersions', 'platforms', 'license',
   'personalPriceUsd', 'professionalPriceUsd', 'matureContent', 'generatedWithAi',
-  'allowsUsageWithAi', 'promotionalContent', 'forumPost', 'activation',
+  'allowsUsageWithAi', 'promotionalContent', 'forumPost',
   'documentationUrl', 'supportUrl', 'technicalInformationFile', 'media',
 ]);
 
@@ -400,7 +401,7 @@ async function waitForFormatView(page, manifest) {
 }
 
 const FORMAT_COMPARISON_FIELDS = new Set(['engineVersions', 'platforms', 'technicalInformationFile', 'media']);
-const FORMAT_READ_EVIDENCE_FIELDS = new Set(['documentationUrl', 'supportUrl']);
+const FORMAT_READ_EVIDENCE_FIELDS = new Set(['documentationUrl']);
 
 function comparisonEvidenceRank(field) {
   return ['MATCH', 'MISMATCH'].includes(field?.classification) ? 2 : field?.classification === 'NOT_APPLICABLE' ? 1 : 0;
@@ -929,4 +930,4 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
   }
 }
 
-export { CRITICAL_OWNED_FIELDS, criticalBlockers, detectManualBlock, prepareReadOnlySections, readStatus, requireExactTitle, writeReadiness };
+export { CRITICAL_OWNED_FIELDS, assertSubmitActivationDecision, criticalBlockers, detectManualBlock, prepareReadOnlySections, readStatus, requireExactTitle, writeReadiness };
