@@ -131,7 +131,25 @@ function Assert-FabR2BucketAccess {
         $result = Invoke-FabR2Wrangler -WranglerPath $wrangler -Arguments @('r2', 'bucket', 'list', '--json')
     }
     catch {
-        throw "CLOUDFLARE_AUTH_REQUIRED: $($_.Exception.Message)"
+        if ($_.Exception.Message -notmatch '(?i)unknown argument:\s*json') {
+            throw "CLOUDFLARE_AUTH_REQUIRED: $($_.Exception.Message)"
+        }
+        try {
+            $result = Invoke-FabR2Wrangler -WranglerPath $wrangler -Arguments @('r2', 'bucket', 'list')
+        }
+        catch {
+            throw "CLOUDFLARE_AUTH_REQUIRED: $($_.Exception.Message)"
+        }
+        $bucketNames = @(
+            [regex]::Matches(
+                $result.Output,
+                '(?im)^\s*name:\s*(\S+)\s*$') |
+                ForEach-Object { $_.Groups[1].Value }
+        )
+        if ($bucketNames.Count -ne 1 -or $bucketNames[0] -cne [string]$Publishing.Bucket) {
+            throw "CLOUDFLARE_BUCKET_MISMATCH: configured bucket '$($Publishing.Bucket)' was not found."
+        }
+        return $wrangler
     }
     try { $buckets = @($result.Output | ConvertFrom-Json -Depth 20) }
     catch { throw 'CLOUDFLARE_AUTH_REQUIRED: Wrangler bucket list was not valid JSON.' }

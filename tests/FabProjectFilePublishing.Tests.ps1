@@ -56,6 +56,29 @@ Describe 'Fab project file publishing' {
             Should -Throw '*Invalid SHA-256*'
     }
 
+    It 'falls back to the text bucket listing when Wrangler lacks JSON output' {
+        Mock Get-FabR2Wrangler { 'wrangler' }
+        Mock Invoke-FabR2Wrangler {
+            param(
+                [string]$WranglerPath,
+                [string[]]$Arguments
+            )
+            [void]$WranglerPath
+            if ($Arguments -contains '--json') {
+                throw 'Wrangler failed with exit code 1: Unknown argument: json'
+            }
+            [pscustomobject]@{
+                Output = "name:           metyatech-fab-project-files`ncreation_date:  2026-09-03T12:10:48.770Z"
+                Error  = ''
+            }
+        }
+
+        Assert-FabR2BucketAccess -Publishing ([pscustomobject]@{
+                Bucket = 'metyatech-fab-project-files'
+            }) | Should -BeExactly 'wrangler'
+        Should -Invoke Invoke-FabR2Wrangler -Times 2 -Exactly
+    }
+
     It 'omits existing project file links from the publication listing copy' {
         $source = [pscustomobject]@{
             title = 'Fixture'
