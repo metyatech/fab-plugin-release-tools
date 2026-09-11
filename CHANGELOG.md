@@ -5,6 +5,13 @@ Keep a Changelog and the project uses Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-09-11
+
+- Preserved meaningful paragraph, heading, and list-line structure when
+  comparing Fab Description text.
+- Rejected flattened one-line Portal descriptions while continuing to ignore
+  harmless line-ending, spacing, and trailing-whitespace differences.
+
 ## [0.7.1] - 2026-09-11
 
 - Aligned Draft verification with Fab field lifecycle ownership.

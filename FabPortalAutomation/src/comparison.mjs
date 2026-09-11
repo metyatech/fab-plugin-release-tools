@@ -46,7 +46,14 @@ export function comparePriceClassification(portalValue, manifestValue) {
 }
 
 export function normalizeRichText(value) {
-  return normalizeText(value).replace(/\s*([*_`#>-])\s*/g, '$1');
+  return String(value ?? '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/\u00a0/g, ' ')
+    .split('\n')
+    .map((line) => line.replace(/[ \t]+/g, ' ').trim())
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 async function readLocator(locator) {
@@ -55,6 +62,7 @@ async function readLocator(locator) {
   const visible = await locator.isVisible().catch(() => false);
   let value = '';
   try { value = await locator.inputValue(); } catch { value = await locator.innerText().catch(async () => await locator.textContent() ?? ''); }
+  if (!value) value = await locator.textContent().catch(() => '') ?? '';
   const text = normalizeText(value);
   let checked = null;
   try { checked = await locator.isChecked(); } catch { /* not a checkable control */ }
@@ -186,7 +194,7 @@ function semanticState(current, desired, { rich = false } = {}) {
 async function compareTextField(page, manifest, field, labelName = field, options = {}) {
   const { resolved, value } = await locateField(page, field, manifest);
   const desired = options.desiredOverride ?? manifest[field];
-  const current = value.value || value.placeholder;
+  const current = options.rich ? (value.rawValue ?? value.placeholder) : (value.value || value.placeholder);
   const state = semanticState(current, desired, options);
   const target = value.visible && value.editable && !value.disabled && resolved.metadata?.unique
     ? writeTargetFor(field, options.view ?? 'listing', { strategy: resolved.candidate.strategy, expression: resolved.candidate.expression, field, locator: resolved.candidate.locator })

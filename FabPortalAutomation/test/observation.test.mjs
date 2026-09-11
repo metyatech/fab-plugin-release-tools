@@ -3,7 +3,7 @@ import { writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { compareObservation, compareTagsClassification } from '../src/comparison.mjs';
+import { compareObservation, compareTagsClassification, normalizeRichText } from '../src/comparison.mjs';
 import { loadFabPortalObservation } from '../src/observation.mjs';
 import { assertSubmitActivationDecision, portalFieldLifecycle } from '../src/lifecycle.mjs';
 import { makeManifest, makeManifestInfo } from './helpers.mjs';
@@ -123,11 +123,30 @@ for (const [name, mutator, pattern] of [
 test('pure comparator matches normalized rich text, USD, Windows, engine sets, URLs, and links', async () => {
   const { manifestInfo } = await fixture();
   const observation = makeObservation(manifestInfo);
-  observation.fields.find((item) => item.manifestJsonPath === 'longDescription').value = 'Fixture   long\ndescription\nSupport: https://example.com/support';
+  observation.fields.find((item) => item.manifestJsonPath === 'longDescription').value = 'Fixture   long description\r\nSupport: https://example.com/support';
   const comparison = compareObservation(manifestInfo, observation);
   assert.equal(comparison.mismatchCount, 0);
   assert.equal(comparison.counts.MATCH, 24);
   assert.equal(comparison.counts.NOT_APPLICABLE, 2);
+});
+
+test('rich-text normalization preserves paragraph, bullet, and heading structure', () => {
+  assert.equal(normalizeRichText('A  B\r\n\r\nC'), 'A B\n\nC');
+  assert.equal(normalizeRichText('Heading\n\n•  First\n• Second\n\nBody'), 'Heading\n\n• First\n• Second\n\nBody');
+  assert.equal(normalizeRichText('A\n\n\n\nB'), 'A\n\nB');
+  assert.notEqual(normalizeRichText('A B\n\nC'), normalizeRichText('A B C'));
+  assert.notEqual(normalizeRichText('WHAT IT CHECKS\n\n• Missing Map'), normalizeRichText('WHAT IT CHECKS • Missing Map'));
+  assert.notEqual(normalizeRichText('Heading\n\nBody'), normalizeRichText('Heading Body'));
+});
+
+test('observation comparator rejects a flattened multiline description', async () => {
+  const { manifestInfo } = await fixture();
+  const observation = makeObservation(manifestInfo);
+  const description = observation.fields.find((item) => item.manifestJsonPath === 'longDescription');
+  description.value = manifest.longDescription.replace(/\n+/g, ' ');
+  const comparison = compareObservation(manifestInfo, observation);
+  assert.equal(comparison.fields.find((item) => item.manifestJsonPath === 'longDescription').classification, 'MISMATCH');
+  assert.equal(comparison.mismatchCount, 1);
 });
 
 test('pure comparator reports changed long description and price as mismatches', async () => {

@@ -427,6 +427,11 @@ destination must be present in the buyer-visible Draft Description; it is not
 assumed to be a standalone Portal field. Tag observations must be complete;
 Fab-generated extra tags are allowed, but every manifest tag must be visible.
 
+Description verification preserves meaningful paragraph, heading, and list-line
+structure. It normalizes line endings, horizontal spacing, and excessive blank
+lines without flattening the Description into one line, so readable multiline
+content does not compare equal to flattened Portal content.
+
 For authenticated portals where a CDP browser is blocked by Cloudflare, an
 interactive browser can collect the structured observation and the same
 central verifier can compare it offline. This is a transport option, not a

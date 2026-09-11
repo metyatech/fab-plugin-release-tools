@@ -87,6 +87,19 @@ test('verify-only compares portal-unready manifests without writing', async () =
   assert.equal(field.notes, 'The staging manifest has no verified Project File Link for this engine version; the existing Fab value was intentionally not compared or managed.');
 });
 
+test('fixture contenteditable comparison preserves multiline Description structure', async () => {
+  const manifest = makeManifest({
+    longDescription: 'Heading\n\n• First\n• Second\n\nSupport: https://example.com/support',
+  });
+  const matching = await scenario({ manifest });
+  assert.equal(matching.result.result, 'PASS');
+  assert.equal(matching.result.comparison.fields.find((item) => item.manifestJsonPath === 'longDescription').classification, 'MATCH');
+
+  const flattened = await scenario({ manifest, state: { longDescription: manifest.longDescription.replace(/\n+/g, ' ') } });
+  assert.equal(flattened.result.result, 'FAIL');
+  assert.equal(flattened.result.comparison.fields.find((item) => item.manifestJsonPath === 'longDescription').classification, 'MISMATCH');
+});
+
 
 
 test('passive target selection chooses the exact listing page among Fab tabs', async () => {

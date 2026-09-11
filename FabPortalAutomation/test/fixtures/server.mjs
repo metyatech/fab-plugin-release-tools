@@ -4,6 +4,10 @@ function html(value) {
   return String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 }
 
+function richText(value) {
+  return html(value).replace(/\r\n?|\n/g, '<br>');
+}
+
 function pageMarkup(state, listingId) {
   const checked = (value) => value ? ' checked' : '';
   const radio = (label, isChecked) => `<label>${html(label)}<input type="radio" aria-label="${html(label)}"${checked(isChecked)}></label>`;
@@ -23,7 +27,7 @@ function pageMarkup(state, listingId) {
     ${statusMarkup}
     <label>Title *<input aria-label="Title *" value="${html(state.title)}" ${state.disableFields?.includes('title') ? 'disabled' : ''}></label>
     <label>Short description *<input aria-label="Short description *" value="${html(state.shortDescription)}" ${state.disableFields?.includes('shortDescription') ? 'disabled' : ''}></label>
-    <label>Description *<div role="textbox" aria-label="Description *" contenteditable="true">${html(state.longDescription)}</div></label>
+    <label>Description *<div role="textbox" aria-label="Description *" contenteditable="true">${richText(state.longDescription)}</div></label>
     <label>Product type *<select aria-label="Product type *"><option selected>${html(state.productType)}</option></select></label>
     <label>Category *<input role="combobox" aria-label="Category selection" value="${html(state.category)}"></label>
     <label>Tags *<input aria-label="Tags *" value="${html(state.tags[0] ?? '')}" readonly></label>
@@ -57,7 +61,7 @@ function pageMarkup(state, listingId) {
     <section aria-label="Technical details">
       <p>Documentation: ${html(state.documentationUrl)}</p>
       <p>Support: ${html(state.supportUrl)}</p>
-      <div ${state.technicalInformationNoLabel ? '' : 'aria-label="Technical Information" '}contenteditable="true">${html(state.technicalInformationText)}</div>
+      <div ${state.technicalInformationNoLabel ? '' : 'aria-label="Technical Information" '}contenteditable="true">${richText(state.technicalInformationText)}</div>
     </section>
     <section data-testid="media-gallery" data-existing="${html(state.mediaExisting)}" data-order="${html(state.mediaOrder ?? '')}" data-upload-order="${html(initialStateMediaOrder(state))}">${html(state.mediaExisting === 'existing' ? 'Existing media' : state.mediaExisting === 'known' || state.mediaExisting === 'uploaded' ? '001 thumbnail 002 gallery' : 'Empty gallery')}</section>
     <input type="file" data-testid="media-upload" multiple>`;
