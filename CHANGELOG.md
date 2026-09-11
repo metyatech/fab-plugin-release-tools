@@ -5,6 +5,11 @@ Keep a Changelog and the project uses Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.7.7] - 2026-09-11
+
+- Stopped inferring an exact Fab `numberOfCppClasses` value from C++ source
+  syntax; the field remains schema-validated seller-authored metadata.
+
 ## [0.7.6] - 2026-09-11
 
 - Made R2 project-file publication content-addressed by package SHA-256.

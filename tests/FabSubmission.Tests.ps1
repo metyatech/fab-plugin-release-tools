@@ -124,19 +124,37 @@ Describe 'Fab submission preflight' {
         Test-Path (Join-Path $PSScriptRoot '..\artifacts\TestPlugin\submission\FabTechnicalInformation.txt') | Should -BeTrue
     }
 
-    It 'counts authored C++ class definitions in headers and source files' {
+    It 'treats numberOfCppClasses as declarative metadata' {
         $root = Join-Path $TestDrive 'AuthoredClasses'
         Initialize-SubmissionFixture -Root $root
         [System.IO.File]::WriteAllText(
             (Join-Path $root 'Source\TestPlugin\Additional.cpp'),
             "// Copyright (c) 2026 metyatech. All rights reserved.`nclass FTestHelper final`n{`n};`n")
-        $metadataPath = Join-Path $root 'FabSubmissionMetadata.json'
-        $metadata = Get-Content -Raw -LiteralPath $metadataPath | ConvertFrom-Json
-        $metadata.technicalInformation.numberOfCppClasses = 2
-        $metadata | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $metadataPath
         $result = Invoke-SubmissionFixture -Root $root
         $result.ExitCode | Should -Be 0 -Because $result.Output
         $result.Output | Should -Match 'FAB SUBMISSION CHECK: PASS'
+    }
+
+    It 'rejects a negative declarative numberOfCppClasses value through schema validation' {
+        $root = Join-Path $TestDrive 'NegativeCppClassCount'
+        Initialize-SubmissionFixture -Root $root
+        $metadataPath = Join-Path $root 'FabSubmissionMetadata.json'
+        $metadata = Get-Content -Raw -LiteralPath $metadataPath | ConvertFrom-Json
+        $metadata.technicalInformation.numberOfCppClasses = -1
+        $metadata | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $metadataPath
+        $result = Invoke-SubmissionFixture -Root $root
+        $result.ExitCode | Should -Be 1
+        $result.Output | Should -Match 'FAB SUBMISSION CHECK: FAIL'
+    }
+
+    It 'renders the declared numberOfCppClasses value in technical information' {
+        $root = Join-Path $TestDrive 'DeclaredCppClassCount'
+        Initialize-SubmissionFixture -Root $root
+        $result = Invoke-SubmissionFixture -Root $root
+        $result.ExitCode | Should -Be 0 -Because $result.Output
+        $result.Output | Should -Match 'FAB SUBMISSION CHECK: PASS'
+        $text = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot '..\artifacts\TestPlugin\submission\FabTechnicalInformation.txt')
+        $text | Should -Match '(?m)^Number of C\+\+ Classes: 1$'
     }
 
     It 'accepts a DeveloperTool module when descriptor and metadata match' {

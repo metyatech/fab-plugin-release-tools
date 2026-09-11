@@ -87,31 +87,6 @@ function Get-ModuleRecord {
     return $modules
 }
 
-function Get-CppClassCount {
-    param(
-        [Parameter(Mandatory)]
-        [string]$PluginRoot,
-
-        [Parameter(Mandatory)]
-        [object[]]$ModuleRecords
-    )
-
-    $count = 0
-    foreach ($module in $ModuleRecords) {
-        $moduleRoot = Join-Path $PluginRoot "Source\$($module.Name)"
-        if (-not [System.IO.Directory]::Exists($moduleRoot)) {
-            throw "Distribution module source directory is missing: Source/$($module.Name)"
-        }
-        $files = @(Get-ChildItem -LiteralPath $moduleRoot -Recurse -File -Include '*.h', '*.hh', '*.hpp', '*.cpp', '*.cc', '*.cxx') |
-            Where-Object { $_.FullName -notmatch '[\\/]Tests?[\\/]' }
-        foreach ($file in $files) {
-            $text = [System.IO.File]::ReadAllText($file.FullName)
-            $count += [regex]::Matches($text, '(?ms)^[ \t]*class[ \t]+[A-Za-z_]\w*(?:[ \t]+final)?(?:[ \t\r\n]*:[^{;]+)?[ \t\r\n]*\{').Count
-        }
-    }
-    return $count
-}
-
 function Get-BlueprintAssetCount {
     param(
         [Parameter(Mandatory)]
@@ -303,10 +278,6 @@ try {
     if ($null -eq $metadata.technicalInformation.exampleProjectUrl -and
         $metadata.technicalInformation.exampleProjectNotes -notmatch '(?i)not\s+(?:applicable|needed|required)|no\s+example') {
         throw 'exampleProjectNotes must explain why exampleProjectUrl is null.'
-    }
-    if ([int]$metadata.technicalInformation.numberOfCppClasses -ne (Get-CppClassCount `
-                -PluginRoot $resolvedPluginPath -ModuleRecords $modules)) {
-        throw 'numberOfCppClasses must equal authored C++ class definitions in shipped distribution modules.'
     }
     if ([int]$metadata.technicalInformation.numberOfBlueprints -ne (Get-BlueprintAssetCount -PluginRoot $resolvedPluginPath)) {
         throw 'numberOfBlueprints must equal Blueprint assets in the shipped Content tree.'

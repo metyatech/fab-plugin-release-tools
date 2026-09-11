@@ -24,6 +24,11 @@ pwsh .\Test-FabPluginSubmission.ps1 `
   -PluginPath ..\RuntimeAssetImportPlugin
 ```
 
+`technicalInformation.numberOfCppClasses` is declarative seller-authored Fab
+technical metadata. The preflight validates its schema, type, and range and
+renders the declared value; it does not infer an authoritative exact count
+from C++ source syntax.
+
 On success, the command writes `FabTechnicalInformation.txt` under
 `artifacts/<PluginName>/submission/`. The text is formatted for direct copying
 into Fab's Technical Information fields. An optional `-PackageZipPath` reports
