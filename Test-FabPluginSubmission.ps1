@@ -361,7 +361,7 @@ try {
     exit 0
 }
 catch {
-    Write-Error $_.Exception.Message
+    Write-Error $_.Exception.Message -ErrorAction Continue
     Write-Output 'FAB SUBMISSION CHECK: FAIL'
     exit 1
 }

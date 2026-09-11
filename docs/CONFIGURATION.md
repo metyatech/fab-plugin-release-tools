@@ -60,8 +60,15 @@ not create buckets or enable development URLs.
 | `requiredPackageFiles` | relative path array | yes | Each path must be a non-empty regular staged file. |
 | `customDistributionPaths` | relative path array | yes | Exact non-standard paths represented in `Config/FilterPlugin.ini`. |
 | `thirdPartyLicenseSets` | object array | yes | Exact license-file allowlists described below; use `[]` if none. |
-| `forbiddenPackagePatterns` | regex string array | yes | Additional plugin-relative forbidden paths. Every regex must compile. |
+| `forbiddenPackagePatterns` | regex string array | yes | Additional plugin-relative forbidden paths. Every regex must compile; these rules cannot disable the built-in unsupported-format or source-reference checks. |
 | `buildLogFailPatterns` | regex string array | yes | Additional UAT log failure patterns. Every regex must compile. |
+
+`forbiddenPackagePatterns` is additive. The built-in policy always rejects Fab-
+unsupported package formats such as executables, installers, and non-ZIP
+archives, and always scans distributed source files under `Source/` for
+executable or installer references according to the release tool's review-risk
+policy. No configuration property disables or bypasses those checks. `.dll`
+files are not globally rejected by this built-in rule.
 
 ## `publisher`
 

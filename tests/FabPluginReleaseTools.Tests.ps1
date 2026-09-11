@@ -1874,12 +1874,58 @@ const char* Text = "UPROPERTY(EditAnywhere)";
             @{ Relative = 'Tests/Fixture.txt' },
             @{ Relative = 'Forbidden/Fixture.txt' },
             @{ Relative = 'Debug.pdb' },
-            @{ Relative = 'Nested.zip' }) {
+            @{ Relative = 'Nested.zip' },
+            @{ Relative = 'Program.exe' },
+            @{ Relative = 'Archive.0' },
+            @{ Relative = 'Archive.iso' },
+            @{ Relative = 'Archive.dmg' },
+            @{ Relative = 'Archive.rar' },
+            @{ Relative = 'Archive.7z' },
+            @{ Relative = 'Archive.z' },
+            @{ Relative = 'Archive.gz' },
+            @{ Relative = 'Archive.tar' },
+            @{ Relative = 'Installer.msi' },
+            @{ Relative = 'Installer.msix' },
+            @{ Relative = 'Installer.msixbundle' },
+            @{ Relative = 'Installer.appx' },
+            @{ Relative = 'Installer.appxbundle' },
+            @{ Relative = 'Installer.pkg' },
+            @{ Relative = 'Installer.deb' },
+            @{ Relative = 'Installer.rpm' }) {
             $path = Join-Path $packageRoot $Relative
             [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($path)) | Out-Null
             [System.IO.File]::WriteAllText($path, 'bad')
             { Assert-NoForbiddenPackageFile -PluginRoot $packageRoot -Configuration $configuration } |
                 Should -Throw
+        }
+
+        It 'allows a third-party DLL under the built-in forbidden extension policy' {
+            $path = Join-Path $packageRoot 'Source\ThirdParty\Vendor\Vendor.dll'
+            [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($path)) | Out-Null
+            [System.IO.File]::WriteAllText($path, 'binary placeholder')
+            { Assert-NoForbiddenPackageFile -PluginRoot $packageRoot -Configuration $configuration } |
+                Should -Not -Throw
+        }
+
+        It 'rejects and allows distributed source executable references according to Fab review policy' -ForEach @(
+            @{ Relative = 'Source/TestPlugin/Runner.cpp'; Content = 'TEXT("UnrealEditor.exe")'; ShouldFail = $true },
+            @{ Relative = 'Source/TestPlugin/Tool.cpp'; Content = 'TEXT("Tool.MSI")'; ShouldFail = $true },
+            @{ Relative = 'Source/TestPlugin/Comment.cpp'; Content = '// UnrealEditor.exe'; ShouldFail = $true },
+            @{ Relative = 'Source/TestPlugin/TestPlugin.Build.cs'; Content = '"Tool.exe"'; ShouldFail = $true },
+            @{ Relative = 'Source/TestPlugin/Vendor.cpp'; Content = 'TEXT("Vendor.dll")'; ShouldFail = $false },
+            @{ Relative = 'Source/TestPlugin/Archive.cpp'; Content = 'TEXT("archive.zip")'; ShouldFail = $false },
+            @{ Relative = 'Source/TestPlugin/Version.cpp'; Content = 'TEXT("Version 1.0.0")'; ShouldFail = $false },
+            @{ Relative = 'Source/ThirdParty/Vendor/vendor.cpp'; Content = '"vendor.exe"'; ShouldFail = $false },
+            @{ Relative = 'Source/ThirdParty/Vendor/Vendor.Build.cs'; Content = '"vendor.exe"'; ShouldFail = $true }) {
+            $path = Join-Path $packageRoot $Relative
+            [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($path)) | Out-Null
+            [System.IO.File]::WriteAllText($path, $Content)
+            if ($ShouldFail) {
+                { Assert-NoFabReviewExecutableReference -PluginRoot $packageRoot } | Should -Throw
+            }
+            else {
+                { Assert-NoFabReviewExecutableReference -PluginRoot $packageRoot } | Should -Not -Throw
+            }
         }
 
         It 'accepts 170 ZIP-path characters and rejects 171' {
@@ -2082,6 +2128,24 @@ const char* Text = "UPROPERTY(EditAnywhere)";
             $archive = [System.IO.Compression.ZipFile]::Open(
                 $zipPath, [System.IO.Compression.ZipArchiveMode]::Update)
             try { [void]$archive.CreateEntry('TestPlugin/Tests/') } finally { $archive.Dispose() }
+            { Assert-FabZipDirectly -ZipPath $zipPath -Configuration $configuration `
+                -EngineVersion '5.8' } | Should -Throw
+        }
+
+        It 'rejects an executable entry during direct ZIP inspection' {
+            $sourceRoot = Join-Path $TestDrive 'DirectExecutableSource'
+            $packageRoot = Join-Path $TestDrive 'DirectExecutablePackage'
+            $zipPath = Join-Path $TestDrive 'DirectExecutable.zip'
+            $configuration = New-TestInspectableZip -SourceRoot $sourceRoot `
+                -PackageRoot $packageRoot -ZipPath $zipPath
+            $archive = [System.IO.Compression.ZipFile]::Open(
+                $zipPath, [System.IO.Compression.ZipArchiveMode]::Update)
+            try {
+                $entry = $archive.CreateEntry('TestPlugin/Source/TestPlugin/Tool.exe')
+                $writer = [System.IO.StreamWriter]::new($entry.Open())
+                try { $writer.Write('bad') } finally { $writer.Dispose() }
+            }
+            finally { $archive.Dispose() }
             { Assert-FabZipDirectly -ZipPath $zipPath -Configuration $configuration `
                     -EngineVersion '5.8' } | Should -Throw
         }

@@ -282,7 +282,7 @@ The command runs these gates in order and stops at the first failure:
 2. source descriptor, copyright, and Unreal API Category static validation
 3. allowlist-only staging with reparse-point and size protection
 4. sales descriptor normalization
-5. complete staged package validation
+5. complete staged package validation, including built-in unsupported package-format checks and distributed `Source/` executable or installer reference review
 6. real UAT `BuildPlugin` against a separate staging copy
 7. forced Unity Build compilation through UBT against an isolated temporary host project
 8. deterministic ZIP creation
@@ -293,6 +293,15 @@ The command runs these gates in order and stops at the first failure:
 13. atomic artifact finalization
 
 There is no build-skip or validation-skip option.
+
+The built-in package policy rejects Fab-unsupported file formats, including
+executables, installers, and non-ZIP archives, and it rejects executable or
+installer references in distributed source files under `Source/`. The
+configuration property `forbiddenPackagePatterns` adds project-specific rules;
+it cannot disable or override these built-in checks. `.dll` files are not
+globally forbidden by this policy because a code plugin may legitimately ship
+third-party compiled libraries. These checks reduce known Fab review risks but
+do not guarantee Fab acceptance.
 
 The Unity gate is independent of plugin `Build.cs` settings. Unreal Engine
 5.5-5.8 expose the official UBT `-ForceUnity` target argument; the release

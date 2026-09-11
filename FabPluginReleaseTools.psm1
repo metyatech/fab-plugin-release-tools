@@ -4,12 +4,21 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'FabSubmissionCommon.ps1')
 
-$script:ToolVersion = '0.7.3'
+$script:ToolVersion = '0.7.4'
 $script:MaximumPackageBytes = 15L * 1024L * 1024L * 1024L
 $script:CopyrightExtensions = @('.h', '.hh', '.hpp', '.inl', '.ipp', '.cpp', '.cc', '.cxx')
 $script:ForbiddenTopLevelDirectories = @('Binaries', 'Build', 'Intermediate', 'Saved', 'DerivedDataCache')
 $script:ForbiddenPathElements = @('Test', 'Tests', 'Sample', 'Samples', 'Example', 'Examples')
-$script:ForbiddenExtensions = @('.pdb', '.obj', '.sln', '.vcxproj', '.vcxproj.filters', '.user')
+$script:ForbiddenExtensions = @(
+    '.pdb', '.obj', '.sln', '.vcxproj', '.vcxproj.filters', '.user',
+    '.exe', '.0', '.iso', '.dmg', '.rar', '.7z', '.z', '.gz', '.tar',
+    '.msi', '.msix', '.msixbundle', '.appx', '.appxbundle', '.pkg', '.deb', '.rpm')
+$script:FabReviewSourceExtensions = @(
+    '.h', '.hh', '.hpp', '.inl', '.ipp', '.cpp', '.cc', '.cxx', '.cs')
+$script:FabReviewExecutableReferencePattern = [regex]::new(
+    '\.(?:exe|msi|msix|msixbundle|appx|appxbundle|iso|dmg|pkg|deb|rpm)(?![0-9A-Za-z_])',
+    [System.Text.RegularExpressions.RegexOptions]::IgnoreCase -bor
+    [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
 $script:ForbiddenNames = @('.DS_Store', 'Thumbs.db', 'FabPluginRelease.json', '.tasks.jsonl', 'AGENTS.md', 'agent-ruleset.json')
 
 function Test-IsDescendantPath {
@@ -1779,6 +1788,34 @@ function Get-OrdinalSortedTreeFile {
     return $files
 }
 
+function Assert-NoFabReviewExecutableReference {
+    param(
+        [Parameter(Mandatory)]
+        [string]$PluginRoot
+    )
+
+    $files = @(Get-SafeTreeFile -Root $PluginRoot)
+    foreach ($file in $files) {
+        $relative = $file.RelativePath
+        if (-not $relative.StartsWith('Source/', [System.StringComparison]::Ordinal)) {
+            continue
+        }
+        $extension = [System.IO.Path]::GetExtension($relative)
+        if ($script:FabReviewSourceExtensions -cnotcontains $extension) {
+            continue
+        }
+        $isThirdParty = $relative.StartsWith('Source/ThirdParty/', [System.StringComparison]::Ordinal)
+        if ($isThirdParty -and $extension -notin @('.cs')) {
+            continue
+        }
+        $content = [System.IO.File]::ReadAllText($file.FullName)
+        $match = $script:FabReviewExecutableReferencePattern.Match($content)
+        if ($match.Success) {
+            throw "Fab review-risk executable or installer reference '$($match.Value)' is present in distributed source: $relative"
+        }
+    }
+}
+
 function Copy-FabPluginAllowList {
     param(
         [Parameter(Mandatory)]
@@ -2121,6 +2158,7 @@ function Assert-FabPackage {
     Assert-FilterPluginConfiguration -PluginRoot $PluginRoot -Configuration $Configuration
     Assert-RequiredPackageFile -PluginRoot $PluginRoot -Configuration $Configuration
     Assert-NoForbiddenPackageFile -PluginRoot $PluginRoot -Configuration $Configuration
+    Assert-NoFabReviewExecutableReference -PluginRoot $PluginRoot
     Assert-ThirdPartyLicenseSet -PluginRoot $PluginRoot -Configuration $Configuration
 }
 

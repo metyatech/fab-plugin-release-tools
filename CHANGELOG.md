@@ -5,6 +5,18 @@ Keep a Changelog and the project uses Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-09-11
+
+- Added built-in rejection for known Fab-unsupported executable, installer, and
+  archive formats in staged packages and direct ZIP entries.
+- Added a distributed-source review-risk gate for executable and installer
+  references, including `UnrealEditor.exe` literals.
+- Kept `.dll` files allowed by the built-in unsupported-format rule for valid
+  third-party compiled code-plugin dependencies.
+- Fixed submission preflight failure handling so `FAB SUBMISSION CHECK: FAIL`
+  is emitted reliably before exit code 1 regardless of the localized schema
+  error text.
+
 ## [0.7.3] - 2026-09-11
 
 - Added structured `descriptionLinks` metadata so Description source text stays
