@@ -11,6 +11,8 @@ Keep a Changelog and the project uses Semantic Versioning.
   comparing Fab Description text.
 - Rejected flattened one-line Portal descriptions while continuing to ignore
   harmless line-ending, spacing, and trailing-whitespace differences.
+- Counted authored C++ class definitions across shipped headers and source files
+  when validating Fab Technical Information metadata.
 
 ## [0.7.1] - 2026-09-11
 

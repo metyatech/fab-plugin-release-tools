@@ -124,6 +124,21 @@ Describe 'Fab submission preflight' {
         Test-Path (Join-Path $PSScriptRoot '..\artifacts\TestPlugin\submission\FabTechnicalInformation.txt') | Should -BeTrue
     }
 
+    It 'counts authored C++ class definitions in headers and source files' {
+        $root = Join-Path $TestDrive 'AuthoredClasses'
+        Initialize-SubmissionFixture -Root $root
+        [System.IO.File]::WriteAllText(
+            (Join-Path $root 'Source\TestPlugin\Additional.cpp'),
+            "// Copyright (c) 2026 metyatech. All rights reserved.`nclass FTestHelper final`n{`n};`n")
+        $metadataPath = Join-Path $root 'FabSubmissionMetadata.json'
+        $metadata = Get-Content -Raw -LiteralPath $metadataPath | ConvertFrom-Json
+        $metadata.technicalInformation.numberOfCppClasses = 2
+        $metadata | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $metadataPath
+        $result = Invoke-SubmissionFixture -Root $root
+        $result.ExitCode | Should -Be 0 -Because $result.Output
+        $result.Output | Should -Match 'FAB SUBMISSION CHECK: PASS'
+    }
+
     It 'accepts a DeveloperTool module when descriptor and metadata match' {
         $root = Join-Path $TestDrive 'DeveloperToolMatch'
         Initialize-SubmissionFixture -Root $root -DescriptorModuleType 'DeveloperTool' -MetadataModuleType 'DeveloperTool'

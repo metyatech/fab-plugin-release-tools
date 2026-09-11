@@ -1,4 +1,4 @@
-﻿# Copyright (c) 2026 metyatech. All rights reserved.
+# Copyright (c) 2026 metyatech. All rights reserved.
 
 [CmdletBinding()]
 param(
@@ -102,11 +102,11 @@ function Get-CppClassCount {
         if (-not [System.IO.Directory]::Exists($moduleRoot)) {
             throw "Distribution module source directory is missing: Source/$($module.Name)"
         }
-        $files = @(Get-ChildItem -LiteralPath $moduleRoot -Recurse -File -Include '*.h', '*.hh', '*.hpp') |
+        $files = @(Get-ChildItem -LiteralPath $moduleRoot -Recurse -File -Include '*.h', '*.hh', '*.hpp', '*.cpp', '*.cc', '*.cxx') |
             Where-Object { $_.FullName -notmatch '[\\/]Tests?[\\/]' }
         foreach ($file in $files) {
             $text = [System.IO.File]::ReadAllText($file.FullName)
-            $count += [regex]::Matches($text, '(?m)^\s*UCLASS\b').Count
+            $count += [regex]::Matches($text, '(?ms)^[ \t]*class[ \t]+[A-Za-z_]\w*(?:[ \t]+final)?(?:[ \t\r\n]*:[^{;]+)?[ \t\r\n]*\{').Count
         }
     }
     return $count
@@ -306,7 +306,7 @@ try {
     }
     if ([int]$metadata.technicalInformation.numberOfCppClasses -ne (Get-CppClassCount `
                 -PluginRoot $resolvedPluginPath -ModuleRecords $modules)) {
-        throw 'numberOfCppClasses must equal UCLASS declarations in shipped distribution modules.'
+        throw 'numberOfCppClasses must equal authored C++ class definitions in shipped distribution modules.'
     }
     if ([int]$metadata.technicalInformation.numberOfBlueprints -ne (Get-BlueprintAssetCount -PluginRoot $resolvedPluginPath)) {
         throw 'numberOfBlueprints must equal Blueprint assets in the shipped Content tree.'
