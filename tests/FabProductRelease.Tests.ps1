@@ -131,7 +131,7 @@ public sealed class FabProductTestHttpMessageHandler : HttpMessageHandler
                 version                 = '1.0.0'
                 title                   = 'Test Plugin'
                 short_description       = 'Short description.'
-                long_description        = 'Long description.'
+                long_description        = "Long description.`n`nSupport: $($configuration.supportUrl)"
                 product_type            = 'Tools & Plugins'
                 category                = 'Tools & Plugins'
                 subcategory             = @('Testing')
@@ -440,6 +440,29 @@ public sealed class FabProductTestHttpMessageHandler : HttpMessageHandler
         Write-ProductFixtureJson -Value $listing -Path $listingPath
         { Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot } | Should -Throw
         @($script:ProductReleaseInvocations) | Should -HaveCount 0
+    }
+
+    It 'accepts support_url when it is literally represented in long_description' {
+        $root = Join-Path $TestDrive 'SupportUrlPresent'
+        $fixture = Initialize-ProductFixture -Root $root -EngineVersions @('5.8')
+        $listingPath = Join-Path $root 'FabListingFields.json'
+
+        { Import-FabProductListing -PluginRoot $root -Configuration $fixture.Configuration -ListingPath $listingPath } |
+            Should -Not -Throw
+    }
+
+    It 'rejects support_url when long_description does not contain the exact URL' -ForEach @(
+        @{ Name = 'absent'; LongDescription = 'No support URL here.' },
+        @{ Name = 'near match'; LongDescription = 'https://support.example.invalid/' }) {
+        $root = Join-Path $TestDrive "SupportUrlMissing-$Name"
+        $fixture = Initialize-ProductFixture -Root $root -EngineVersions @('5.8')
+        $listingPath = Join-Path $root 'FabListingFields.json'
+        $listing = Get-Content -Raw -LiteralPath $listingPath | ConvertFrom-Json
+        $listing.long_description = $LongDescription
+        Write-ProductFixtureJson -Value $listing -Path $listingPath
+
+        { Import-FabProductListing -PluginRoot $root -Configuration $fixture.Configuration -ListingPath $listingPath } |
+            Should -Throw '*support_url must appear exactly in long_description*'
     }
 
     It 'rejects missing media' {

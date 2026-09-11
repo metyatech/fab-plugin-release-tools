@@ -443,7 +443,9 @@ Submit-for-review decision and is therefore `NOT_APPLICABLE` while a listing
 is Draft. `shortDescription` is retained as source metadata when Fab does not
 expose a distinct Draft field. `supportUrl` is source metadata whose exact
 destination must be present in the buyer-visible Draft Description; it is not
-assumed to be a standalone Portal field. Tag observations must be complete;
+assumed to be a standalone Portal field. Listing preparation validates this
+support URL invariant before producing a portal-ready manifest. Tag
+observations must be complete;
 Fab-generated extra tags are allowed, but every manifest tag must be visible.
 
 Description verification preserves meaningful paragraph, heading, and list-line

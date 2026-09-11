@@ -4,7 +4,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'FabSubmissionCommon.ps1')
 
-$script:ToolVersion = '0.7.7'
+$script:ToolVersion = '0.7.8'
 $script:MaximumPackageBytes = 15L * 1024L * 1024L * 1024L
 $script:CopyrightExtensions = @('.h', '.hh', '.hpp', '.inl', '.ipp', '.cpp', '.cc', '.cxx')
 $script:ForbiddenTopLevelDirectories = @('Binaries', 'Build', 'Intermediate', 'Saved', 'DerivedDataCache')

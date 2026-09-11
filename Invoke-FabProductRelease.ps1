@@ -437,6 +437,9 @@ function Import-FabProductListing {
     $listingPlatforms = @(ConvertTo-FabProductStringArray -Object $listing -Name 'platforms')
     $documentationUrl = Assert-FabProductText -Object $listing -Name 'documentation_url'
     $supportUrl = Assert-FabProductText -Object $listing -Name 'support_url'
+    if ($longDescription.IndexOf($supportUrl, [System.StringComparison]::Ordinal) -lt 0) {
+        throw 'support_url must appear exactly in long_description because Fab support is derived from the buyer-visible Description.'
+    }
     $media = @(Test-FabProductMediaEntry -PluginRoot $PluginRoot -Listing $listing)
 
     $configuredVersions = @($Configuration.engineVersions | ForEach-Object { [string]$_ })

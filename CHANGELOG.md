@@ -5,6 +5,11 @@ Keep a Changelog and the project uses Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.7.8] - 2026-09-11
+
+- Fail listing preparation early when `support_url` is not represented in the
+  buyer-visible `long_description` required by Fab Portal support verification.
+
 ## [0.7.7] - 2026-09-11
 
 - Stopped inferring an exact Fab `numberOfCppClasses` value from C++ source
