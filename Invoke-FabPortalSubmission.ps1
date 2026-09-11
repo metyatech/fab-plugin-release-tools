@@ -6,8 +6,6 @@ param(
     [string]$CdpEndpoint,
     [string]$ObservationPath,
     [string]$OutputDirectory,
-    [switch]$SaveDraft,
-    [switch]$SubmitForReview,
     [switch]$Json,
     [switch]$VerboseOutput,
     [switch]$Help,
@@ -68,10 +66,6 @@ if ($Version) {
     $versionResult = Invoke-NodeProcess -Arguments @((Join-Path $PSScriptRoot 'FabPortalAutomation\src\cli.mjs'), '--version')
     $versionResult.StandardOutput | Write-Output
     exit $versionResult.ExitCode
-}
-
-if ($SaveDraft -or $SubmitForReview) {
-    throw 'Fab Portal write automation is disabled. Use an interactive AI agent or the Fab Portal UI to make listing changes.'
 }
 
 if ([string]::IsNullOrWhiteSpace($ManifestPath)) {

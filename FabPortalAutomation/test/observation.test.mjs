@@ -6,7 +6,7 @@ import test from 'node:test';
 import { compareDescriptionLinks, compareObservation, compareTagsClassification, normalizeRichText } from '../src/comparison.mjs';
 import { validateDescriptionLinks } from '../src/description-links.mjs';
 import { loadFabPortalObservation } from '../src/observation.mjs';
-import { assertSubmitActivationDecision, portalFieldLifecycle } from '../src/lifecycle.mjs';
+import { portalFieldLifecycle } from '../src/lifecycle.mjs';
 import { makeManifest, makeManifestInfo } from './helpers.mjs';
 
 const manifest = makeManifest({
@@ -195,8 +195,6 @@ test('portal lifecycle keeps activation deferred and source-only metadata intact
   assert.equal(portalFieldLifecycle('activation'), 'SUBMIT_TIME');
   assert.equal(portalFieldLifecycle('shortDescription'), 'SOURCE_ONLY');
   assert.equal(portalFieldLifecycle('supportUrl'), 'DERIVED');
-  assert.equal(assertSubmitActivationDecision('Manual activation', 'Manual activation'), 'Manual activation');
-  assert.throws(() => assertSubmitActivationDecision(null), /explicit activation decision/);
 });
 
 test('description link comparison requires actual text and href pairs', () => {

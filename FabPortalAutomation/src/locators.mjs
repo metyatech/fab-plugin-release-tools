@@ -121,14 +121,6 @@ export function mediaCandidates({ fixture = false } = {}) {
   ];
 }
 
-export function saveCandidates() {
-  return [role('Save', 'button'), role('Save draft', 'button'), role('Save Draft', 'button')];
-}
-
-export function submitCandidates() {
-  return [role('Submit for review', 'button'), role('Submit for Review', 'button')];
-}
-
 export function listingEditUrl(listingId, origin = 'https://www.fab.com') {
   return `${origin.replace(/\/$/, '')}/portal/listings/${listingId}/edit`;
 }

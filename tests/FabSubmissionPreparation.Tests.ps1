@@ -118,3 +118,89 @@ Describe 'Fab submission preparation contracts' {
         [string]::Join(' ', $arguments) | Should -Match 'Automation RunTests Fab.Fixture.Capture'
     }
 }
+
+Describe 'Fab preparation expected source transitions' {
+    BeforeAll {
+        function Invoke-PreparationFixture {
+            param(
+                [string]$GitStatus,
+                [bool]$ReleaseReady = $false
+            )
+            [void]$GitStatus
+            [void]$ReleaseReady
+
+            $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+            [System.IO.Directory]::CreateDirectory($root) | Out-Null
+            . (Join-Path $PSScriptRoot '..\Invoke-FabSubmissionPreparation.ps1') `
+                -PluginPath $root -NoOpenMediaReview
+
+            Mock Invoke-FabPreparationGitStatus { $GitStatus }
+            Mock Import-FabProductConfiguration {
+                [pscustomobject]@{
+                    pluginName = 'FixturePlugin'
+                    engineVersions = @('5.8')
+                }
+            }
+            Mock Get-FabProductDescriptor {
+                [pscustomobject]@{ VersionName = '1.0.0' }
+            }
+            Mock Import-FabProductListing {
+                [pscustomobject]@{
+                    ProjectFileLinks = @('https://example.invalid/package.zip')
+                }
+            }
+            Mock Get-FabProductMediaApproval {
+                [pscustomobject]@{ Status = 'approved'; Valid = $true; ReviewId = 'fixture-review' }
+            }
+            Mock Invoke-FabProductReleaseCore {
+                [pscustomobject]@{
+                    Manifest = [pscustomobject]@{
+                        listingId = '42e5c3b5-36c3-4a91-ba59-8101812e62c3'
+                        portalReady = $ReleaseReady
+                    }
+                    BundlePath = 'fixture-bundle.zip'
+                }
+            }
+
+            $output = @(Invoke-FabSubmissionPreparationCommand)
+            return $output | Where-Object { $_ -is [System.Collections.IDictionary] } | Select-Object -Last 1
+        }
+    }
+
+    It 'allows only an untracked valid media approval as expected source state' {
+        $result = Invoke-PreparationFixture -GitStatus '?? FabMediaApproval.json'
+        $result.result | Should -BeExactly 'PENDING'
+        $result.state | Should -BeExactly 'SOURCE_COMMIT_REQUIRED'
+        $result.blocker | Should -BeExactly 'SOURCE_COMMIT_REQUIRED'
+        $result.nextAction | Should -BeExactly 'Commit and push FabMediaApproval.json, then retry.'
+    }
+
+    It 'allows only a modified valid media approval as expected source state' {
+        $result = Invoke-PreparationFixture -GitStatus ' M FabMediaApproval.json'
+        $result.result | Should -BeExactly 'PENDING'
+        $result.state | Should -BeExactly 'SOURCE_COMMIT_REQUIRED'
+        $result.blocker | Should -BeExactly 'SOURCE_COMMIT_REQUIRED'
+    }
+
+    It 'allows listing and media approval changes together as expected source state' {
+        $result = Invoke-PreparationFixture -GitStatus " M FabListingFields.json`n?? FabMediaApproval.json"
+        $result.result | Should -BeExactly 'PENDING'
+        $result.state | Should -BeExactly 'SOURCE_COMMIT_REQUIRED'
+        $result.blocker | Should -BeExactly 'SOURCE_COMMIT_REQUIRED'
+        $result.expectedDirtyFiles | Should -Contain 'FabListingFields.json'
+        $result.expectedDirtyFiles | Should -Contain 'FabMediaApproval.json'
+    }
+
+    It 'still blocks an unrelated dirty file' {
+        $result = Invoke-PreparationFixture -GitStatus "?? FabMediaApproval.json`n?? unrelated.txt"
+        $result.result | Should -BeExactly 'BLOCKED'
+        $result.state | Should -BeExactly 'BLOCKED'
+        $result.blocker | Should -BeExactly 'UNEXPECTED_WORKTREE_CHANGES'
+    }
+
+    It 'reaches Portal verification readiness after a clean valid source state' {
+        $result = Invoke-PreparationFixture -GitStatus '' -ReleaseReady $true
+        $result.result | Should -BeExactly 'PASS'
+        $result.state | Should -BeExactly 'PORTAL_VERIFY_READY'
+    }
+}

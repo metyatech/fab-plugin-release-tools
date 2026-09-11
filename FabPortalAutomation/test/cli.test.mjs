@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { help, main } from '../src/cli.mjs';
+import { help, main, parseArgs } from '../src/cli.mjs';
 
 const manifestInfo = {
   manifest: { pluginName: 'FixturePlugin', listingId: '11111111-1111-4111-8111-111111111111', title: 'Fixture Product', portalReady: true },
@@ -34,11 +34,10 @@ async function invoke(args) {
   return { code, received, loadOptions };
 }
 
-test('actual CLI main path denies write authorization by default', async () => {
+test('actual CLI main path uses the verify-only runner contract', async () => {
   const { code, received, loadOptions } = await invoke(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', '--json']);
   assert.equal(code, 0);
-  assert.equal(received.mode, 'verify');
-  assert.equal(received.saveDraftAuthorized, false);
+  assert.deepEqual(Object.keys(received).sort(), ['cdpEndpoint', 'manifestInfo', 'manualInteraction']);
   assert.deepEqual(loadOptions, { requirePortalReady: false });
   assert.equal(typeof received.manualInteraction.waitForConfirmation, 'function');
 });
@@ -74,14 +73,12 @@ test('CLI requires exactly one acquisition mode', async () => {
 test('CLI help exposes read-only verification without write usage', async () => {
   const { code } = await invoke(['--help']);
   assert.equal(code, 0);
+  assert.match(help(), /supports verify mode only/i);
   assert.doesNotMatch(help(), /-SaveDraft|-SubmitForReview|--save-draft|--submit-for-review/);
 });
 
-test('CLI rejects all write intents before loading or attaching to Fab', async () => {
-  for (const flags of [['--save-draft'], ['--submit-for-review'], ['--save-draft', '--submit-for-review']]) {
-    await assert.rejects(
-      () => invoke(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', ...flags, '--json']),
-      /Fab Portal write automation is disabled/,
-    );
+test('CLI rejects removed write flags as unknown options', async () => {
+  for (const flag of ['--save-draft', '--submit-for-review']) {
+    assert.throws(() => parseArgs(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', flag]), /Unknown option/);
   }
 });

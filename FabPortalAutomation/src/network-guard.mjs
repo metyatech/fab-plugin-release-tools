@@ -1,5 +1,3 @@
-import { FAB_WRITE_AUTOMATION_DISABLED } from './write-policy.mjs';
-
 const SECRET_QUERY_KEYS = /^(?:token|access_token|auth|authorization|signature|sig|key|api[_-]?key)$/i;
 
 function sanitizeUrl(url) {
@@ -46,19 +44,8 @@ function isMutation(method, graph, intent) {
     : graph?.type === 'mutation';
 }
 
-function phaseAllows(mode, phase, intent) {
-  if (mode === 'verify') return false;
-  if (intent === 'cancel' || intent === 'delete' || intent === 'unlist' || intent === 'publish') return false;
-  if (phase === 'media-upload') return (mode === 'save' || mode === 'submit') && intent === 'media-upload';
-  if (phase === 'field-update') return (mode === 'save' || mode === 'submit') && intent === 'save';
-  if (mode === 'save') return phase === 'save' && intent === 'save';
-  if (mode === 'submit') return (phase === 'save' && intent === 'save') || (phase === 'submit' && intent === 'submit');
-  return false;
-}
-
-export function installNetworkGuard(context, { mode = 'verify' } = {}) {
-  const effectiveMode = mode === 'write' ? 'save' : mode;
-  const state = { mode: effectiveMode, phase: 'stage', phaseHistory: ['stage'], requests: [], observed: 0, blocked: 0 };
+export function installNetworkGuard(context) {
+  const state = { mode: 'verify', phase: 'stage', phaseHistory: ['stage'], requests: [], observed: 0, blocked: 0 };
   const handler = async (route) => {
     const request = route.request();
     const method = request.method().toUpperCase();
@@ -67,7 +54,7 @@ export function installNetworkGuard(context, { mode = 'verify' } = {}) {
     const intent = classifyRequestIntent(url, method, graph);
     const fabRequest = url.hostname === 'www.fab.com' || url.hostname.endsWith('.fab.com') || url.hostname === '127.0.0.1' || url.hostname === 'localhost';
     const mutation = isMutation(method, graph, intent);
-    const block = mutation && (!fabRequest || FAB_WRITE_AUTOMATION_DISABLED || !phaseAllows(effectiveMode, state.phase, intent));
+    const block = mutation;
     if (fabRequest && mutation) state.observed += 1;
     if (fabRequest && state.requests.length < 1000) {
       state.requests.push({
@@ -91,10 +78,6 @@ export function installNetworkGuard(context, { mode = 'verify' } = {}) {
   };
   context.route('**/*', handler);
   return {
-    setPhase(phase) {
-      state.phase = phase;
-      if (state.phaseHistory[state.phaseHistory.length - 1] !== phase) state.phaseHistory.push(phase);
-    },
     summary() {
       return {
         mode: state.mode,

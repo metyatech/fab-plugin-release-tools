@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { chromium } from 'playwright-core';
-import { buildMutationPlan, executeMutationPlan, preflightMutationPlan } from '../src/mutation-plan.mjs';
 import { installNetworkGuard } from '../src/network-guard.mjs';
 import { compareManifest, comparePlatformClassification, comparePriceClassification } from '../src/comparison.mjs';
 import { detectManualBlock, mergeListingAndFormatComparisons, runPortalAutomation, selectExistingTargetPage } from '../src/portal.mjs';
@@ -21,14 +20,14 @@ test.after(async () => {
   await browser.close();
 });
 
-async function scenario({ manifest = makeManifest(), state = {}, fixtureOptions = {}, mode = 'verify', saveDraftAuthorized = false, mediaFiles = [], manualInteraction = null } = {}) {
+async function scenario({ manifest = makeManifest(), state = {}, fixtureOptions = {}, mediaFiles = [], manualInteraction = null } = {}) {
   const fixture = await startFixture(fixtureState(manifest, state), fixtureOptions);
   const context = await browser.newContext();
   const page = await context.newPage();
   const info = await makeManifestInfo(manifest, { mediaFiles });
   try {
     await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
-    const result = await runPortalAutomation({ manifestInfo: info, mode, saveDraftAuthorized, origin: fixture.origin, page, context, manualInteraction });
+    const result = await runPortalAutomation({ manifestInfo: info, origin: fixture.origin, page, context, manualInteraction });
     return { result, fixture };
   } finally {
     await context.close();
@@ -36,13 +35,13 @@ async function scenario({ manifest = makeManifest(), state = {}, fixtureOptions 
   }
 }
 
-async function attachedRunSetup({ manifest = makeManifest(), state = {}, mode = 'verify', saveDraftAuthorized = false, manualInteraction = null, query = '' } = {}) {
+async function attachedRunSetup({ manifest = makeManifest(), state = {}, manualInteraction = null, query = '' } = {}) {
   const fixture = await startFixture(fixtureState(manifest, state));
   const context = await browser.newContext();
   const page = await context.newPage();
   const info = await makeManifestInfo(manifest);
   await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit${query}`);
-  return { fixture, context, page, info, mode, saveDraftAuthorized, manualInteraction };
+  return { fixture, context, page, info, manualInteraction };
 }
 
 test('verify-only performs zero writes', async () => {
@@ -72,14 +71,9 @@ test('portal collector compares persisted Description anchors separately from vi
   assert.equal(wrongHref.result.comparison.fields.find((field) => field.manifestJsonPath === 'descriptionLinks').classification, 'MISMATCH');
 });
 
-test('portal write modes fail closed before browser attachment', async () => {
+test('portal automation accepts verify mode only before browser attachment', async () => {
   const info = await makeManifestInfo(makeManifest());
-  for (const mode of ['save', 'submit']) {
-    await assert.rejects(
-      () => runPortalAutomation({ manifestInfo: info, mode, saveDraftAuthorized: true }),
-      /Fab Portal write automation is disabled/,
-    );
-  }
+  await assert.rejects(() => runPortalAutomation({ manifestInfo: info, mode: 'save' }), /verify mode only/);
 });
 
 test('verify-only compares portal-unready manifests without writing', async () => {
@@ -91,7 +85,7 @@ test('verify-only compares portal-unready manifests without writing', async () =
   const field = result.comparison.fields.find((item) => item.manifestJsonPath === 'packages[0].projectFileLink');
   assert.equal(result.result, 'PASS');
   assert.equal(result.writeReady, false);
-  assert.match(result.writeBlockers.join(' '), /Submission manifest portalReady is false/);
+  assert.deepEqual(result.writeBlockers, []);
   assert.equal(result.writeInteractionsPerformed, 0);
   assert.equal(result.saveInvoked, false);
   assert.equal(result.submitInvoked, false);
@@ -448,7 +442,7 @@ test('format view without singular back uses the observed listing summary contro
   try {
     await setup.page.getByRole('button', { name: 'Unreal Engine', exact: true }).click();
     assert.equal(await classifyFabView(setup.page), FAB_VIEW.FORMAT_VIEW);
-    const result = await runPortalAutomation({ manifestInfo: setup.info, mode: setup.mode, saveDraftAuthorized: setup.saveDraftAuthorized, origin: setup.fixture.origin, page: setup.page, context: setup.context, manualInteraction: setup.manualInteraction });
+    const result = await runPortalAutomation({ manifestInfo: setup.info, origin: setup.fixture.origin, page: setup.page, context: setup.context, manualInteraction: setup.manualInteraction });
     assert.equal(result.result, 'PASS');
     assert.equal(result.hardNavigationCount, 0);
     assert.equal(result.writeInteractionsPerformed, 0);
@@ -487,79 +481,14 @@ test('fixture format technical details recover documentation and support values'
 
 
 
-test('listing locator cannot be preflighted while format view is active', async () => {
-  const manifest = makeManifest();
-  const fixture = await startFixture(fixtureState(manifest));
-  const context = await browser.newContext();
-  const page = await context.newPage();
-  await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
-  await page.getByRole('button', { name: 'Unreal Engine', exact: true }).click();
-  const preflight = await preflightMutationPlan(page, [{ fieldName: 'shortDescription', view: 'listing', locator: { strategy: 'getByLabel', name: 'Short description *', exact: true }, locatorStrategy: 'getByLabel', locatorExpression: 'page.getByLabel("Short description *")', mutationType: 'text' }], manifest);
-  assert.equal(preflight.ok, false);
-  assert.match(preflight.failures.join(' '), /not visible|match count/i);
-  await context.close();
-  await fixture.close();
-});
-
-
-test('preflight never falls back from the comparison-approved locator', async () => {
+test('verify comparison never executes a field mismatch as a write', async () => {
   const manifest = makeManifest({ title: 'Changed title' });
-  const fixture = await startFixture(fixtureState(manifest, { title: 'Old title' }));
-  const context = await browser.newContext();
-  const page = await context.newPage();
-  const info = await makeManifestInfo(manifest);
-  try {
-    await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
-    const comparison = await compareManifest(page, info, { view: 'listing' });
-    const mutation = buildMutationPlan(comparison, info);
-    assert.equal(mutation.plan[0].locator.strategy, 'getByLabel');
-    await page.evaluate(() => {
-      document.querySelector('[aria-label="Title *"]').closest('label').remove();
-      const fallback = document.createElement('input');
-      fallback.setAttribute('aria-label', 'Title');
-      fallback.value = 'Fallback control';
-      document.body.append(fallback);
-    });
-    const preflight = await preflightMutationPlan(page, mutation.plan, manifest);
-    assert.equal(preflight.ok, false);
-    assert.match(preflight.failures.join(' '), /approved|target|match count/i);
-    assert.deepEqual(preflight.targets, []);
-    assert.equal(fixture.mutations.length, 0);
-  } finally {
-    await context.close();
-    await fixture.close();
-  }
-});
-
-
-test('duplicate mutation targets are rejected before execution', () => {
-  const manifest = makeManifest();
-  const comparison = { fields: [
-    { manifestJsonPath: 'title', classification: 'MISMATCH', currentNormalizedValue: 'a', writeTarget: { strategy: 'getByLabel', expression: 'same' } },
-    { manifestJsonPath: 'shortDescription', classification: 'MISMATCH', currentNormalizedValue: 'a', writeTarget: { strategy: 'getByLabel', expression: 'same' } },
-  ] };
-  const plan = buildMutationPlan(comparison, { manifest });
-  assert.match(plan.blockers.join(' '), /duplicate/i);
-  assert.equal(plan.plan.length, 2);
-});
-
-test('direct mutation plan execution fails before touching the DOM', async () => {
-  let domOperations = 0;
-  const page = new Proxy({}, {
-    get() {
-      domOperations += 1;
-      throw new Error('DOM operation should not be reached');
-    },
-  });
-  const manifest = makeManifest();
-  const preflight = {
-    targets: [{ item: { fieldName: 'title', view: 'listing', locator: { strategy: 'getByLabel', name: 'Title', exact: true }, mutationType: 'text' } }],
-  };
-  await assert.rejects(
-    () => executeMutationPlan(page, preflight, { manifest, mediaFiles: [] }),
-    /Fab Portal write automation is disabled/,
-  );
-  assert.equal(domOperations, 0);
+  const { result, fixture } = await scenario({ manifest, state: { title: 'Old title' } });
+  assert.equal(result.result, 'FAIL');
+  assert.equal(result.writeInteractionsPerformed, 0);
+  assert.equal(result.plannedMutations.length, 0);
+  assert.equal(result.executedMutations.length, 0);
+  assert.equal(fixture.mutations.length, 0);
 });
 
 
@@ -580,7 +509,7 @@ test('unexpected DELETE is blocked by the network guard', async () => {
   const context = await browser.newContext();
   const page = await context.newPage();
   await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
-  const guard = installNetworkGuard(context, { mode: 'verify' });
+  const guard = installNetworkGuard(context);
   await page.evaluate(() => fetch('/api/delete', { method: 'DELETE' }).catch(() => undefined));
   const summary = guard.summary();
   await guard.dispose();
@@ -595,8 +524,8 @@ test('verify-only mutation request is blocked', async () => {
   const context = await browser.newContext();
   const page = await context.newPage();
   await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
-  const guard = installNetworkGuard(context, { mode: 'verify' });
-  await page.evaluate(() => fetch('/api/save', { method: 'POST', body: '{}' }).catch(() => undefined));
+  const guard = installNetworkGuard(context);
+  await page.evaluate(() => fetch('/api/listing', { method: 'POST', body: '{}' }).catch(() => undefined));
   const summary = guard.summary();
   await guard.dispose();
   await context.close();
@@ -610,10 +539,10 @@ test('GraphQL query is allowed while GraphQL mutation is blocked in verify mode'
   const context = await browser.newContext();
   const page = await context.newPage();
   await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
-  const guard = installNetworkGuard(context, { mode: 'verify' });
+  const guard = installNetworkGuard(context);
   await page.evaluate(async () => {
     await fetch('/graphql', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: 'query Listing { listing { id } }', operationName: 'Listing' }) });
-    await fetch('/graphql', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: 'mutation SaveDraft { saveDraft { id } }', operationName: 'SaveDraft' }) }).catch(() => undefined);
+    await fetch('/graphql', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: 'mutation UpdateListing { updateListing { id } }', operationName: 'UpdateListing' }) }).catch(() => undefined);
   });
   const summary = guard.summary();
   await guard.dispose();
@@ -625,15 +554,15 @@ test('GraphQL query is allowed while GraphQL mutation is blocked in verify mode'
   assert.equal(summary.requests.find((item) => item.graphqlOperation?.type === 'query')?.blocked, false);
 });
 
-test('network guard blocks every Fab write in every phase', async () => {
+test('read-only network guard blocks every Fab mutation', async () => {
   const fixture = await startFixture(fixtureState(makeManifest()));
   const context = await browser.newContext();
   const page = await context.newPage();
   await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
-  const guard = installNetworkGuard(context, { mode: 'submit' });
+  const guard = installNetworkGuard(context);
   for (const request of [
-    ['/api/save', 'POST'],
-    ['/api/submit', 'POST'],
+    ['/api/listing', 'POST'],
+    ['/api/review', 'POST'],
     ['/api/unknown', 'PATCH'],
   ]) {
     await page.evaluate(([url, method]) => fetch(url, { method, body: '{}' }).catch(() => undefined), request);
@@ -649,13 +578,12 @@ test('network guard blocks every Fab write in every phase', async () => {
 
 
 
-test('Cancel and Delete GraphQL mutations are always blocked', async () => {
+test('dangerous GraphQL mutations are blocked', async () => {
   const fixture = await startFixture(fixtureState(makeManifest()));
   const context = await browser.newContext();
   const page = await context.newPage();
   await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
-  const guard = installNetworkGuard(context, { mode: 'submit' });
-  guard.setPhase('submit');
+  const guard = installNetworkGuard(context);
   for (const operationName of ['CancelSubmission', 'DeleteProduct']) {
     await page.evaluate((name) => fetch('/graphql', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: `mutation ${name} { action { id } }`, operationName: name }) }).catch(() => undefined), operationName);
   }
@@ -737,19 +665,11 @@ test('manual-block detection blocks visible challenge evidence', async () => {
   await context.close();
 });
 
-test('verify PASS reports unresolved write readiness separately', async () => {
+test('verify results retain explicit legacy write diagnostics', async () => {
   const ready = await scenario();
   assert.equal(ready.result.result, 'PASS');
-  assert.equal(ready.result.writeReady, true);
+  assert.equal(ready.result.writeReady, false);
   assert.deepEqual(ready.result.writeBlockers, []);
-  const locked = await scenario({ state: { status: 'Pending approval' } });
-  assert.equal(locked.result.result, 'PASS');
-  assert.equal(locked.result.writeReady, false);
-  assert.match(locked.result.writeBlockers.join(' '), /review-locked/);
-  const unresolved = await scenario({ state: { mediaExisting: 'existing' } });
-  assert.equal(unresolved.result.result, 'PASS');
-  assert.equal(unresolved.result.writeReady, false);
-  assert.match(unresolved.result.writeBlockers.join(' '), /media/);
 });
 
 test('read-only section expansion is recorded without mutation', async () => {

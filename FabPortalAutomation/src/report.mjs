@@ -31,10 +31,7 @@ function markdown(result, comparison, after, network) {
 - Portal mismatch count: ${result.portalMismatchCount ?? comparison?.mismatchCount ?? 0}
 - Portal unresolved count: ${result.portalUnresolvedCount ?? comparison?.unresolvedCritical?.length ?? 0}
 - Portal verification complete: ${result.portalVerificationComplete ?? false}
-- Save invoked: ${result.saveInvoked}
-- Submit invoked: ${result.submitInvoked}
-- Submit accepted: ${result.submitAccepted}
-- Post-submit status: ${result.postSubmitStatus ?? 'null'}
+- Legacy write diagnostics: interactions=${result.writeInteractionsPerformed}; saveInvoked=${result.saveInvoked}; submitInvoked=${result.submitInvoked}; submitAccepted=${result.submitAccepted}; postSubmitStatus=${result.postSubmitStatus ?? 'null'}
 - Write ready: ${result.writeReady}
 - Write interactions: ${result.writeInteractionsPerformed}
 - Passive attach: ${result.passiveAttach}
@@ -59,10 +56,6 @@ ${Object.entries(counts).map(([key, value]) => `- ${key}: ${value}`).join('\n') 
 ## Comparison after
 
 ${afterCounts ? Object.entries(afterCounts).map(([key, value]) => `- ${key}: ${value}`).join('\n') : '- not applicable'}
-
-## Planned mutations
-
-${result.plannedMutations.length ? result.plannedMutations.map((item) => `- ${item.fieldName}: ${item.mutationType}`).join('\n') : '- none'}
 
 ## Blockers
 
@@ -119,7 +112,6 @@ export async function writeRunReport({ directory, result, comparison, comparison
     generatedAtUtc: new Date().toISOString(),
   });
   await writeJson(directory, 'comparison-before.json', comparison ?? { fields: [], counts: {} });
-  await writeJson(directory, 'mutation-plan.json', result.plannedMutations);
   if (comparisonAfter) await writeJson(directory, 'comparison-after.json', comparisonAfter);
   await writeJson(directory, 'network-summary.json', network ?? { networkMutationRequestsObserved: 0, networkMutationRequestsBlocked: 0, requests: [] });
   await writeFile(path.join(directory, 'RunReport.md'), markdown(result, comparison, comparisonAfter, network), 'utf8');

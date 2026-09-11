@@ -207,6 +207,14 @@ Approval is hash-bound to the current media path, order, role, dimensions,
 size, and bytes; a one-byte change makes it stale. This tool must not create
 `FabMediaApproval.json` or call the approval command on a user's behalf.
 
+`FabMediaApproval.json` is a source-controlled preparation artifact. After
+human approval creates or updates it, rerun preparation. If the only dirty
+files are `FabMediaApproval.json` and/or `FabListingFields.json`, preparation
+returns `SOURCE_COMMIT_REQUIRED`; commit and push those expected source
+changes, then retry. Any unrelated dirty file still returns
+`UNEXPECTED_WORKTREE_CHANGES`, and preparation never commits or pushes
+automatically.
+
 The guarded state-machine entry point is:
 
 ```powershell
@@ -412,19 +420,54 @@ formats only staged PowerShell files and restages them before a commit.
 
 ## Fab Portal automation
 
-`FabPortalSubmission.json` is the sole production input to the guarded portal
-verification. Install its pinned Node dependency with `npm ci` from
-`FabPortalAutomation`, then choose exactly one read-only acquisition mode:
+`FabPortalSubmission.json` is the sole production input to the verify-only
+Portal checker. Install its pinned Node dependency with `npm ci` from
+`FabPortalAutomation`. The checker supports exactly two read-only transports:
+`observation` and `cdp`.
 
-```powershell
-pwsh .\Invoke-FabPortalSubmission.ps1 `
-  -ManifestPath <FabPortalSubmission.json> `
-  -CdpEndpoint <http://127.0.0.1:port>
+For interactive AI-agent workflows, use this order:
+
+1. Agent's authenticated built-in browser
+2. Fab autosave
+3. Reload the listing and confirm persistence
+4. Structured `FabPortalObservation.json`
+5. `Invoke-FabPortalSubmission.ps1 -ObservationPath ...`
+
+Fab Draft editing uses autosave. There is no separate Save Draft step in the
+supported workflow. After an interactive agent edits a field:
+
+1. wait for Fab autosave completion,
+2. reload,
+3. confirm persistence,
+4. create a structured observation,
+5. run read-only verification.
+
+The shared tool never writes Portal fields. The external interactive agent or
+human handles proven mismatch edits and the final Submit for review flow,
+including Manual activation selection.
+
+```mermaid
+sequenceDiagram
+    participant Prep as Submission Preparation
+    participant Agent as Interactive AI Agent
+    participant Fab as Fab Portal
+    participant Verify as Read-only Verifier
+
+    Prep->>Agent: PORTAL_VERIFY_READY + manifest
+    Agent->>Fab: Open existing listing in built-in browser
+    Agent->>Fab: Edit proven mismatches only
+    Fab-->>Fab: Autosave each field change
+    Agent->>Fab: Reload listing
+    Agent->>Agent: Confirm persisted values
+    Agent->>Verify: Structured observation + manifest
+    Verify-->>Agent: MATCH=all, MISMATCH=0
+    Agent->>Fab: Submit for review interactively
+    Agent->>Fab: Select Manual activation
 ```
 
-When an authenticated interactive browser is available but a CDP browser is
-not, that browser may record a structured, non-secret observation. The same
-central comparison then runs without a browser connection:
+When an authenticated interactive browser is available, it may record a
+structured, non-secret observation. The same central comparison then runs
+without a browser connection:
 
 ```powershell
 pwsh .\Invoke-FabPortalSubmission.ps1 `
@@ -432,63 +475,84 @@ pwsh .\Invoke-FabPortalSubmission.ps1 `
   -ObservationPath <FabPortalObservation.json>
 ```
 
-Observation mode does not navigate or modify Fab. It records only values
-actually exposed by the browser and is not cryptographic proof of Portal
-source bytes. CDP remains supported for environments where its authenticated
-connection works. No mode bypasses Cloudflare or handles credentials, MFA, or
-browser storage.
+CDP is optional for environments where an authenticated CDP session already
+works:
+
+```powershell
+pwsh .\Invoke-FabPortalSubmission.ps1 `
+  -ManifestPath <FabPortalSubmission.json> `
+  -CdpEndpoint <http://127.0.0.1:port>
+```
+
+Observation mode performs no browser actions. CDP verification attaches only
+to the one already-open exact listing page, performs read-only navigation and
+comparison, and blocks network mutations. No tool may bypass
+Cloudflare/CAPTCHA/MFA. If the agent's own interactive authenticated browser
+can legitimately pass the normal site challenge, continue there and verify
+via Observation mode. Do not launch or attach a separate CDP Chrome merely to
+perform Portal writes. Credentials, MFA, and browser storage are never handled
+by this tool.
+
+If a visible Cloudflare/security challenge appears during CDP verification,
+browser operations stop for manual handoff. Complete the challenge in the
+already-authenticated browser, then press Enter here to resume; `q` followed
+by Enter cancels the run. A bounded number of handoff cycles is allowed.
+
+The CLI and PowerShell wrapper expose verify mode only. Legacy result fields
+`writeInteractionsPerformed`, `saveInvoked`, `submitInvoked`,
+`submitAccepted`, and `postSubmitStatus` are retained solely for artifact
+compatibility and are always `0`, `false`, `false`, `false`, and `null` in a
+read-only result. They do not indicate write capability. `writeReady` and
+`writeBlockers` are likewise diagnostics only. A verify `PASS` means no proven
+mismatch was observed; it is not Portal submission approval.
 
 Draft verification follows the Fab field lifecycle. `activation` is a
 Submit-for-review decision and is therefore `NOT_APPLICABLE` while a listing
-is Draft. `shortDescription` is retained as source metadata when Fab does not
-expose a distinct Draft field. `supportUrl` is source metadata whose exact
-destination must be present in the buyer-visible Draft Description; it is not
-assumed to be a standalone Portal field. Listing preparation validates this
-support URL invariant before producing a portal-ready manifest. Tag
-observations must be complete;
+is Draft. `shortDescription` is source metadata when Fab does not expose a
+distinct Draft field. `supportUrl` is source metadata whose exact destination
+must be present in the buyer-visible Draft Description; it is not assumed to
+be a standalone Portal field. Tag observations must be complete;
 Fab-generated extra tags are allowed, but every manifest tag must be visible.
 
 Description verification preserves meaningful paragraph, heading, and list-line
 structure. It normalizes line endings, horizontal spacing, and excessive blank
-lines without flattening the Description into one line, so readable multiline
-content does not compare equal to flattened Portal content.
-
-Description source text keeps visible URLs as plain text. Configured hyperlink
-semantics are carried separately as `descriptionLinks`; the interactive Fab
-editor's normal link-insertion UI creates the anchors, and the verifier checks
-the persisted visible text and exact HTTPS `href`. Literal Markdown such as
-`[text](https://example.com)` is not treated as a hyperlink.
-
-For authenticated portals where a CDP browser is blocked by Cloudflare, an
-interactive browser can collect the structured observation and the same
-central verifier can compare it offline. This is a transport option, not a
-Cloudflare bypass or cryptographic proof of Portal state.
-
-Fab Portal automation is read-only. It verifies the currently open listing but
-does not modify listings. `-SaveDraft` and `-SubmitForReview` are rejected before
-manifest loading or browser attachment. Use an interactive AI agent or the Fab
-Portal UI for listing changes. The automation never handles Cloudflare, credentials,
-MFA, or browser storage. If a visible Cloudflare/security challenge appears,
-the automation enters a manual handoff: browser operations stop, you complete
-the challenge in the dedicated Chrome, then press Enter here to resume. Use
-`q` followed by Enter to cancel the run. A bounded number of handoff cycles is
-allowed. Verify requires exactly one already-open target listing page; the
-automation does not create a tab or navigate to repair the initial target before
-the handoff.
-
-A verify-only `PASS` reports that observation completed without a proven
-mismatch; it does not imply write readiness. The run report records
-`writeReady` and `writeBlockers` as diagnostics only. This tool does not save,
-submit, publish, cancel, delete, unlist, create formats, edit fields, or upload
-media.
+lines without flattening the Description into one line. Description source
+text keeps visible URLs as plain text; configured hyperlink semantics are
+carried separately as `descriptionLinks`, and verification checks persisted
+visible text and exact HTTPS `href` values. Literal Markdown is not treated as
+a hyperlink.
 
 Staging manifests with `portalReady: false` and unresolved package
-`projectFileLink: null` values are valid for read-only verification. They are
-never written to Fab.
+`projectFileLink: null` values are valid for read-only verification. An empty
+`subcategory` is legitimately `NOT_APPLICABLE` when Fab exposes no distinct
+subcategory. Portal observations verify only visible media count, roles, and
+order; local media approval and source-byte hashes remain separate.
 
-An empty `subcategory` is legitimately `NOT_APPLICABLE` when Fab exposes no
-distinct subcategory. Portal observations verify only visible media count,
-roles, and order; local media approval and source-byte hashes remain separate.
+The preparation-to-verification state transition is:
+
+```mermaid
+stateDiagram-v2
+    [*] --> SourceValidation
+
+    SourceValidation --> MediaApprovalRequired: no valid approval
+    MediaApprovalRequired --> SourceCommitRequired: human approval writes FabMediaApproval.json
+
+    SourceValidation --> SourceCommitRequired: expected listing/approval source changes dirty
+    SourceValidation --> Blocked: unrelated worktree changes
+
+    SourceCommitRequired --> SourceValidation: user commits + pushes
+
+    SourceValidation --> PortalVerifyReady: clean + pushed + links + listingId + approval valid
+
+    PortalVerifyReady --> InteractiveEdit: external agent detects proven mismatches
+    InteractiveEdit --> Autosave
+    Autosave --> ReloadPersistenceCheck
+    ReloadPersistenceCheck --> ObservationVerify
+    ObservationVerify --> InteractiveEdit: mismatch exists
+    ObservationVerify --> SubmitReady: mismatch = 0
+
+    SubmitReady --> [*]: external interactive agent handles Submit for review
+```
 
 ## Migration note
 

@@ -5,6 +5,18 @@ Keep a Changelog and the project uses Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.7.9] - 2026-09-11
+
+- Removed obsolete Fab Portal Save Draft and write-automation paths; Portal
+  automation is now verify-only end to end.
+- Documented Fab Draft autosave and made interactive-browser structured
+  observation the recommended AI-agent verification workflow.
+- Treat `FabMediaApproval.json` as an expected source change and return
+  `SOURCE_COMMIT_REQUIRED` instead of `UNEXPECTED_WORKTREE_CHANGES` after
+  explicit media approval.
+- Synchronized PowerShell and Node CLI tool versions and added a regression
+  test preventing future version drift.
+
 ## [0.7.8] - 2026-09-11
 
 - Fail listing preparation early when `support_url` is not represented in the

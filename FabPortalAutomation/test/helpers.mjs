@@ -71,18 +71,10 @@ export function fixtureState(manifest, overrides = {}) {
     projectFileLink: manifest.packages[0].projectFileLink,
     mediaExisting: 'known',
     mediaOrder: manifest.media.map((item) => `${item.order}:${item.role}`).join(','),
-    disableSave: false,
-    submitFlow: 'direct',
-    submitConfirmationButtons: ['Confirm'],
-    submitRequestPath: '/api/submit',
-    submitRequestFailure: false,
-    submitStaysDraft: false,
     statusRendering: 'testid',
-    preExistingDialog: false,
     challengeVisible: false,
     challengeAfterFirstMutation: false,
     challengeOnReadOnlyExpansion: false,
-    challengeAfterSave: false,
     ...overrides,
   };
 }

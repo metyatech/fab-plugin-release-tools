@@ -6,9 +6,8 @@ import { createStdinManualInteraction } from './manual-handoff.mjs';
 import { loadFabPortalObservation } from './observation.mjs';
 import { runPortalAutomation } from './portal.mjs';
 import { createRunDirectory, writeRunReport } from './report.mjs';
-import { FAB_WRITE_AUTOMATION_DISABLED_MESSAGE } from './write-policy.mjs';
 
-const VERSION = '0.7.3';
+const VERSION = '0.7.9';
 
 function help() {
   return `Fab Publisher Portal automation
@@ -16,10 +15,13 @@ function help() {
 Usage:
   pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> (-CdpEndpoint <endpoint> | -ObservationPath <FabPortalObservation.json>)
 
-Fab Portal automation is read-only verification. Listing changes must be made
-by an interactive AI agent or the Fab Portal UI. If a visible Cloudflare
-challenge is detected, automation pauses without browser operations until you
-complete it manually and press Enter; q + Enter cancels the run.
+Fab Portal automation supports verify mode only. Listing changes must be made
+by an interactive AI agent or the Fab Portal UI. For interactive workflows,
+use the agent's authenticated built-in browser, let Fab autosave each field,
+reload to confirm persistence, create a structured observation, and verify it.
+If a visible Cloudflare challenge is detected, automation pauses without
+browser operations until you complete it manually and press Enter; q + Enter
+cancels the run.
 
 Acquisition modes (choose exactly one):
   --cdp-endpoint <url>    Existing dedicated Chrome CDP endpoint
@@ -42,13 +44,11 @@ cryptographic proof of Portal source bytes.
 }
 
 function parseArgs(argv) {
-  const result = { output: null, saveDraft: false, submitForReview: false, json: false, verbose: false };
+  const result = { output: null, json: false, verbose: false };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--help' || arg === '-h') result.help = true;
     else if (arg === '--version' || arg === '-V') result.version = true;
-    else if (arg === '--save-draft') result.saveDraft = true;
-    else if (arg === '--submit-for-review') result.submitForReview = true;
     else if (arg === '--json') result.json = true;
     else if (arg === '--verbose') result.verbose = true;
     else if (['--manifest', '--cdp-endpoint', '--observation', '--output'].includes(arg)) {
@@ -57,7 +57,6 @@ function parseArgs(argv) {
       result[arg.slice(2).replaceAll('-', '')] = value;
     } else throw new Error(`Unknown option: ${arg}. Use --help.`);
   }
-  if (result.saveDraft || result.submitForReview) throw new Error(FAB_WRITE_AUTOMATION_DISABLED_MESSAGE);
   const hasCdp = Boolean(result.cdpendpoint);
   const hasObservation = Boolean(result.observation);
   if (!result.help && !result.version) {
@@ -148,15 +147,14 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
   const loadObservation = dependencies.loadObservation ?? loadFabPortalObservation;
   const compareObservationValue = dependencies.compareObservation ?? compareObservation;
   const manualInteraction = args.observation ? null : dependencies.manualInteraction ?? createStdinManualInteraction();
-  const mode = args.submitForReview ? 'submit' : args.saveDraft ? 'save' : 'verify';
-  const manifestInfo = await loadManifest(args.manifest, { requirePortalReady: mode !== 'verify' });
+  const manifestInfo = await loadManifest(args.manifest, { requirePortalReady: false });
   const artifactDirectory = await createDirectory(args.output ?? path.resolve('artifacts'), manifestInfo.manifest.pluginName);
   let result;
   if (args.observation) {
     const observationInfo = await loadObservation(args.observation, manifestInfo);
     result = observationResult(manifestInfo, observationInfo, compareObservationValue(manifestInfo, observationInfo.observation));
   } else {
-    result = await run({ manifestInfo, cdpEndpoint: args.cdpendpoint, mode, saveDraftAuthorized: args.saveDraft, outputDirectory: artifactDirectory, manualInteraction });
+    result = await run({ manifestInfo, cdpEndpoint: args.cdpendpoint, manualInteraction });
   }
   result.artifactDirectory = artifactDirectory;
   await writeReportFile({ directory: artifactDirectory, result, comparison: result.comparison, comparisonAfter: result.comparisonAfter, network: result.network, page: result.page });

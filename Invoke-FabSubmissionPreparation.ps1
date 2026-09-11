@@ -62,6 +62,24 @@ function Invoke-FabPreparationGitStatus {
     finally { $process.Dispose() }
 }
 
+function Get-FabPreparationWorktreeChange {
+    param([string]$Status)
+
+    return @($Status -split "`r?`n" | Where-Object {
+            -not [string]::IsNullOrWhiteSpace($_)
+        } | ForEach-Object {
+            if ($_.Length -lt 3 -or $_ -notmatch '^..\s') {
+                [pscustomobject]@{ Path = $null; Status = $_ }
+            }
+            else {
+                [pscustomobject]@{
+                    Path   = $_.Substring(3).Trim()
+                    Status = $_.Substring(0, 2)
+                }
+            }
+        })
+}
+
 function Get-FabPreparationReportPath {
     param([string]$Base, [string]$PluginName)
 
@@ -112,10 +130,10 @@ function Invoke-FabSubmissionPreparationCommand {
     $reportPath = Get-FabPreparationReportPath -Base $OutputDirectory `
         -PluginName ([string]$configuration.pluginName)
     $status = Invoke-FabPreparationGitStatus -Root $root
-    $unexpected = @($status -split "`r?`n" | Where-Object {
-            -not [string]::IsNullOrWhiteSpace($_) -and
-            $_ -notmatch '^\s*M\s+FabListingFields\.json$' -and
-            $_ -notmatch '^\s*\?\?\s+FabListingFields\.json$'
+    $worktreeChanges = @(Get-FabPreparationWorktreeChange -Status $status)
+    $expectedPaths = @('FabListingFields.json', 'FabMediaApproval.json')
+    $unexpected = @($worktreeChanges | Where-Object {
+            [string]::IsNullOrWhiteSpace($_.Path) -or $_.Path -notin $expectedPaths
         })
     if ($unexpected.Count -gt 0) {
         return Write-FabPreparationResult -ReportPath $reportPath -Result ([ordered]@{
@@ -140,6 +158,28 @@ function Invoke-FabSubmissionPreparationCommand {
                 reportPath = $reportPath
             })
     }
+    $expectedDirtyPaths = @($worktreeChanges | Where-Object Path -in $expectedPaths |
+        Select-Object -ExpandProperty Path -Unique)
+    if ($expectedDirtyPaths.Count -gt 0) {
+        $dirtyList = [string]::Join(', ', $expectedDirtyPaths)
+        $nextAction = if ($expectedDirtyPaths.Count -eq 1 -and
+            $expectedDirtyPaths[0] -eq 'FabMediaApproval.json') {
+            'Commit and push FabMediaApproval.json, then retry.'
+        }
+        elseif ($expectedDirtyPaths.Count -eq 2) {
+            'Commit and push the expected Fab listing/media approval source changes, then retry.'
+        }
+        else {
+            "Commit and push the expected Fab source changes ($dirtyList), then retry."
+        }
+        return Write-FabPreparationResult -ReportPath $reportPath -Result ([ordered]@{
+                schemaVersion = 1; result = 'PENDING'; state = 'SOURCE_COMMIT_REQUIRED';
+                pluginName = [string]$configuration.pluginName; productVersion = [string]$descriptor.VersionName;
+                mediaApproval = 'APPROVED'; projectFileLinksVerified = $false; listingIdPresent = $false; portalReady = $false;
+                blocker = 'SOURCE_COMMIT_REQUIRED'; nextAction = $nextAction; expectedDirtyFiles = $expectedDirtyPaths;
+                reportPath = $reportPath
+            })
+    }
     $linksPresent = $listing.ProjectFileLinks.Count -eq @($configuration.engineVersions).Count
     if (-not $linksPresent) {
         $publishingProperty = $configuration.PSObject.Properties['projectFilePublishing']
@@ -152,15 +192,6 @@ function Invoke-FabSubmissionPreparationCommand {
                 pluginName = [string]$configuration.pluginName; productVersion = [string]$descriptor.VersionName;
                 mediaApproval = 'APPROVED'; projectFileLinksVerified = $false; listingIdPresent = $false; portalReady = $false;
                 blocker = 'SOURCE_COMMIT_REQUIRED'; nextAction = 'Review and commit/push the project file links, then retry.';
-                reportPath = $reportPath
-            })
-    }
-    if (-not [string]::IsNullOrWhiteSpace($status)) {
-        return Write-FabPreparationResult -ReportPath $reportPath -Result ([ordered]@{
-                schemaVersion = 1; result = 'PENDING'; state = 'SOURCE_COMMIT_REQUIRED';
-                pluginName = [string]$configuration.pluginName; productVersion = [string]$descriptor.VersionName;
-                mediaApproval = 'APPROVED'; projectFileLinksVerified = $true; listingIdPresent = $false; portalReady = $false;
-                blocker = 'SOURCE_COMMIT_REQUIRED'; nextAction = 'Commit and push the expected listing change, then retry.';
                 reportPath = $reportPath
             })
     }

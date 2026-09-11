@@ -30,15 +30,4 @@ export function portalFieldLifecycle(manifestJsonPath) {
   return PORTAL_FIELD_LIFECYCLE[manifestJsonPath] ?? null;
 }
 
-export function assertSubmitActivationDecision(decision, expectedManifestActivation = null) {
-  const allowed = new Set(['Automatic activation', 'Manual activation']);
-  if (!allowed.has(decision)) {
-    throw new Error('Submit for review requires an explicit activation decision: Automatic activation or Manual activation.');
-  }
-  if (expectedManifestActivation !== null && decision !== expectedManifestActivation) {
-    throw new Error(`Submit activation decision ${decision} does not match manifest activation ${expectedManifestActivation}.`);
-  }
-  return decision;
-}
-
 export { PORTAL_FIELD_LIFECYCLE };
