@@ -4,7 +4,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'FabSubmissionCommon.ps1')
 
-$script:ToolVersion = '0.7.4'
+$script:ToolVersion = '0.7.5'
 $script:MaximumPackageBytes = 15L * 1024L * 1024L * 1024L
 $script:CopyrightExtensions = @('.h', '.hh', '.hpp', '.inl', '.ipp', '.cpp', '.cc', '.cxx')
 $script:ForbiddenTopLevelDirectories = @('Binaries', 'Build', 'Intermediate', 'Saved', 'DerivedDataCache')
@@ -1797,15 +1797,18 @@ function Assert-NoFabReviewExecutableReference {
     $files = @(Get-SafeTreeFile -Root $PluginRoot)
     foreach ($file in $files) {
         $relative = $file.RelativePath
-        if (-not $relative.StartsWith('Source/', [System.StringComparison]::Ordinal)) {
+        if (-not $relative.StartsWith('Source/', [System.StringComparison]::OrdinalIgnoreCase)) {
             continue
         }
         $extension = [System.IO.Path]::GetExtension($relative)
-        if ($script:FabReviewSourceExtensions -cnotcontains $extension) {
+        if (-not (Test-ContainsStringOrdinalIgnoreCase `
+                    -Values $script:FabReviewSourceExtensions `
+                    -Value $extension)) {
             continue
         }
-        $isThirdParty = $relative.StartsWith('Source/ThirdParty/', [System.StringComparison]::Ordinal)
-        if ($isThirdParty -and $extension -notin @('.cs')) {
+        $isThirdParty = $relative.StartsWith('Source/ThirdParty/', [System.StringComparison]::OrdinalIgnoreCase)
+        if ($isThirdParty -and
+            -not $extension.Equals('.cs', [System.StringComparison]::OrdinalIgnoreCase)) {
             continue
         }
         $content = [System.IO.File]::ReadAllText($file.FullName)

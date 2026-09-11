@@ -1916,7 +1916,12 @@ const char* Text = "UPROPERTY(EditAnywhere)";
             @{ Relative = 'Source/TestPlugin/Archive.cpp'; Content = 'TEXT("archive.zip")'; ShouldFail = $false },
             @{ Relative = 'Source/TestPlugin/Version.cpp'; Content = 'TEXT("Version 1.0.0")'; ShouldFail = $false },
             @{ Relative = 'Source/ThirdParty/Vendor/vendor.cpp'; Content = '"vendor.exe"'; ShouldFail = $false },
-            @{ Relative = 'Source/ThirdParty/Vendor/Vendor.Build.cs'; Content = '"vendor.exe"'; ShouldFail = $true }) {
+            @{ Relative = 'Source/ThirdParty/Vendor/Vendor.Build.cs'; Content = '"vendor.exe"'; ShouldFail = $true },
+            @{ Relative = 'Source/TestPlugin/Runner.CPP'; Content = 'TEXT("UnrealEditor.exe")'; ShouldFail = $true },
+            @{ Relative = 'source/TestPlugin/LowerRoot.cpp'; Content = 'TEXT("Tool.exe")'; ShouldFail = $true },
+            @{ Relative = 'Source/thirdparty/Vendor/Vendor.Build.CS'; Content = '"vendor.exe"'; ShouldFail = $true },
+            @{ Relative = 'Source/thirdparty/Vendor/vendor.cpp'; Content = '"vendor.exe"'; ShouldFail = $false },
+            @{ Relative = 'SOURCE/THIRDPARTY/Vendor/vendor.CPP'; Content = '"vendor.exe"'; ShouldFail = $false }) {
             $path = Join-Path $packageRoot $Relative
             [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($path)) | Out-Null
             [System.IO.File]::WriteAllText($path, $Content)

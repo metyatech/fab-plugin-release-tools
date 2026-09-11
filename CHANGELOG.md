@@ -5,6 +5,13 @@ Keep a Changelog and the project uses Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.7.5] - 2026-09-11
+
+- Made distributed-source Fab executable/installer review scanning
+  case-insensitive for Source paths, ThirdParty paths, and source extensions.
+- Added regression coverage for mixed-case Source, ThirdParty, C++, and
+  Build.cs paths.
+
 ## [0.7.4] - 2026-09-11
 
 - Added built-in rejection for known Fab-unsupported executable, installer, and
