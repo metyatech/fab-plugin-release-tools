@@ -214,10 +214,15 @@ Draft or submits to Fab. Use `Set-FabListingId.ps1` only with the actual
 lowercase UUID returned by Fab; it never infers an ID from a title or URL.
 
 Products with `projectFilePublishing` can publish canonical ZIPs to an
-existing Cloudflare R2 bucket using `Publish-FabProjectFiles.ps1`. The
+existing Cloudflare R2 bucket using `Publish-FabProjectFiles.ps1`. R2 project
+files use immutable content-addressed object keys containing the package
+SHA-256, so a changed package under the same product version receives a new
+URL. Existing R2 objects are never overwritten or deleted automatically. The
 publisher uses existing Wrangler authentication, refuses conflicting remote
 bytes, verifies anonymous downloads after upload, and changes
-`FabListingFields.json` only with `-UpdateListingFields`.
+`FabListingFields.json` only with `-UpdateListingFields`; with that switch, the
+complete verified link set is replaced atomically only after every new object
+has passed remote verification.
 
 For product-specific Unreal UI evidence, use the fresh temporary-host harness:
 

@@ -141,6 +141,30 @@ function Assert-FabR2BucketAccess {
     return $wrangler
 }
 
+function Get-FabR2ObjectKey {
+    param(
+        [Parameter(Mandatory)]
+        [object]$Publishing,
+
+        [Parameter(Mandatory)]
+        [string]$ProductVersion,
+
+        [Parameter(Mandatory)]
+        [string]$EngineVersion,
+
+        [Parameter(Mandatory)]
+        [string]$FileName,
+
+        [Parameter(Mandatory)]
+        [string]$Sha256
+    )
+
+    if ($Sha256 -notmatch '^[0-9a-fA-F]{64}$') {
+        throw "Invalid SHA-256 for R2 object key: $Sha256"
+    }
+    return "$($Publishing.ObjectPrefix)/$ProductVersion/UE$EngineVersion/$($Sha256.ToLowerInvariant())/$FileName"
+}
+
 function Update-FabR2ListingLinkSet {
     [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
     param(
@@ -159,27 +183,35 @@ function Update-FabR2ListingLinkSet {
 
     $existing = $Listing.PSObject.Properties['project_file_links']
     if ($null -ne $existing) {
-        $existingNames = @($existing.Value.PSObject.Properties.Name)
+        $existingNames = if ($null -eq $existing.Value) { @() } else { @($existing.Value.PSObject.Properties.Name) }
         if ($existingNames.Count -ne $EngineVersions.Count -or
             @($EngineVersions | Where-Object { $existingNames -cnotcontains $_ }).Count -gt 0) {
             throw 'Existing project_file_links do not contain exactly the generated engine set.'
         }
+        $linksMatch = $true
         foreach ($version in $EngineVersions) {
             if ([string]$existing.Value.$version -cne [string]$Links[$version]) {
-                throw "Refusing to replace a different existing project_file_link for UE$version."
+                $linksMatch = $false
+                break
             }
         }
-        return 'NOOP'
+        if ($linksMatch) { return 'NOOP' }
     }
     if (-not $PSCmdlet.ShouldProcess($ListingPath, 'Write verified R2 project file links')) {
         return 'SKIPPED'
     }
     $ordered = [ordered]@{}
     foreach ($version in $EngineVersions) { $ordered[$version] = [string]$Links[$version] }
-    Add-Member -InputObject $Listing -NotePropertyName project_file_links -NotePropertyValue $ordered
+    if ($null -eq $existing) {
+        Add-Member -InputObject $Listing -NotePropertyName project_file_links -NotePropertyValue $ordered
+    }
+    else {
+        $Listing.project_file_links = $ordered
+    }
     Write-FabSubmissionAtomicText -Path $ListingPath `
         -Text (ConvertTo-FabSubmissionJsonText -Value $Listing)
-    return 'WRITTEN'
+    if ($null -eq $existing) { return 'WRITTEN' }
+    return 'UPDATED'
 }
 
 function Invoke-FabProjectFilePublication {
@@ -225,7 +257,9 @@ function Invoke-FabProjectFilePublication {
             $localHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
             if ($localHash -cne ([string]$package.sha256).ToLowerInvariant()) { throw "Manifest package hash mismatch: $relative" }
             $fileName = [System.IO.Path]::GetFileName($zipPath)
-            $objectKey = "$($publishing.ObjectPrefix)/$($manifest.productVersion)/UE$engineVersion/$fileName"
+            $objectKey = Get-FabR2ObjectKey -Publishing $publishing `
+                -ProductVersion ([string]$manifest.productVersion) -EngineVersion $engineVersion `
+                -FileName $fileName -Sha256 $localHash
             $url = "$($publishing.PublicBaseUrl)/$objectKey"
             $remote = Get-FabR2RemoteObject -Url $url
             $action = $null

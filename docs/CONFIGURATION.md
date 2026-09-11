@@ -37,6 +37,13 @@ backslash. Credentials, tokens, and account IDs are never stored in this
 configuration. The publisher uses existing Wrangler authentication and does
 not create buckets or enable development URLs.
 
+R2 project-file objects are published with immutable content-addressed keys
+that include the package SHA-256. A changed package with the same product
+version therefore receives a new URL; older R2 objects are not overwritten or
+deleted automatically. When `Publish-FabProjectFiles.ps1` is run with
+`-UpdateListingFields`, it verifies every engine object first and then
+atomically replaces the complete `project_file_links` set.
+
 ## Root properties
 
 | Property | Type | Required | Allowed values and failure conditions |

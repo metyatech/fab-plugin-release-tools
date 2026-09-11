@@ -5,6 +5,12 @@ Keep a Changelog and the project uses Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.7.6] - 2026-09-11
+
+- Made R2 project-file publication content-addressed by package SHA-256.
+- Allowed verified immutable republish links to atomically replace an existing
+  complete `project_file_links` set without overwriting old R2 objects.
+
 ## [0.7.5] - 2026-09-11
 
 - Made distributed-source Fab executable/installer review scanning
