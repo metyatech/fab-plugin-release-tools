@@ -3,6 +3,7 @@ import { createReadStream } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { TextDecoder } from 'node:util';
+import { validateDescriptionLinks } from './description-links.mjs';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/i;
@@ -102,6 +103,11 @@ function validateTopLevel(manifest, { requirePortalReady = true } = {}) {
   requireString(manifest.title, 'title');
   requireString(manifest.shortDescription, 'shortDescription');
   requireString(manifest.longDescription, 'longDescription');
+  if (manifest.descriptionLinks !== undefined) {
+    manifest.descriptionLinks = validateDescriptionLinks(manifest.longDescription, manifest.descriptionLinks);
+  } else {
+    manifest.descriptionLinks = [];
+  }
   if (typeof manifest.listingId !== 'string' || !UUID_PATTERN.test(manifest.listingId)) fail('listingId must be a lowercase UUID.');
   requireString(manifest.productType, 'productType');
   requireString(manifest.category, 'category');

@@ -43,6 +43,10 @@
     "title": { "type": "string", "minLength": 1 },
     "short_description": { "type": "string", "minLength": 1 },
     "long_description": { "type": "string", "minLength": 1 },
+    "description_links": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/descriptionLink" }
+    },
     "product_type": { "type": "string", "minLength": 1 },
     "category": { "type": "string", "minLength": 1 },
     "subcategory": {
@@ -98,6 +102,15 @@
       "type": "string",
       "format": "uri",
       "pattern": "^https://"
+    },
+    "descriptionLink": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "href"],
+      "properties": {
+        "text": { "type": "string", "minLength": 1 },
+        "href": { "$ref": "#/definitions/httpsUrl" }
+      }
     }
   }
 }

@@ -62,6 +62,20 @@
       "allOf": [
         {
           "if": {
+            "properties": { "manifestJsonPath": { "const": "descriptionLinks" } },
+            "required": ["manifestJsonPath"]
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/descriptionLink" }
+              }
+            }
+          }
+        },
+        {
+          "if": {
             "properties": { "state": { "const": "OBSERVED" } },
             "required": ["state"]
           },
@@ -69,6 +83,15 @@
           "else": { "not": { "required": ["value"] } }
         }
       ]
+    },
+    "descriptionLink": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "href"],
+      "properties": {
+        "text": { "type": "string", "minLength": 1 },
+        "href": { "type": "string", "format": "uri", "pattern": "^https://" }
+      }
     }
   }
 }

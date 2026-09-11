@@ -18,11 +18,12 @@ Describe 'Fab submission preparation contracts' {
             $bitmap = [System.Drawing.Bitmap]::new($Width, $Height)
             try {
                 $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-                $color = if ($Path -match '02') { [System.Drawing.Color]::DarkSlateBlue } else { [System.Drawing.Color]::SteelBlue }
+                $isSecondImage = [System.IO.Path]::GetFileNameWithoutExtension($Path) -eq '02'
+                $color = if ($isSecondImage) { [System.Drawing.Color]::DarkSlateBlue } else { [System.Drawing.Color]::SteelBlue }
                 try { $graphics.Clear($color) }
                 finally { $graphics.Dispose() }
                 $bitmap.SetPixel(0, 0, [System.Drawing.Color]::White)
-                if ($Path -match '02') {
+                if ($isSecondImage) {
                     $bitmap.SetPixel(1, 1, [System.Drawing.Color]::OrangeRed)
                     $bitmap.SetPixel(2, 2, [System.Drawing.Color]::LimeGreen)
                 }

@@ -1,4 +1,5 @@
 import { fieldCandidates, mediaCandidates, resolveCandidate } from './locators.mjs';
+import { compareDescriptionLinks } from './description-links.mjs';
 import { portalFieldLifecycle } from './lifecycle.mjs';
 import { isFormatView } from './view-detection.mjs';
 
@@ -298,6 +299,38 @@ async function visibleContentEditor(page) {
   return { locator: visible, text: await visible.innerText().catch(() => '') };
 }
 
+async function compareDescriptionLinksField(page, manifest, view = 'listing') {
+  const desired = manifest.descriptionLinks ?? [];
+  if (view !== 'listing') return lifecycleField('descriptionLinks', 'Description links', desired, 'NOT_APPLICABLE', 'Description links are owned by the listing Description editor.', view);
+  const editor = await visibleContentEditor(page);
+  if (!editor) return lifecycleField('descriptionLinks', 'Description links', desired, 'NOT_VISIBLE', 'The visible Description editor was not uniquely readable.', view);
+  const anchors = editor.locator.locator('a');
+  const observed = [];
+  for (let index = 0; index < await anchors.count(); index += 1) {
+    const anchor = anchors.nth(index);
+    if (!await anchor.isVisible().catch(() => false)) continue;
+    const text = await anchor.innerText().catch(() => '');
+    const rawHref = await anchor.getAttribute('href').catch(() => null);
+    let href = rawHref;
+    if (rawHref) {
+      try { href = new URL(rawHref, page.url()).href; } catch { href = rawHref; }
+    }
+    if (text && href) observed.push({ text, href });
+  }
+  const state = compareDescriptionLinks(observed, desired);
+  return fieldResult({
+    manifestJsonPath: 'descriptionLinks',
+    portalLabel: 'Description links',
+    desired,
+    current: observed,
+    state,
+    resolved: contentEditorResolution(),
+    editableControlAvailable: false,
+    notes: state === 'MATCH' ? 'Actual persisted anchors were read from the visible Description editor.' : 'Only actual anchors in the visible Description editor were compared; URL-looking plain text is not a link.',
+    writeTarget: null,
+  });
+}
+
 function contentEditorResolution() {
   return {
     metadata: {
@@ -349,6 +382,7 @@ export async function compareManifest(page, manifestInfo, { view = 'listing' } =
   fields.push(lifecycleField('shortDescription', 'Short description', manifest.shortDescription, 'NOT_APPLICABLE', 'shortDescription is source metadata and is not a distinct Draft-owned Fab Portal field.', view));
   const description = await compareTextField(page, manifest, 'longDescription', 'Description *', { rich: true, view });
   fields.push(description);
+  fields.push(await compareDescriptionLinksField(page, manifest, view));
   fields.push(await compareTextField(page, manifest, 'productType', 'Product type *', { view }));
   fields.push(await compareCategory(page, manifest, view));
   fields.push(await compareSubcategory(page, manifest));
@@ -577,6 +611,7 @@ export function compareObservation(manifestInfo, observation) {
     field('title', 'Title', manifest.title, (current, expected) => compareObservationScalar(current, expected)),
     observationLifecycleField({ entry: entries.get('shortDescription'), manifestJsonPath: 'shortDescription', portalLabel: 'Short description', desired: manifest.shortDescription, view: 'listing', note: 'shortDescription is source metadata and is not a distinct Draft-owned Fab Portal field.' }),
     field('longDescription', 'Description', manifest.longDescription, (current, expected) => compareObservationScalar(current, expected, { rich: true })),
+    field('descriptionLinks', 'Description links', manifest.descriptionLinks ?? [], (current, expected) => compareDescriptionLinks(current, expected)),
     field('productType', 'Product type', manifest.productType, (current, expected) => compareObservationScalar(current, expected)),
     field('category', 'Category', manifest.category, (current, expected) => compareObservationScalar(current, expected)),
     field('subcategory', 'Subcategory', manifest.subcategory, (current, expected) => compareObservationArray(current, expected)),
@@ -605,4 +640,4 @@ export function compareObservation(manifestInfo, observation) {
   return summarizeComparison(fields);
 }
 
-export { readLocator, fieldResult };
+export { compareDescriptionLinks, readLocator, fieldResult };

@@ -432,6 +432,12 @@ structure. It normalizes line endings, horizontal spacing, and excessive blank
 lines without flattening the Description into one line, so readable multiline
 content does not compare equal to flattened Portal content.
 
+Description source text keeps visible URLs as plain text. Configured hyperlink
+semantics are carried separately as `descriptionLinks`; the interactive Fab
+editor's normal link-insertion UI creates the anchors, and the verifier checks
+the persisted visible text and exact HTTPS `href`. Literal Markdown such as
+`[text](https://example.com)` is not treated as a hyperlink.
+
 For authenticated portals where a CDP browser is blocked by Cloudflare, an
 interactive browser can collect the structured observation and the same
 central verifier can compare it offline. This is a transport option, not a

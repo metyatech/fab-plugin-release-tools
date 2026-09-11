@@ -3,7 +3,8 @@ import { writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { compareObservation, compareTagsClassification, normalizeRichText } from '../src/comparison.mjs';
+import { compareDescriptionLinks, compareObservation, compareTagsClassification, normalizeRichText } from '../src/comparison.mjs';
+import { validateDescriptionLinks } from '../src/description-links.mjs';
 import { loadFabPortalObservation } from '../src/observation.mjs';
 import { assertSubmitActivationDecision, portalFieldLifecycle } from '../src/lifecycle.mjs';
 import { makeManifest, makeManifestInfo } from './helpers.mjs';
@@ -26,6 +27,7 @@ function makeObservation(manifestInfo, overrides = {}) {
     title: manifest.title,
     shortDescription: manifest.shortDescription,
     longDescription: manifest.longDescription,
+    descriptionLinks: manifest.descriptionLinks ?? [],
     productType: manifest.productType,
     category: manifest.category,
     subcategory: manifest.subcategory,
@@ -126,7 +128,7 @@ test('pure comparator matches normalized rich text, USD, Windows, engine sets, U
   observation.fields.find((item) => item.manifestJsonPath === 'longDescription').value = 'Fixture   long description\r\nSupport: https://example.com/support';
   const comparison = compareObservation(manifestInfo, observation);
   assert.equal(comparison.mismatchCount, 0);
-  assert.equal(comparison.counts.MATCH, 24);
+  assert.equal(comparison.counts.MATCH, 25);
   assert.equal(comparison.counts.NOT_APPLICABLE, 2);
 });
 
@@ -195,4 +197,34 @@ test('portal lifecycle keeps activation deferred and source-only metadata intact
   assert.equal(portalFieldLifecycle('supportUrl'), 'DERIVED');
   assert.equal(assertSubmitActivationDecision('Manual activation', 'Manual activation'), 'Manual activation');
   assert.throws(() => assertSubmitActivationDecision(null), /explicit activation decision/);
+});
+
+test('description link comparison requires actual text and href pairs', () => {
+  const expected = [
+    { text: 'https://example.com/docs', href: 'https://example.com/docs' },
+    { text: 'https://example.com/support', href: 'https://example.com/support#troubleshooting' },
+  ];
+  assert.equal(compareDescriptionLinks(expected, expected), 'MATCH');
+  assert.equal(compareDescriptionLinks([{ text: expected[0].text, href: expected[0].href }], expected), 'MISMATCH');
+  assert.equal(compareDescriptionLinks([{ text: expected[0].text, href: 'https://example.com/wrong' }, expected[1]], expected), 'MISMATCH');
+  assert.equal(compareDescriptionLinks([{ text: expected[0].text, href: expected[0].href }, { text: expected[1].text, href: 'https://example.com/support' }], expected), 'MISMATCH');
+  assert.equal(compareDescriptionLinks(expected, [...expected, { text: 'https://example.com/extra', href: 'https://example.com/extra' }]), 'MISMATCH');
+});
+
+test('description link source validation rejects duplicates, non-HTTPS hrefs, and literal Markdown', () => {
+  const text = 'Documentation: https://example.com/docs\nSupport: https://example.com/support';
+  assert.deepEqual(validateDescriptionLinks(text, [
+    { text: 'https://example.com/docs', href: 'https://example.com/docs' },
+    { text: 'https://example.com/support', href: 'https://example.com/support#troubleshooting' },
+  ]).length, 2);
+  assert.throws(() => validateDescriptionLinks(text, [
+    { text: 'https://example.com/docs', href: 'http://example.com/docs' },
+  ]), /absolute HTTPS/);
+  assert.throws(() => validateDescriptionLinks('See [https://example.com/docs](https://example.com/docs)', [
+    { text: 'https://example.com/docs', href: 'https://example.com/docs' },
+  ]), /literal Markdown/);
+  assert.throws(() => validateDescriptionLinks('https://example.com/docs', [
+    { text: 'https://example.com/docs', href: 'https://example.com/docs' },
+    { text: 'https://example.com/docs', href: 'https://example.com/docs?duplicate=1' },
+  ]), /duplicat/);
 });

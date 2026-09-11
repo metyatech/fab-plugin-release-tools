@@ -43,6 +43,10 @@
     "title": { "type": "string", "minLength": 1 },
     "shortDescription": { "type": "string", "minLength": 1, "pattern": "\\S" },
     "longDescription": { "type": "string", "minLength": 1, "pattern": "\\S" },
+    "descriptionLinks": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/descriptionLink" }
+    },
     "productType": { "type": "string", "minLength": 1 },
     "category": { "type": "string", "minLength": 1 },
     "subcategory": { "$ref": "#/$defs/stringArray" },
@@ -113,6 +117,15 @@
             { "type": "null" }
           ]
         }
+      }
+    },
+    "descriptionLink": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "href"],
+      "properties": {
+        "text": { "type": "string", "minLength": 1 },
+        "href": { "$ref": "#/$defs/httpsUrl" }
       }
     }
   }

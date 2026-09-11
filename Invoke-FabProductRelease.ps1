@@ -142,6 +142,66 @@ function Assert-FabProductText {
     return [string]$property.Value
 }
 
+function ConvertTo-FabProductDescriptionLink {
+    param(
+        [Parameter(Mandatory)]
+        [object]$Object,
+
+        [Parameter(Mandatory)]
+        [string]$LongDescription
+    )
+
+    $property = $Object.PSObject.Properties['description_links']
+    if ($null -eq $property) {
+        return @()
+    }
+    $links = @($property.Value)
+    $seenText = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    $seenHref = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    $validated = [System.Collections.Generic.List[object]]::new()
+    foreach ($link in $links) {
+        if ($null -eq $link -or $link -is [System.Array]) {
+            throw 'description_links entries must be objects.'
+        }
+        $names = @($link.PSObject.Properties.Name)
+        if ($names.Count -ne 2 -or $names -cnotcontains 'text' -or $names -cnotcontains 'href') {
+            throw 'description_links entries must contain only text and href.'
+        }
+        $text = [string]$link.text
+        $href = [string]$link.href
+        if ([string]::IsNullOrWhiteSpace($text)) {
+            throw 'description_links text must be non-blank.'
+        }
+        if ($href -cnotmatch '^https://') {
+            throw "description_links href must be an absolute HTTPS URL: $href"
+        }
+        try {
+            $uri = [System.Uri]::new($href)
+            if (-not $uri.IsAbsoluteUri -or $uri.Scheme -cne 'https') {
+                throw 'not an absolute HTTPS URI'
+            }
+        }
+        catch {
+            throw "description_links href is invalid: $href"
+        }
+        if (-not $seenText.Add($text)) {
+            throw "description_links contains duplicate text: $text"
+        }
+        if (-not $seenHref.Add($href)) {
+            throw "description_links contains duplicate href: $href"
+        }
+        $occurrences = ([regex]::Matches($LongDescription, [regex]::Escape($text))).Count
+        if ($occurrences -ne 1) {
+            throw "description_links text must occur exactly once in long_description: $text"
+        }
+        if ($LongDescription.Contains("[$text]($href)")) {
+            throw "long_description must not contain literal Markdown link syntax for configured link: $text"
+        }
+        $validated.Add([pscustomobject]@{ text = $text; href = $href })
+    }
+    return $validated.ToArray()
+}
+
 function ConvertTo-FabProductStringArray {
     param(
         [Parameter(Mandatory)]
@@ -369,6 +429,7 @@ function Import-FabProductListing {
     $title = Assert-FabProductText -Object $listing -Name 'title'
     $shortDescription = Assert-FabProductText -Object $listing -Name 'short_description'
     $longDescription = Assert-FabProductText -Object $listing -Name 'long_description'
+    $descriptionLinks = @(ConvertTo-FabProductDescriptionLink -Object $listing -LongDescription $longDescription)
     $listingVersionLabels = @(ConvertTo-FabProductStringArray -Object $listing -Name 'engine_versions')
     $listingVersions = @($listingVersionLabels | ForEach-Object {
             ConvertTo-FabProductEngineVersion -Value $_
@@ -465,6 +526,7 @@ function Import-FabProductListing {
         Title                   = $title
         ShortDescription        = $shortDescription
         LongDescription         = $longDescription
+        DescriptionLinks        = $descriptionLinks
         ProductType             = [string]$listing.product_type
         Category                = [string]$listing.category
         Subcategory             = $subcategory
@@ -1876,6 +1938,7 @@ function Invoke-FabProductReleaseCore {
             title                    = $listing.Title
             shortDescription         = $listing.ShortDescription
             longDescription          = $listing.LongDescription
+            descriptionLinks         = @($listing.DescriptionLinks)
             productType              = $listing.ProductType
             category                 = $listing.Category
             subcategory              = @($listing.Subcategory)

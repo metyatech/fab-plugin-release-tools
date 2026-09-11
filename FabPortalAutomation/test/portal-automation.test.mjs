@@ -56,6 +56,22 @@ test('verify-only performs zero writes', async () => {
   assert.equal(fixture.mutations.length, 0);
 });
 
+test('portal collector compares persisted Description anchors separately from visible URL text', async () => {
+  const links = [{ text: 'https://example.com/docs', href: 'https://example.com/docs' }];
+  const manifest = makeManifest({
+    longDescription: 'Read https://example.com/docs',
+    descriptionLinks: links,
+  });
+  const matching = await scenario({ manifest });
+  assert.equal(matching.result.comparison.fields.find((field) => field.manifestJsonPath === 'descriptionLinks').classification, 'MATCH');
+
+  const plainText = await scenario({ manifest, state: { descriptionLinks: [] } });
+  assert.equal(plainText.result.comparison.fields.find((field) => field.manifestJsonPath === 'descriptionLinks').classification, 'MISMATCH');
+
+  const wrongHref = await scenario({ manifest, state: { descriptionLinks: [{ text: links[0].text, href: 'https://example.com/wrong' }] } });
+  assert.equal(wrongHref.result.comparison.fields.find((field) => field.manifestJsonPath === 'descriptionLinks').classification, 'MISMATCH');
+});
+
 test('portal write modes fail closed before browser attachment', async () => {
   const info = await makeManifestInfo(makeManifest());
   for (const mode of ['save', 'submit']) {

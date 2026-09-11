@@ -8,7 +8,7 @@ import { runPortalAutomation } from './portal.mjs';
 import { createRunDirectory, writeRunReport } from './report.mjs';
 import { FAB_WRITE_AUTOMATION_DISABLED_MESSAGE } from './write-policy.mjs';
 
-const VERSION = '0.7.2';
+const VERSION = '0.7.3';
 
 function help() {
   return `Fab Publisher Portal automation
@@ -34,7 +34,10 @@ Options:
   --version, -V           Show the version
 
 Observation mode compares the supplied facts offline and does not launch or
-attach to a browser. It is not cryptographic proof of Portal source bytes.
+attach to a browser. Description text stays separate from structured
+descriptionLinks, and verification checks the actual persisted HTTPS href for
+each configured link. Literal Markdown link text is not a hyperlink. It is not
+cryptographic proof of Portal source bytes.
 `;
 }
 

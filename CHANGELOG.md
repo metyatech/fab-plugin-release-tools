@@ -5,6 +5,15 @@ Keep a Changelog and the project uses Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-09-11
+
+- Added structured `descriptionLinks` metadata so Description source text stays
+  human-readable while hyperlink semantics remain explicit.
+- Validated actual persisted Fab Description anchors and exact HTTPS hrefs;
+  literal Markdown link text does not satisfy hyperlink verification.
+- Kept CDP backward compatible and retained interactive-browser observation as
+  an offline, non-cryptographic verification transport.
+
 ## [0.7.2] - 2026-09-11
 
 - Preserved meaningful paragraph, heading, and list-line structure when

@@ -4,8 +4,13 @@ function html(value) {
   return String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 }
 
-function richText(value) {
-  return html(value).replace(/\r\n?|\n/g, '<br>');
+function richText(value, links = []) {
+  let rendered = html(value);
+  for (const link of [...links].sort((left, right) => right.text.length - left.text.length)) {
+    const escapedText = html(link.text);
+    rendered = rendered.replaceAll(escapedText, `<a href="${html(link.href)}">${escapedText}</a>`);
+  }
+  return rendered.replace(/\r\n?|\n/g, '<br>');
 }
 
 function pageMarkup(state, listingId) {
@@ -27,7 +32,7 @@ function pageMarkup(state, listingId) {
     ${statusMarkup}
     <label>Title *<input aria-label="Title *" value="${html(state.title)}" ${state.disableFields?.includes('title') ? 'disabled' : ''}></label>
     <label>Short description *<input aria-label="Short description *" value="${html(state.shortDescription)}" ${state.disableFields?.includes('shortDescription') ? 'disabled' : ''}></label>
-    <label>Description *<div role="textbox" aria-label="Description *" contenteditable="true">${richText(state.longDescription)}</div></label>
+    <label>Description *<div role="textbox" aria-label="Description *" contenteditable="true">${richText(state.longDescription, state.descriptionLinks)}</div></label>
     <label>Product type *<select aria-label="Product type *"><option selected>${html(state.productType)}</option></select></label>
     <label>Category *<input role="combobox" aria-label="Category selection" value="${html(state.category)}"></label>
     <label>Tags *<input aria-label="Tags *" value="${html(state.tags[0] ?? '')}" readonly></label>

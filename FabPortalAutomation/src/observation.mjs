@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fieldView, normalizeText } from './comparison.mjs';
+import { validateDescriptionLinkShape } from './description-links.mjs';
 import { portalFieldLifecycle } from './lifecycle.mjs';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -13,6 +14,7 @@ const ROOT_KEYS = new Set(['schemaVersion', 'source', 'manifestSha256', 'observe
 const FIELD_KEYS = new Set(['manifestJsonPath', 'state', 'value', 'view', 'note']);
 const BASE_PATHS = [
   'title', 'shortDescription', 'longDescription', 'productType', 'category', 'subcategory', 'tags',
+  'descriptionLinks',
   'includedFormat', 'engineVersions', 'platforms', 'license', 'personalPriceUsd',
   'professionalPriceUsd', 'matureContent', 'generatedWithAi', 'allowsUsageWithAi',
   'promotionalContent', 'forumPost', 'activation', 'documentationUrl', 'supportUrl',
@@ -86,6 +88,10 @@ function validateObservedValue(fieldPath, value, manifest) {
     return;
   }
   if (fieldPath === 'media') return validateMediaValue(value);
+  if (fieldPath === 'descriptionLinks') {
+    validateDescriptionLinkShape(value, `${fieldPath}.value`);
+    return;
+  }
   if (fieldPath.startsWith('packages[')) {
     const match = /^packages\[(\d+)\]\.projectFileLink$/.exec(fieldPath);
     const index = Number(match[1]);
