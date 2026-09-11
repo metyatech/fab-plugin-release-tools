@@ -22,10 +22,13 @@ function normalizeHref(value) {
 function countOccurrences(text, needle) {
   let count = 0;
   let offset = 0;
+  const urlText = normalizeHref(needle) !== null;
   while (true) {
     const found = text.indexOf(needle, offset);
     if (found < 0) return count;
-    count += 1;
+    const before = found === 0 ? '' : text[found - 1];
+    const after = text[found + needle.length] ?? '';
+    if (!urlText || (!/[A-Za-z0-9/?#._~%:-]/.test(before) && !/[A-Za-z0-9/?#._~%:-]/.test(after))) count += 1;
     offset = found + needle.length;
   }
 }

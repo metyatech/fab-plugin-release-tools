@@ -227,4 +227,10 @@ test('description link source validation rejects duplicates, non-HTTPS hrefs, an
     { text: 'https://example.com/docs', href: 'https://example.com/docs' },
     { text: 'https://example.com/docs', href: 'https://example.com/docs?duplicate=1' },
   ]), /duplicat/);
+  const documentation = 'https://example.com/docs/';
+  const support = 'https://example.com/docs/#troubleshooting';
+  assert.equal(validateDescriptionLinks(`Documentation: ${documentation}\nSupport: ${support}`, [
+    { text: documentation, href: documentation },
+    { text: support, href: support },
+  ]).length, 2);
 });

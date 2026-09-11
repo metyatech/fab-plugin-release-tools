@@ -190,7 +190,7 @@ function ConvertTo-FabProductDescriptionLink {
         if (-not $seenHref.Add($href)) {
             throw "description_links contains duplicate href: $href"
         }
-        $occurrences = ([regex]::Matches($LongDescription, [regex]::Escape($text))).Count
+        $occurrences = ([regex]::Matches($LongDescription, [regex]::Escape($text) + '(?![A-Za-z0-9/?#._~%:-])')).Count
         if ($occurrences -ne 1) {
             throw "description_links text must occur exactly once in long_description: $text"
         }
