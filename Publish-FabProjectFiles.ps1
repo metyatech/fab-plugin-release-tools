@@ -165,6 +165,31 @@ function Get-FabR2ObjectKey {
     return "$($Publishing.ObjectPrefix)/$ProductVersion/UE$EngineVersion/$($Sha256.ToLowerInvariant())/$FileName"
 }
 
+function New-FabR2PublicationListingFile {
+    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Low')]
+    param(
+        [Parameter(Mandatory)]
+        [object]$Listing,
+
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    $publicationListing = [ordered]@{}
+    foreach ($property in $Listing.PSObject.Properties) {
+        if ($property.Name -cne 'project_file_links' -and
+            $property.Name -cne 'project_file_link') {
+            $publicationListing[$property.Name] = $property.Value
+        }
+    }
+    if (-not $PSCmdlet.ShouldProcess($Path, 'Write publication listing copy')) {
+        return $Path
+    }
+    Write-FabSubmissionAtomicText -Path $Path `
+        -Text (ConvertTo-FabSubmissionJsonText -Value ([pscustomobject]$publicationListing))
+    return $Path
+}
+
 function Update-FabR2ListingLinkSet {
     [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
     param(
@@ -233,12 +258,14 @@ function Invoke-FabProjectFilePublication {
     $buildRoot = Join-Path $sessionRoot 'canonical-release'
     [System.IO.Directory]::CreateDirectory($sessionRoot) | Out-Null
     try {
+        $releaseListingPath = Join-Path $sessionRoot 'FabListingFields.ForPublication.json'
+        [void](New-FabR2PublicationListingFile -Listing $listingData.Listing -Path $releaseListingPath)
         $releaseArguments = @{
-            PluginPath      = $root
-            OutputDirectory = $buildRoot
+            PluginPath        = $root
+            ListingFieldsPath = $releaseListingPath
+            OutputDirectory   = $buildRoot
         }
         if (-not [string]::IsNullOrWhiteSpace($EngineRoot)) { $releaseArguments.EngineRoot = $EngineRoot }
-        if (-not [string]::IsNullOrWhiteSpace($ListingFieldsPath)) { $releaseArguments.ListingFieldsPath = $ListingFieldsPath }
         $releaseResult = Invoke-FabProductReleaseCore @releaseArguments
         $manifest = $releaseResult.Manifest
         $wrangler = Assert-FabR2BucketAccess -Publishing $publishing

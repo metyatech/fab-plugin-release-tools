@@ -56,6 +56,20 @@ Describe 'Fab project file publishing' {
             Should -Throw '*Invalid SHA-256*'
     }
 
+    It 'omits existing project file links from the publication listing copy' {
+        $source = [pscustomobject]@{
+            title = 'Fixture'
+            project_file_links = [pscustomobject]@{ '5.8' = 'https://old.example/UE5.8.zip' }
+            project_file_link = 'https://old.example/legacy.zip'
+        }
+        $path = Join-Path $TestDrive 'PublicationListing.json'
+        New-FabR2PublicationListingFile -Listing $source -Path $path | Should -BeExactly $path
+        $readback = Get-Content -Raw -LiteralPath $path | ConvertFrom-Json
+        $readback.title | Should -BeExactly 'Fixture'
+        $readback.PSObject.Properties['project_file_links'] | Should -BeNullOrEmpty
+        $readback.PSObject.Properties['project_file_link'] | Should -BeNullOrEmpty
+    }
+
     It 'writes project_file_links when no existing set is present' {
         $path = Join-Path $TestDrive 'WriteListing.json'
         $listing = [pscustomobject]@{ title = 'Fixture' }
