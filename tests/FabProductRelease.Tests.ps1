@@ -548,6 +548,54 @@ public sealed class FabProductTestHttpMessageHandler : HttpMessageHandler
         }
     }
 
+    It 'validates rich-text marks without scalarizing zero, single, or multiple values' {
+        $cases = @(
+            @{ Name = 'none'; Marks = @(); Href = $null },
+            @{ Name = 'bold'; Marks = @('bold'); Href = $null },
+            @{ Name = 'italic'; Marks = @('italic'); Href = $null },
+            @{ Name = 'underline'; Marks = @('underline'); Href = $null },
+            @{ Name = 'link'; Marks = @('link'); Href = 'https://example.test/docs' },
+            @{ Name = 'bold and italic'; Marks = @('bold', 'italic'); Href = $null }
+        )
+        foreach ($case in $cases) {
+            $run = [pscustomobject]@{ text = 'Marked text'; marks = $case.Marks }
+            if ($null -ne $case.Href) { $run | Add-Member -NotePropertyName href -NotePropertyValue $case.Href }
+            $richText = [pscustomobject]@{
+                blocks = @([pscustomobject]@{
+                        type = 'paragraph'
+                        runs = @($run)
+                    })
+            }
+            $descriptionLinks = @()
+            if ($case.Name -eq 'link') {
+                $descriptionLinks = @([pscustomobject]@{ text = 'Marked text'; href = $case.Href })
+            }
+            { Assert-FabProductRichText -RichText $richText -LongDescription 'Marked text' `
+                    -DescriptionLinks $descriptionLinks } |
+                Should -Not -Throw -Because "the $($case.Name) mark cardinality is valid"
+        }
+    }
+
+    It 'rejects duplicate, unsupported, and malformed link marks' {
+        $cases = @(
+            @{ Marks = @('bold', 'bold'); Href = $null },
+            @{ Marks = @('strike'); Href = $null },
+            @{ Marks = @('link'); Href = $null },
+            @{ Marks = @('bold'); Href = 'https://example.test/docs' }
+        )
+        foreach ($case in $cases) {
+            $run = [pscustomobject]@{ text = 'Marked text'; marks = $case.Marks }
+            if ($null -ne $case.Href) { $run | Add-Member -NotePropertyName href -NotePropertyValue $case.Href }
+            $richText = [pscustomobject]@{
+                blocks = @([pscustomobject]@{
+                        type = 'paragraph'
+                        runs = @($run)
+                    })
+            }
+            { Assert-FabProductRichText -RichText $richText -LongDescription 'Marked text' } | Should -Throw
+        }
+    }
+
     It 'writes deterministic ordered manifest data without absolute paths' {
         $root = Join-Path $TestDrive 'ManifestData'
         $outputRoot = Join-Path $TestDrive 'ManifestArtifacts'

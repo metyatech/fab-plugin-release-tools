@@ -169,7 +169,7 @@ function Assert-FabProductRichText {
     if ($null -eq $RichText -or $RichText -is [System.Array] -or $null -eq $RichText.PSObject.Properties['blocks']) {
         throw "$FieldName must contain a blocks array."
     }
-    $blocks = @($RichText.blocks)
+    [object[]]$blocks = @($RichText.blocks)
     if ($blocks.Count -eq 0) { throw "$FieldName.blocks must not be empty." }
     $links = [System.Collections.Generic.List[string]]::new()
     foreach ($block in $blocks) {
@@ -183,18 +183,39 @@ function Assert-FabProductRichText {
                 throw "$FieldName heading levels must be integers from 1 to 6."
             }
         }
-        $groups = if ($type -in @('paragraph', 'heading')) { @(@($block.runs)) } else { @($block.items) }
+        [object[]]$groups = @()
+        if ($type -in @('paragraph', 'heading')) {
+            [object[]]$runs = @($block.runs)
+            $groups = @(, $runs)
+        }
+        else {
+            $groups = @($block.items)
+        }
         if ($groups.Count -eq 0) { throw "$FieldName $type must contain content." }
         foreach ($group in $groups) {
-            if (@($group).Count -eq 0) { throw "$FieldName contains an empty run group." }
-            foreach ($run in @($group)) {
+            [object[]]$groupRuns = @($group)
+            if ($groupRuns.Count -eq 0) { throw "$FieldName contains an empty run group." }
+            foreach ($run in $groupRuns) {
                 $runNames = @($run.PSObject.Properties.Name)
                 if ($runNames | Where-Object { $_ -notin @('text', 'marks', 'href') }) { throw "$FieldName run contains an unsupported property." }
                 if ([string]::IsNullOrWhiteSpace([string]$run.text)) { throw "$FieldName run text must be non-blank." }
                 $marksProperty = $run.PSObject.Properties['marks']
-                $marks = if ($null -eq $marksProperty) { @() } else { @($run.marks) }
-                if (@($marks | Where-Object { $_ -notin @('bold', 'italic', 'underline', 'link') }).Count -gt 0) { throw "$FieldName contains an unsupported inline mark." }
-                if (@($marks | Sort-Object -Unique).Count -ne $marks.Count) { throw "$FieldName inline marks must be unique." }
+                $marks = [System.Collections.Generic.List[string]]::new()
+                if ($null -ne $marksProperty) {
+                    foreach ($mark in @($run.marks)) {
+                        [void]$marks.Add([string]$mark)
+                    }
+                }
+                foreach ($mark in $marks) {
+                    if ($mark -notin @('bold', 'italic', 'underline', 'link')) {
+                        throw "$FieldName contains an unsupported inline mark."
+                    }
+                }
+                $uniqueMarks = [System.Collections.Generic.HashSet[string]]::new()
+                foreach ($mark in $marks) {
+                    [void]$uniqueMarks.Add($mark)
+                }
+                if ($uniqueMarks.Count -ne $marks.Count) { throw "$FieldName inline marks must be unique." }
                 $hasHref = $null -ne $run.PSObject.Properties['href']
                 if ($marks -contains 'link') {
                     if (-not $hasHref -or [string]$run.href -cnotmatch '^https://') { throw "$FieldName link runs require an absolute HTTPS href." }
@@ -206,7 +227,9 @@ function Assert-FabProductRichText {
     }
     $derived = Get-FabProductRichTextPlainText -RichText $RichText
     $normalize = { param($value) ([string]$value).Replace("`r`n", "`n").Replace("`r", "`n").Trim() }
-    if (& $normalize $derived -cne (& $normalize $LongDescription)) {
+    $normalizedDerived = & $normalize $derived
+    $normalizedLongDescription = & $normalize $LongDescription
+    if ($normalizedDerived -cne $normalizedLongDescription) {
         throw "$FieldName visible text must structurally match long_description."
     }
     $expected = @($DescriptionLinks | ForEach-Object { ([string]$_.text + "`0" + [string]$_.href) })

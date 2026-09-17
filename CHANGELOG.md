@@ -5,6 +5,13 @@ Keep a Changelog and the project uses Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-09-17
+
+- Fixed PowerShell rich-text validation for zero, single, and multiple inline
+  marks without scalarizing array-valued data.
+- Moved GitHub Actions verification to the repository-specific Windows
+  self-hosted runner so the real UE 5.8.2 regression remains covered in CI.
+
 ## [0.8.1] - 2026-09-17
 
 - Canonicalized rich-text marks to the stable `bold`, `italic`, `underline`,

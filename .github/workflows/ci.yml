@@ -2,18 +2,39 @@ name: CI
 
 on:
   push:
-  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   verify:
-    runs-on: windows-latest
+    runs-on: [self-hosted, windows]
     timeout-minutes: 15
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+
+      - name: Verify self-hosted UE installation
+        shell: pwsh
+        run: |
+          $ueRoot = 'C:\Program Files\Epic Games\UE_5.8'
+          $buildVersionPath = Join-Path $ueRoot 'Engine\Build\Build.version'
+          Write-Output "RUNNER_NAME=$env:RUNNER_NAME"
+          Write-Output "RUNNER_OS=$env:RUNNER_OS"
+          Write-Output "RUNNER_ARCH=$env:RUNNER_ARCH"
+          if (-not (Test-Path -LiteralPath $buildVersionPath -PathType Leaf)) {
+            throw "Required UE 5.8 Build.version is missing: $buildVersionPath"
+          }
+          $buildVersion = Get-Content -Raw -LiteralPath $buildVersionPath | ConvertFrom-Json
+          if ([int]$buildVersion.MajorVersion -ne 5 -or
+              [int]$buildVersion.MinorVersion -ne 8 -or
+              [int]$buildVersion.PatchVersion -ne 2) {
+            throw "Expected UE 5.8.2, found $($buildVersion.MajorVersion).$($buildVersion.MinorVersion).$($buildVersion.PatchVersion)"
+          }
+          Write-Output "UE58_BUILD_VERSION=$($buildVersion.MajorVersion).$($buildVersion.MinorVersion).$($buildVersion.PatchVersion)"
 
       - name: Bootstrap pinned PowerShell modules
         shell: pwsh
