@@ -187,7 +187,10 @@
         },
         {
           "if": { "required": ["href"] },
-          "then": { "properties": { "marks": { "contains": { "const": "link" } } } }
+          "then": {
+            "required": ["marks"],
+            "properties": { "marks": { "contains": { "const": "link" } } }
+          }
         }
       ]
     }

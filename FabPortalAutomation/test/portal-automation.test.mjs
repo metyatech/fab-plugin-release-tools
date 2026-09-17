@@ -115,7 +115,7 @@ test('portal verifier requires semantic Description blocks and inline marks', as
   const expected = {
     blocks: [
       { type: 'heading', level: 2, runs: [{ text: 'Included Profiles' }] },
-      { type: 'paragraph', runs: [{ text: 'Run ' }, { text: 'Solo', marks: ['bold'] }, { text: ' now.' }] },
+      { type: 'paragraph', runs: [{ text: 'Run ' }, { text: 'Solo', marks: ['bold', 'italic'] }, { text: ' now.' }] },
       { type: 'unordered_list', items: [[{ text: 'Listen Server', marks: ['italic'] }], [{ text: 'Bad Network', marks: ['underline'] }]] },
       { type: 'ordered_list', items: [[{ text: 'Open editor.' }], [{ text: 'Run profile.' }]] },
       { type: 'paragraph', runs: [{ text: 'Support: https://example.com/support' }] },
@@ -124,6 +124,10 @@ test('portal verifier requires semantic Description blocks and inline marks', as
   const manifest = makeManifest({ longDescription: richTextToPlainText(expected), descriptionRichText: expected });
   const matching = await scenario({ manifest });
   assert.equal(matching.result.comparison.fields.find((field) => field.manifestJsonPath === 'descriptionRichText').classification, 'MATCH');
+  const reverseNested = structuredClone(expected);
+  reverseNested.blocks[1].runs[1].marks = ['italic', 'bold'];
+  const reverseNestedResult = await scenario({ manifest, state: { descriptionRichText: reverseNested } });
+  assert.equal(reverseNestedResult.result.comparison.fields.find((field) => field.manifestJsonPath === 'descriptionRichText').classification, 'MATCH');
   const plainHeading = await scenario({ manifest, state: { descriptionRichText: { blocks: [{ type: 'paragraph', runs: [{ text: 'Included Profiles' }] }] } } });
   assert.equal(plainHeading.result.comparison.fields.find((field) => field.manifestJsonPath === 'descriptionRichText').classification, 'MISMATCH');
   const plainBold = await scenario({
@@ -172,6 +176,19 @@ test('portal verifier compares generated Additional information semantics', asyn
   assert.equal(matching.result.result, 'PASS');
   const flattened = await scenario({ manifest, state: { additionalInformationRichText: { blocks: [{ type: 'paragraph', runs: [{ text: 'Features\n- Reusable profiles\n- Network emulation' }] }] } } });
   assert.equal(flattened.result.comparison.fields.find((field) => field.manifestJsonPath === 'additionalInformationRichText' && field.view === 'format').classification, 'MISMATCH');
+});
+
+test('rich editor discovery is field-scoped with multiple visible contenteditables', async () => {
+  const manifest = makeManifest();
+  const description = await scenario({ manifest, state: { faqAnswerContenteditable: true } });
+  assert.equal(description.result.comparison.fields.find((field) => field.manifestJsonPath === 'descriptionRichText').classification, 'MATCH');
+  assert.equal(description.result.comparison.fields.find((field) => field.manifestJsonPath === 'faqs').classification, 'MATCH');
+  assert.equal(description.result.comparison.fields.find((field) => field.manifestJsonPath === 'descriptionRichText').candidateLocator.strategy, 'semantic-contenteditable');
+
+  const additional = await scenario({ manifest, state: { additionalExtraContenteditable: true } });
+  const additionalField = additional.result.comparison.fields.find((field) => field.manifestJsonPath === 'additionalInformationRichText' && field.view === 'format');
+  assert.equal(additionalField.classification, 'MATCH');
+  assert.equal(additionalField.candidateLocator.strategy, 'semantic-contenteditable');
 });
 
 

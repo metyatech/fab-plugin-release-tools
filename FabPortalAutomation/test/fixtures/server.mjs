@@ -38,7 +38,7 @@ function pageMarkup(state, listingId) {
   const statusMarkup = state.statusRendering === 'plain-text'
     ? `<div data-status-value>${html(state.status)}</div>`
     : `<div data-testid="listing-status" data-status-value>${html(state.status)}</div>`;
-  const faqMarkup = `<section aria-labelledby="fixture-faq-heading"><h2 id="fixture-faq-heading">FAQs</h2>${(state.faqs ?? []).map((faq) => `<article data-faq-item><h3 data-faq-question>${html(faq.question)}</h3><p data-faq-answer>${html(faq.answer)}</p></article>`).join('')}</section>`;
+  const faqMarkup = `<section aria-labelledby="fixture-faq-heading"><h2 id="fixture-faq-heading">FAQs</h2>${(state.faqs ?? []).map((faq) => `<article data-faq-item><h3 data-faq-question>${html(faq.question)}</h3><p data-faq-answer>${html(faq.answer)}</p>${state.faqAnswerContenteditable ? '<div role="textbox" aria-label="FAQ answer editor" contenteditable="true"><p>FAQ editor companion</p></div>' : ''}</article>`).join('')}</section>`;
   const listingControls = `
     <h1>${html(state.title)}</h1>
     ${statusMarkup}
@@ -76,6 +76,7 @@ function pageMarkup(state, listingId) {
       <p>Documentation: ${html(state.documentationUrl)}</p>
       <p>Support: ${html(state.supportUrl)}</p>
       <div ${state.technicalInformationNoLabel ? '' : 'aria-label="Technical Information" '}contenteditable="true">${state.additionalInformationRichText ? semanticRichText(state.additionalInformationRichText) : richText(state.technicalInformationText)}</div>
+      ${state.additionalExtraContenteditable ? '<div role="textbox" aria-label="Additional note" contenteditable="true"><p>Additional editor companion</p></div>' : ''}
     </section>
     <section data-testid="media-gallery" data-existing="${html(state.mediaExisting)}" data-order="${html(state.mediaOrder ?? '')}" data-upload-order="${html(initialStateMediaOrder(state))}">${html(state.mediaExisting === 'existing' ? 'Existing media' : state.mediaExisting === 'known' || state.mediaExisting === 'uploaded' ? '001 thumbnail 002 gallery' : 'Empty gallery')}</section>
     <input type="file" data-testid="media-upload" multiple>`;

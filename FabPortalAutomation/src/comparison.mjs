@@ -196,17 +196,17 @@ function semanticState(current, desired, { rich = false } = {}) {
 
 async function compareRichTextField(page, field, desired, labelName, view, { visibleText = null } = {}) {
   if (fieldView(field) !== view) return lifecycleField(field, labelName, desired, 'NOT_APPLICABLE', `${labelName} is owned by the ${fieldView(field)} view.`, view);
-  const editor = await visibleContentEditor(page);
+  const editor = await visibleContentEditor(page, field);
   if (!editor) return lifecycleField(field, labelName, desired, 'NOT_VISIBLE', `The visible ${labelName} editor was not uniquely readable.`, view);
   let actual;
   try {
     actual = await readRichTextFromEditor(editor.locator);
   } catch (error) {
-    return fieldResult({ manifestJsonPath: field, portalLabel: labelName, desired, current: null, state: 'MISMATCH', resolved: contentEditorResolution(), editableControlAvailable: false, notes: error.message, writeTarget: null });
+    return fieldResult({ manifestJsonPath: field, portalLabel: labelName, desired, current: null, state: 'MISMATCH', resolved: contentEditorResolution(field), editableControlAvailable: false, notes: error.message, writeTarget: null });
   }
   const textMatches = visibleText === null || normalizeRichText(actual.visibleText) === normalizeRichText(visibleText);
   const state = textMatches ? compareRichText(actual.model, desired) : 'MISMATCH';
-  return fieldResult({ manifestJsonPath: field, portalLabel: labelName, desired, current: actual.model, state, resolved: contentEditorResolution(), editableControlAvailable: false, notes: textMatches ? 'Semantic block and inline marks were read from the persisted contenteditable DOM.' : 'Semantic formatting was read, but its buyer-visible text does not match the source description.', writeTarget: null });
+  return fieldResult({ manifestJsonPath: field, portalLabel: labelName, desired, current: actual.model, state, resolved: contentEditorResolution(field), editableControlAvailable: false, notes: textMatches ? 'Semantic block and inline marks were read from the persisted contenteditable DOM.' : 'Semantic formatting was read, but its buyer-visible text does not match the source description.', writeTarget: null });
 }
 
 async function compareTextField(page, manifest, field, labelName = field, options = {}) {
@@ -305,10 +305,38 @@ async function compareLicense(page, manifest) {
   return fieldResult({ manifestJsonPath: 'license', portalLabel: 'Standard License (Free or Paid)', desired: manifest.license, current: selected, state, resolved, editableControlAvailable: value.visible && value.editable && !value.disabled, notes: selected ? '' : 'License selection was not safely readable.', writeTarget: null });
 }
 
-async function visibleContentEditor(page) {
+async function visibleContentEditor(page, field) {
   const locator = page.locator('[contenteditable="true"]');
+  const candidateIndexes = await locator.evaluateAll((elements, targetField) => {
+    const normalized = (value) => String(value ?? '').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+    const contextFor = (element) => {
+      const values = [];
+      for (let node = element; node; node = node.parentElement) {
+        const labelledBy = node.getAttribute?.('aria-labelledby');
+        const labelledText = labelledBy ? labelledBy.split(/\s+/).map((id) => document.getElementById(id)?.textContent ?? '').join(' ') : '';
+        values.push(node.getAttribute?.('aria-label') ?? '', labelledText);
+        if (node !== element && ['LABEL', 'SECTION', 'FIELDSET'].includes(node.tagName)) values.push(node.textContent ?? '');
+      }
+      return normalized(values.join(' '));
+    };
+    const matchesField = (element, useContext) => {
+      const direct = normalized(`${element.getAttribute('aria-label') ?? ''} ${element.getAttribute('role') ?? ''}`);
+      const context = contextFor(element);
+      if (targetField === 'descriptionRichText') {
+        return direct === 'description *' || (useContext && /description\s*\*/i.test(context));
+      }
+      if (targetField === 'additionalInformationRichText') {
+        return /^(additional information|technical information|technical details)(?: textbox)?$/i.test(direct) ||
+          (useContext && /additional information|technical information|technical details/i.test(context));
+      }
+      return false;
+    };
+    const directIndexes = elements.map((element, index) => matchesField(element, false) ? index : -1).filter((index) => index >= 0);
+    if (directIndexes.length > 0) return directIndexes;
+    return elements.map((element, index) => matchesField(element, true) ? index : -1).filter((index) => index >= 0);
+  }, field);
   const visibleIndexes = [];
-  for (let index = 0; index < await locator.count(); index += 1) {
+  for (const index of candidateIndexes) {
     if (await locator.nth(index).isVisible().catch(() => false)) visibleIndexes.push(index);
   }
   if (visibleIndexes.length !== 1) return null;
@@ -319,7 +347,7 @@ async function visibleContentEditor(page) {
 async function compareDescriptionLinksField(page, manifest, view = 'listing') {
   const desired = manifest.descriptionLinks ?? [];
   if (view !== 'listing') return lifecycleField('descriptionLinks', 'Description links', desired, 'NOT_APPLICABLE', 'Description links are owned by the listing Description editor.', view);
-  const editor = await visibleContentEditor(page);
+  const editor = await visibleContentEditor(page, 'descriptionRichText');
   if (!editor) return lifecycleField('descriptionLinks', 'Description links', desired, 'NOT_VISIBLE', 'The visible Description editor was not uniquely readable.', view);
   const anchors = editor.locator.locator('a');
   const observed = [];
@@ -341,7 +369,7 @@ async function compareDescriptionLinksField(page, manifest, view = 'listing') {
     desired,
     current: observed,
     state,
-    resolved: contentEditorResolution(),
+    resolved: contentEditorResolution('descriptionRichText'),
     editableControlAvailable: false,
     notes: state === 'MATCH' ? 'Actual persisted anchors were read from the visible Description editor.' : 'Only actual anchors in the visible Description editor were compared; URL-looking plain text is not a link.',
     writeTarget: null,
@@ -380,15 +408,18 @@ async function compareFaqs(page, manifest, view = 'listing') {
   return fieldResult({ manifestJsonPath: 'faqs', portalLabel: 'FAQs', desired: manifest.faqs, current: actual, state: compareFaqValues(actual, manifest.faqs), resolved: { metadata: { strategy: 'dom-semantic', expression: 'FAQ heading with scoped question/answer items', matchCount: actual.length, unique: true, confidence: 'medium' } }, editableControlAvailable: false, notes: 'FAQ count, order, question, and answer were read from the visible listing DOM.', writeTarget: null });
 }
 
-function contentEditorResolution() {
+function contentEditorResolution(field) {
+  const description = field === 'descriptionRichText';
   return {
     metadata: {
-      strategy: 'contenteditable',
-      expression: 'page.locator(\'[contenteditable="true"]\')',
+      strategy: 'semantic-contenteditable',
+      expression: description
+        ? 'contenteditable in the semantic Description * field'
+        : 'contenteditable in the semantic Additional information / Technical Information section',
       matchCount: 1,
       unique: true,
       confidence: 'high',
-      reason: 'Stable semantic contenteditable editor uniquely matched the visible format section.',
+      reason: 'Field-scoped semantic DOM relationship selected the editor; generated CSS/classes are not used.',
     },
   };
 }
@@ -396,10 +427,10 @@ function contentEditorResolution() {
 async function compareLabeledTechnicalUrl(page, manifest, field, labelName) {
   const desired = manifest[field];
   if (!await isFormatView(page)) return null;
-  const editor = await visibleContentEditor(page);
+  const editor = await visibleContentEditor(page, 'additionalInformationRichText');
   const escaped = desired.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   if (editor && new RegExp(`${labelName}\\s*:\\s*${escaped}`, 'i').test(normalizeText(editor.text))) {
-    return fieldResult({ manifestJsonPath: field, portalLabel: labelName, desired, current: desired, state: 'MATCH', resolved: contentEditorResolution(), editableControlAvailable: false, notes: `Exact ${labelName} URL was readable in the visible Technical details editor.` });
+    return fieldResult({ manifestJsonPath: field, portalLabel: labelName, desired, current: desired, state: 'MATCH', resolved: contentEditorResolution('additionalInformationRichText'), editableControlAvailable: false, notes: `Exact ${labelName} URL was readable in the visible Technical details editor.` });
   }
   const staticValue = page.getByText(`${labelName}: ${desired}`, { exact: true });
   if (await staticValue.count() === 1 && await staticValue.isVisible().catch(() => false)) {
@@ -411,7 +442,7 @@ async function compareLabeledTechnicalUrl(page, manifest, field, labelName) {
 async function compareTechnicalInformation(page, manifestInfo, view = 'listing') {
   const base = await compareTextField(page, manifestInfo.manifest, 'technicalInformationFile', 'Technical Information', { desiredOverride: manifestInfo.technicalInformationText, rich: true, view });
   if (!await isFormatView(page)) return base;
-  const editor = await visibleContentEditor(page);
+  const editor = await visibleContentEditor(page, 'additionalInformationRichText');
   if (!editor) return base;
   const desired = manifestInfo.technicalInformationText;
   let current = editor.text;
@@ -430,7 +461,7 @@ async function compareTechnicalInformation(page, manifestInfo, view = 'listing')
   const writeTarget = editable && !disabled
     ? writeTargetFor('technicalInformationFile', view, { strategy: 'contenteditable', expression: 'page.locator(\'[contenteditable="true"]\')', field: 'technicalInformationFile', locator: { strategy: 'contenteditable', selector: '[contenteditable="true"]' } })
     : null;
-  return fieldResult({ manifestJsonPath: 'technicalInformationFile', portalLabel: 'Technical Information', desired, current, state, resolved: contentEditorResolution(), editableControlAvailable: editable && !disabled, notes: 'Read from the visible Technical details contenteditable editor; the manifest file path remains provenance only.', writeTarget });
+  return fieldResult({ manifestJsonPath: 'technicalInformationFile', portalLabel: 'Technical Information', desired, current, state, resolved: contentEditorResolution('additionalInformationRichText'), editableControlAvailable: editable && !disabled, notes: 'Read from the field-scoped Technical details contenteditable editor; the manifest file path remains provenance only.', writeTarget });
 }
 
 export async function compareManifest(page, manifestInfo, { view = 'listing' } = {}) {

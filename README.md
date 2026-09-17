@@ -135,8 +135,9 @@ case-insensitively. This is a breaking contract change for existing product
 repositories. The optional `description_rich_text` migration field is a
 semantic (not raw HTML) model using `paragraph`, `heading`, `unordered_list`,
 or `ordered_list` blocks and plain-text, `bold`, `italic`, `underline`, or
-HTTPS `link` runs. Its visible text must match `long_description`, and link
-runs must match `description_links`.
+HTTPS `link` runs. Marks are a semantic set and are normalized to the canonical
+`bold`, `italic`, `underline`, `link` order. Its visible text must match
+`long_description`, and link runs must match `description_links`.
 For example, a formatted Description and its required FAQ are authored as
 semantic data:
 
@@ -479,6 +480,11 @@ HTTPS anchor is a mismatch. For Additional information, the agent opens the
 Unreal Engine format, applies the generated structure, and observes it the
 same way. The shared tool performs no editor, FAQ, Save Draft, Submit, or
 publication writes.
+
+Editor discovery is field-scoped: Description uses the semantic `Description *`
+field, while Additional information uses the semantic Additional information /
+Technical Information section. Other visible `contenteditable` elements, such
+as FAQ answer editors, are not treated as the target editor.
 
 Fab Draft editing uses autosave. There is no separate Save Draft step in the
 supported workflow. After an interactive agent edits a field:

@@ -1,5 +1,6 @@
 const BLOCK_TYPES = new Set(['paragraph', 'heading', 'unordered_list', 'ordered_list']);
 const INLINE_MARKS = new Set(['bold', 'italic', 'underline', 'link']);
+export const MARK_ORDER = ['bold', 'italic', 'underline', 'link'];
 
 function fail(field, message) {
   throw new Error(`${field} is invalid: ${message}`);
@@ -19,6 +20,10 @@ function requireText(value, field) {
   if (typeof value !== 'string' || value.trim() === '') fail(field, 'text must be non-blank');
 }
 
+function canonicalizeMarks(marks) {
+  return [...marks].sort((left, right) => MARK_ORDER.indexOf(left) - MARK_ORDER.indexOf(right));
+}
+
 function normalizeHref(value, field) {
   requireText(value, field);
   let url;
@@ -36,14 +41,15 @@ function validateRun(run, field) {
     fail(`${field}.marks`, 'must contain only supported marks');
   }
   if (new Set(marks).size !== marks.length) fail(`${field}.marks`, 'must not contain duplicates');
-  const linked = marks.includes('link');
+  const canonicalMarks = canonicalizeMarks(marks);
+  const linked = canonicalMarks.includes('link');
   if (linked) {
     if (!Object.prototype.hasOwnProperty.call(run, 'href')) fail(field, 'link runs require href');
     run.href = normalizeHref(run.href, `${field}.href`);
   } else if (Object.prototype.hasOwnProperty.call(run, 'href')) {
     fail(field, 'href is only allowed on link runs');
   }
-  return { text: run.text, ...(marks.length ? { marks: [...marks] } : {}), ...(linked ? { href: run.href } : {}) };
+  return { text: run.text, ...(canonicalMarks.length ? { marks: canonicalMarks } : {}), ...(linked ? { href: run.href } : {}) };
 }
 
 function validateRuns(value, field) {
@@ -126,22 +132,15 @@ function normalizeVisibleText(value) {
     .replace(/\n{3,}/g, '\n\n').trim();
 }
 
-function mergeRuns(runs) {
-  const merged = [];
-  for (const run of runs) {
-    const previous = merged.at(-1);
-    if (previous && sameJson(previous.marks ?? [], run.marks ?? []) && previous.href === run.href) previous.text += run.text;
-    else merged.push(run);
-  }
-  return merged;
-}
-
 function parseEditorDom(root) {
   const unsupported = (message) => ({ unsupported: message });
+  const markOrder = ['bold', 'italic', 'underline', 'link'];
+  const canonicalize = (marks) => [...marks].sort((left, right) => markOrder.indexOf(left) - markOrder.indexOf(right));
   const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
   const mergeSemanticRuns = (runs) => {
     const merged = [];
     for (const run of runs) {
+      if (run.marks) run.marks = canonicalize(run.marks);
       const previous = merged.at(-1);
       if (previous && same(previous.marks ?? [], run.marks ?? []) && previous.href === run.href) previous.text += run.text;
       else merged.push(run);

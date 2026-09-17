@@ -5,6 +5,14 @@ Keep a Changelog and the project uses Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-09-17
+
+- Canonicalized rich-text marks to the stable `bold`, `italic`, `underline`,
+  `link` order so equivalent mark sets compare identically.
+- Scoped Description and Additional information editor discovery to their
+  semantic fields, including regression coverage for multiple visible editors.
+- Aligned all rich-text schemas with runtime href/link-mark requirements.
+
 ## [0.8.0] - 2026-09-17
 
 - Added a semantic rich-text contract for Description and generated

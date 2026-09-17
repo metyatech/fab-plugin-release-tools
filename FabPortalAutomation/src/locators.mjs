@@ -84,13 +84,17 @@ export async function resolveCandidate(page, candidates) {
 const role = (name, type) => candidate('getByRole', `${type}:${name}`, (page) => page.getByRole(type, { name, exact: true }), { expression: `page.getByRole("${type}", { name: ${JSON.stringify(name)}, exact: true })`, locator: { strategy: 'getByRole', role: type, name, exact: true } });
 const label = (name) => candidate('getByLabel', name, (page) => page.getByLabel(name, { exact: true }), { locator: { strategy: 'getByLabel', name, exact: true } });
 const text = (name, confidence = 'medium') => candidate('getByText', name, (page) => page.getByText(name, { exact: true }), { confidence, reason: 'Visible static value locator; not a generated CSS selector.', locator: { strategy: 'getByText', text: name, exact: true } });
-const contentEditable = () => candidate('contenteditable', '[contenteditable="true"]', (page) => page.locator('[contenteditable="true"]'), { expression: 'page.locator(\'[contenteditable="true"]\')', reason: 'Stable semantic contenteditable locator uniquely matches the visible editor.', locator: { strategy: 'contenteditable', selector: '[contenteditable="true"]' } });
+const semanticContentEditable = (field, contextPattern, contextDescription) => candidate('semantic-contenteditable', field, (page) => page.locator('label,section,fieldset').filter({ hasText: contextPattern }).locator('[contenteditable="true"]'), {
+  expression: `page.locator('label, section, fieldset').filter({ hasText: ${JSON.stringify(contextDescription)} }).locator('[contenteditable="true"]')`,
+  reason: 'Semantic field/section relationship scopes the contenteditable editor; generated CSS/classes are not used.',
+  locator: { strategy: 'semantic-contenteditable', field },
+});
 
 export function fieldCandidates(field, manifest = {}) {
   switch (field) {
     case 'title': return [label('Title *'), label('Title'), role('Title *', 'textbox'), role('Title', 'textbox'), text(manifest.title)];
     case 'shortDescription': return [label('Short description *'), label('Short description'), role('Short description *', 'textbox')];
-    case 'longDescription': return [label('Description *'), label('Description'), role('Description *', 'textbox'), contentEditable()];
+    case 'longDescription': return [label('Description *'), label('Description'), role('Description *', 'textbox'), semanticContentEditable('descriptionRichText', /Description\s*\*/i, 'Description *')];
     case 'productType': return [label('Product type *'), label('Product type'), role('Product type *', 'combobox'), text(manifest.productType)];
     case 'category': return [role('Category selection', 'combobox'), label('Category *'), label('Category')];
     case 'tags': return [label('Tags *'), label('Tags'), role('Tags *', 'combobox')];

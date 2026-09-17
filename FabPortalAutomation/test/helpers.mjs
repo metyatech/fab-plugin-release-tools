@@ -94,6 +94,8 @@ export function fixtureState(manifest, overrides = {}) {
     challengeVisible: false,
     challengeAfterFirstMutation: false,
     challengeOnReadOnlyExpansion: false,
+    faqAnswerContenteditable: false,
+    additionalExtraContenteditable: false,
     ...overrides,
   };
 }

@@ -145,7 +145,7 @@
       "properties": { "text": { "type": "string", "minLength": 1 }, "marks": { "type": "array", "uniqueItems": true, "items": { "enum": ["bold", "italic", "underline", "link"] } }, "href": { "type": "string", "format": "uri", "pattern": "^https://" } },
       "allOf": [
         { "if": { "properties": { "marks": { "contains": { "const": "link" } } }, "required": ["marks"] }, "then": { "required": ["href"] } },
-        { "if": { "required": ["href"] }, "then": { "properties": { "marks": { "contains": { "const": "link" } } } } }
+        { "if": { "required": ["href"] }, "then": { "required": ["marks"], "properties": { "marks": { "contains": { "const": "link" } } } } }
       ]
     }
   }

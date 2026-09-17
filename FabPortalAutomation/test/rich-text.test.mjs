@@ -18,6 +18,16 @@ test('rich text model supports the approved blocks and inline marks', () => {
   assert.equal(compareRichText(structuredClone(formatted), formatted), 'MATCH');
 });
 
+test('canonicalizes mark order while preserving mark-set differences', () => {
+  const reversed = {
+    blocks: [{ type: 'paragraph', runs: [{ text: 'Solo', marks: ['italic', 'bold'] }] }],
+  };
+  const canonical = validateRichText(reversed);
+  assert.deepEqual(canonical.blocks[0].runs[0].marks, ['bold', 'italic']);
+  assert.equal(compareRichText(reversed, { blocks: [{ type: 'paragraph', runs: [{ text: 'Solo', marks: ['bold', 'italic'] }] }] }), 'MATCH');
+  assert.equal(compareRichText(reversed, { blocks: [{ type: 'paragraph', runs: [{ text: 'Solo', marks: ['bold'] }] }] }), 'MISMATCH');
+});
+
 test('rich text comparison rejects flattened or semantically different content', () => {
   assert.equal(compareRichText({ blocks: [{ type: 'paragraph', runs: [{ text: 'Included Profiles' }] }] }, formatted), 'MISMATCH');
   assert.equal(compareRichText({ blocks: [{ type: 'paragraph', runs: [{ text: '- Listen Server' }] }] }, { blocks: [{ type: 'unordered_list', items: [[{ text: 'Listen Server' }]] }] }), 'MISMATCH');
