@@ -1,4 +1,4 @@
-# Copyright (c) 2026 metyatech. All rights reserved.
+﻿# Copyright (c) 2026 metyatech. All rights reserved.
 
 <#
 .SYNOPSIS
@@ -122,7 +122,133 @@ function Import-FabProductListingJson {
     catch {
         throw "Listing fields do not conform to FabListingFields.schema.json: $ListingPath. $($_.Exception.Message)"
     }
-    return Read-FabProductJson -Path $ListingPath
+    $listing = Read-FabProductJson -Path $ListingPath
+    [void](Assert-FabListingFaq -Listing $listing)
+    return $listing
+}
+
+function Get-FabProductRichTextPlainText {
+    param(
+        [Parameter(Mandatory)]
+        [object]$RichText
+    )
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    foreach ($block in @($RichText.blocks)) {
+        $type = [string]$block.type
+        if ($type -in @('paragraph', 'heading')) {
+            $lines.Add(([string]::Join('', @($block.runs | ForEach-Object { [string]$_.text }))))
+        }
+        else {
+            $itemIndex = 1
+            foreach ($item in @($block.items)) {
+                $prefix = if ($type -eq 'unordered_list') { '- ' } else { "$itemIndex. " }
+                $lines.Add($prefix + [string]::Join('', @($item | ForEach-Object { [string]$_.text })))
+                $itemIndex++
+            }
+        }
+        $lines.Add('')
+    }
+    while ($lines.Count -gt 0 -and $lines[$lines.Count - 1] -eq '') { $lines.RemoveAt($lines.Count - 1) }
+    return [string]::Join("`n", $lines)
+}
+
+function Assert-FabProductRichText {
+    param(
+        [Parameter(Mandatory)]
+        [object]$RichText,
+
+        [Parameter(Mandatory)]
+        [string]$LongDescription,
+
+        [object[]]$DescriptionLinks = @(),
+
+        [string]$FieldName = 'description_rich_text'
+    )
+
+    if ($null -eq $RichText -or $RichText -is [System.Array] -or $null -eq $RichText.PSObject.Properties['blocks']) {
+        throw "$FieldName must contain a blocks array."
+    }
+    $blocks = @($RichText.blocks)
+    if ($blocks.Count -eq 0) { throw "$FieldName.blocks must not be empty." }
+    $links = [System.Collections.Generic.List[string]]::new()
+    foreach ($block in $blocks) {
+        $type = [string]$block.type
+        if ($type -notin @('paragraph', 'heading', 'unordered_list', 'ordered_list')) {
+            throw "$FieldName contains an unsupported block type: $type"
+        }
+        if ($type -eq 'heading') {
+            $level = 0
+            if (-not [int]::TryParse([string]$block.level, [ref]$level) -or $level -lt 1 -or $level -gt 6) {
+                throw "$FieldName heading levels must be integers from 1 to 6."
+            }
+        }
+        $groups = if ($type -in @('paragraph', 'heading')) { @(@($block.runs)) } else { @($block.items) }
+        if ($groups.Count -eq 0) { throw "$FieldName $type must contain content." }
+        foreach ($group in $groups) {
+            if (@($group).Count -eq 0) { throw "$FieldName contains an empty run group." }
+            foreach ($run in @($group)) {
+                $runNames = @($run.PSObject.Properties.Name)
+                if ($runNames | Where-Object { $_ -notin @('text', 'marks', 'href') }) { throw "$FieldName run contains an unsupported property." }
+                if ([string]::IsNullOrWhiteSpace([string]$run.text)) { throw "$FieldName run text must be non-blank." }
+                $marksProperty = $run.PSObject.Properties['marks']
+                $marks = if ($null -eq $marksProperty) { @() } else { @($run.marks) }
+                if (@($marks | Where-Object { $_ -notin @('bold', 'italic', 'underline', 'link') }).Count -gt 0) { throw "$FieldName contains an unsupported inline mark." }
+                if (@($marks | Sort-Object -Unique).Count -ne $marks.Count) { throw "$FieldName inline marks must be unique." }
+                $hasHref = $null -ne $run.PSObject.Properties['href']
+                if ($marks -contains 'link') {
+                    if (-not $hasHref -or [string]$run.href -cnotmatch '^https://') { throw "$FieldName link runs require an absolute HTTPS href." }
+                    $links.Add(([string]$run.text + "`0" + [string]$run.href))
+                }
+                elseif ($hasHref) { throw "$FieldName href is only allowed on link runs." }
+            }
+        }
+    }
+    $derived = Get-FabProductRichTextPlainText -RichText $RichText
+    $normalize = { param($value) ([string]$value).Replace("`r`n", "`n").Replace("`r", "`n").Trim() }
+    if (& $normalize $derived -cne (& $normalize $LongDescription)) {
+        throw "$FieldName visible text must structurally match long_description."
+    }
+    $expected = @($DescriptionLinks | ForEach-Object { ([string]$_.text + "`0" + [string]$_.href) })
+    if ([string]::Join("`n", $links) -cne [string]::Join("`n", $expected)) {
+        throw "$FieldName link marks must match description_links."
+    }
+    return $RichText
+}
+
+function ConvertTo-FabAdditionalInformationRichText {
+    param(
+        [Parameter(Mandatory)]
+        [object]$Metadata
+    )
+
+    $technical = $Metadata.technicalInformation
+    $run = { param([string]$Text) [ordered]@{ text = $Text } }
+    $blocks = [System.Collections.Generic.List[object]]::new()
+    $blocks.Add([ordered]@{ type = 'paragraph'; runs = @(& $run ("Product: $($Metadata.product)")) })
+    $blocks.Add([ordered]@{ type = 'heading'; level = 2; runs = @(& $run 'Features') })
+    $blocks.Add([ordered]@{ type = 'unordered_list'; items = @($technical.features | ForEach-Object { ,@(& $run ([string]$_)) }) })
+    $blocks.Add([ordered]@{ type = 'heading'; level = 2; runs = @(& $run 'Code Modules') })
+    $blocks.Add([ordered]@{ type = 'unordered_list'; items = @($technical.codeModules | ForEach-Object { ,@(& $run ("$($_.name) ($($_.type)): $($_.description)")) }) })
+    $networkReplicated = if ($technical.networkReplicated) { 'Yes' } else { 'No' }
+    $dependencies = if (@($technical.dependencies).Count -eq 0) { 'None' } else { [string]::Join(', ', @($technical.dependencies)) }
+    $prerequisites = if (@($technical.prerequisites).Count -eq 0) { 'None' } else { [string]::Join(', ', @($technical.prerequisites)) }
+    $example = if ($null -eq $technical.exampleProjectUrl) { 'Not applicable' } else { [string]$technical.exampleProjectUrl }
+    $detailValues = @(
+        "Number of Blueprints: $($technical.numberOfBlueprints)",
+        "Number of C++ Classes: $($technical.numberOfCppClasses)",
+        "Network Replicated: $networkReplicated",
+        "Network Replication Notes: $($technical.networkReplicationNotes)",
+        "Supported Development Platforms: $([string]::Join(', ', @($technical.supportedDevelopmentPlatforms)))",
+        "Supported Target Build Platforms: $([string]::Join(', ', @($technical.supportedTargetBuildPlatforms)))",
+        "Dependencies: $dependencies",
+        "Prerequisites: $prerequisites",
+        "Documentation: $($technical.documentationUrl)",
+        "Example Project: $example — $($technical.exampleProjectNotes)",
+        "Additional Notes: $($technical.additionalNotes)"
+    )
+    $blocks.Add([ordered]@{ type = 'paragraph'; runs = @(& $run ([string]::Join("`n", $detailValues))) })
+    return [ordered]@{ blocks = $blocks.ToArray() }
 }
 
 function Assert-FabProductText {
@@ -430,6 +556,12 @@ function Import-FabProductListing {
     $shortDescription = Assert-FabProductText -Object $listing -Name 'short_description'
     $longDescription = Assert-FabProductText -Object $listing -Name 'long_description'
     $descriptionLinks = @(ConvertTo-FabProductDescriptionLink -Object $listing -LongDescription $longDescription)
+    $descriptionRichText = $null
+    $richProperty = $listing.PSObject.Properties['description_rich_text']
+    if ($null -ne $richProperty) {
+        $descriptionRichText = Assert-FabProductRichText -RichText $richProperty.Value `
+            -LongDescription $longDescription -DescriptionLinks $descriptionLinks
+    }
     $listingVersionLabels = @(ConvertTo-FabProductStringArray -Object $listing -Name 'engine_versions')
     $listingVersions = @($listingVersionLabels | ForEach-Object {
             ConvertTo-FabProductEngineVersion -Value $_
@@ -530,6 +662,8 @@ function Import-FabProductListing {
         ShortDescription        = $shortDescription
         LongDescription         = $longDescription
         DescriptionLinks        = $descriptionLinks
+        DescriptionRichText     = $descriptionRichText
+        Faqs                    = @(Assert-FabListingFaq -Listing $listing)
         ProductType             = [string]$listing.product_type
         Category                = [string]$listing.category
         Subcategory             = $subcategory
@@ -1921,6 +2055,12 @@ function Invoke-FabProductReleaseCore {
             }
         }
         Write-FabProductTextFile -Path (Join-Path $submissionRoot 'FabTechnicalInformation.txt') -Text $technicalText
+        $metadataPath = Join-Path $resolvedPluginPath 'FabSubmissionMetadata.json'
+        if (-not [System.IO.File]::Exists($metadataPath)) {
+            throw 'FabSubmissionMetadata.json is required to derive Additional information rich text.'
+        }
+        $metadata = Read-FabProductJson -Path $metadataPath
+        $additionalInformationRichText = ConvertTo-FabAdditionalInformationRichText -Metadata $metadata
         if ($tpsValidationEnabled) {
             foreach ($name in @('FabTpsSubmission.txt', 'FabTpsSubmission.json')) {
                 [System.IO.File]::Copy(
@@ -1942,6 +2082,8 @@ function Invoke-FabProductReleaseCore {
             shortDescription         = $listing.ShortDescription
             longDescription          = $listing.LongDescription
             descriptionLinks         = @($listing.DescriptionLinks)
+            faqs                     = @($listing.Faqs)
+            additionalInformationRichText = $additionalInformationRichText
             productType              = $listing.ProductType
             category                 = $listing.Category
             subcategory              = @($listing.Subcategory)
@@ -1970,6 +2112,9 @@ function Invoke-FabProductReleaseCore {
                 reviewId = $mediaApproval.ReviewId
             }
             generatedAtUtc           = [DateTimeOffset]::UtcNow.ToString('O')
+        }
+        if ($null -ne $listing.DescriptionRichText) {
+            $manifest.descriptionRichText = $listing.DescriptionRichText
         }
         $manifestPath = Join-Path $stagingRoot 'FabPortalSubmission.json'
         Write-FabProductTextFile -Path $manifestPath `

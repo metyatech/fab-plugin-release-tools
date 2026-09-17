@@ -30,7 +30,8 @@
     "documentation_url",
     "support_url",
     "source_repository_url",
-    "media_order"
+    "media_order",
+    "faqs"
   ],
   "properties": {
     "schema_version": { "type": ["string", "number"] },
@@ -47,6 +48,7 @@
       "type": "array",
       "items": { "$ref": "#/definitions/descriptionLink" }
     },
+    "description_rich_text": { "$ref": "#/definitions/richText" },
     "product_type": { "type": "string", "minLength": 1 },
     "category": { "type": "string", "minLength": 1 },
     "subcategory": {
@@ -87,6 +89,11 @@
       "minItems": 2,
       "items": { "type": "string", "minLength": 1 }
     },
+    "faqs": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/faq" }
+    },
     "project_file_link": { "$ref": "#/definitions/httpsUrl" },
     "project_file_links": {
       "type": "object",
@@ -111,6 +118,78 @@
         "text": { "type": "string", "minLength": 1 },
         "href": { "$ref": "#/definitions/httpsUrl" }
       }
+    },
+    "faq": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["question", "answer"],
+      "properties": {
+        "question": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "answer": { "type": "string", "minLength": 1, "pattern": "\\S" }
+      }
+    },
+    "richText": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["blocks"],
+      "properties": { "blocks": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/richBlock" } } }
+    },
+    "richBlock": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "runs"],
+          "properties": {
+            "type": { "const": "paragraph" },
+            "runs": { "$ref": "#/definitions/richRuns" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "level", "runs"],
+          "properties": {
+            "type": { "const": "heading" },
+            "level": { "type": "integer", "minimum": 1, "maximum": 6 },
+            "runs": { "$ref": "#/definitions/richRuns" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "items"],
+          "properties": {
+            "type": { "enum": ["unordered_list", "ordered_list"] },
+            "items": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/richRuns" } }
+          }
+        }
+      ]
+    },
+    "richRuns": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/richRun" }
+    },
+    "richRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text"],
+      "properties": {
+        "text": { "type": "string", "minLength": 1 },
+        "marks": { "type": "array", "uniqueItems": true, "items": { "enum": ["bold", "italic", "underline", "link"] } },
+        "href": { "$ref": "#/definitions/httpsUrl" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "marks": { "contains": { "const": "link" } } }, "required": ["marks"] },
+          "then": { "required": ["href"] }
+        },
+        {
+          "if": { "required": ["href"] },
+          "then": { "properties": { "marks": { "contains": { "const": "link" } } } }
+        }
+      ]
     }
   }
 }

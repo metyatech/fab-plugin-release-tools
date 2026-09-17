@@ -98,6 +98,22 @@ test('runtime manifest validation requires non-blank descriptions', async () => 
   }
 });
 
+test('runtime manifest validation requires ordered non-blank unique FAQs', async () => {
+  for (const mutation of [
+    (manifest) => { delete manifest.faqs; },
+    (manifest) => { manifest.faqs = []; },
+    (manifest) => { manifest.faqs[0].question = '  '; },
+    (manifest) => { manifest.faqs[0].answer = ''; },
+    (manifest) => { manifest.faqs.push({ question: 'IS THIS A FIXTURE?', answer: 'Duplicate.' }); },
+    (manifest) => { manifest.faqs[0].extra = 'unexpected'; },
+  ]) {
+    const manifest = makeManifest();
+    mutation(manifest);
+    const manifestPath = await writeManifest(manifest);
+    await assert.rejects(() => loadSubmissionManifest(manifestPath), /faqs|FAQ/);
+  }
+});
+
 test('runtime manifest validation requires finite non-negative prices and booleans', async () => {
   for (const mutation of [
     (manifest) => { manifest.personalPriceUsd = -1; },

@@ -129,6 +129,37 @@ The engine versions, platforms, documentation URL, and support URL are
 cross-checked against `FabPluginRelease.json`; media files must be regular
 files below the plugin root. The first media file is the thumbnail and all
 remaining files are gallery images.
+Every listing must also contain at least one ordered `faqs` entry with a
+non-blank `question` and `answer`; duplicate questions are rejected
+case-insensitively. This is a breaking contract change for existing product
+repositories. The optional `description_rich_text` migration field is a
+semantic (not raw HTML) model using `paragraph`, `heading`, `unordered_list`,
+or `ordered_list` blocks and plain-text, `bold`, `italic`, `underline`, or
+HTTPS `link` runs. Its visible text must match `long_description`, and link
+runs must match `description_links`.
+For example, a formatted Description and its required FAQ are authored as
+semantic data:
+
+```json
+{
+  "description_rich_text": {
+    "blocks": [
+      { "type": "heading", "level": 2, "runs": [{ "text": "Included Profiles" }] },
+      { "type": "paragraph", "runs": [{ "text": "Three ready-to-use profiles." }] },
+      { "type": "unordered_list", "items": [
+        [{ "text": "Solo" }],
+        [{ "text": "2P Listen", "marks": ["bold"] }]
+      ] }
+    ]
+  },
+  "faqs": [{ "question": "Does it support multiplayer testing?", "answer": "Yes." }]
+}
+```
+
+`additionalInformationRichText` is generated in the portal manifest from
+`FabSubmissionMetadata.json` (Features, Code Modules, and technical details),
+so the same technical facts are not maintained a second time.
+
 An optional lowercase `listing_id` identifies an existing Fab listing for
 browser automation. When present it takes precedence over `FabPluginRelease.json`
 `listingId`; conflicting non-null values fail, and no ID is derived from the
@@ -425,6 +456,12 @@ Portal checker. Install its pinned Node dependency with `npm ci` from
 `FabPortalAutomation`. The checker supports exactly two read-only transports:
 `observation` and `cdp`.
 
+The release pipeline deterministically derives
+`additionalInformationRichText` from `FabSubmissionMetadata.json`; the
+backward-compatible `FabTechnicalInformation.txt` remains the text
+provenance artifact. The manifest carries both the expected semantic
+Additional information structure and the required ordered `faqs`.
+
 For interactive AI-agent workflows, use this order:
 
 1. Agent's authenticated built-in browser
@@ -432,6 +469,16 @@ For interactive AI-agent workflows, use this order:
 3. Reload the listing and confirm persistence
 4. Structured `FabPortalObservation.json`
 5. `Invoke-FabPortalSubmission.ps1 -ObservationPath ...`
+
+For a formatted Description, the interactive agent reads
+`descriptionRichText`, applies the corresponding Fab toolbar controls in the
+authenticated built-in browser, waits for autosave, reloads, and records the
+semantic DOM in `FabPortalObservation.json`. A heading rendered as a paragraph,
+a literal `-` rendered as text instead of a list, missing marks, or a changed
+HTTPS anchor is a mismatch. For Additional information, the agent opens the
+Unreal Engine format, applies the generated structure, and observes it the
+same way. The shared tool performs no editor, FAQ, Save Draft, Submit, or
+publication writes.
 
 Fab Draft editing uses autosave. There is no separate Save Draft step in the
 supported workflow. After an interactive agent edits a field:

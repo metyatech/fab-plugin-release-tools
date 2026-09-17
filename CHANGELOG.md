@@ -5,6 +5,22 @@ Keep a Changelog and the project uses Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-17
+
+- Added a semantic rich-text contract for Description and generated
+  Additional information verification: paragraphs, headings, unordered and
+  ordered lists, plain text, bold, italic, underline, and HTTPS links.
+- Made ordered FAQs required, including non-blank question/answer and
+  case-insensitive duplicate-question validation, and propagated them through
+  the submission and observation comparison contracts.
+- Kept Fab Portal automation verify-only. Interactive agents remain
+  responsible for toolbar formatting and FAQ entry in the authenticated
+  built-in browser; Save Draft and Submit are not implemented by this tool.
+- Migration: add at least one `faqs` entry to every `FabListingFields.json`.
+  Products adopting formatting may add `description_rich_text`; its visible
+  text must match `long_description`. Additional information is generated
+  from `FabSubmissionMetadata.json`.
+
 ## [0.7.9] - 2026-09-11
 
 - Removed obsolete Fab Portal Save Draft and write-automation paths; Portal

@@ -54,6 +54,7 @@ Describe 'Fab TPS declaration management' {
                 promotional_content    = $false
                 forum_post             = $false
                 activation             = 'Manual activation'
+                faqs                  = @([ordered]@{ question = 'Is this a fixture?'; answer = 'Yes.' })
                 documentation_url     = 'https://example.test/docs'
                 support_url            = 'https://example.test/support'
                 source_repository_url  = 'https://github.com/metyatech/TpsFixture'

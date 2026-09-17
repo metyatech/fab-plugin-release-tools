@@ -125,6 +125,26 @@ public sealed class FabProductTestHttpMessageHandler : HttpMessageHandler
             Write-ProductFixtureJson -Value ([ordered]@{
                     VersionName = '1.0.0'
                 }) -Path (Join-Path $Root 'TestPlugin.uplugin')
+            Write-ProductFixtureJson -Value ([ordered]@{
+                    schemaVersion = 1
+                    product = 'Test Plugin'
+                    technicalInformation = [ordered]@{
+                        features = @('Loads test content.')
+                        codeModules = @([ordered]@{ name = 'TestPlugin'; type = 'Runtime'; description = 'Fixture module.' })
+                        numberOfBlueprints = 0
+                        numberOfCppClasses = 0
+                        networkReplicated = $false
+                        networkReplicationNotes = 'The plugin does not provide network replication.'
+                        supportedDevelopmentPlatforms = @('Win64')
+                        supportedTargetBuildPlatforms = @('Win64')
+                        dependencies = @()
+                        prerequisites = @()
+                        documentationUrl = $configuration.documentationUrl
+                        exampleProjectUrl = $null
+                        exampleProjectNotes = 'No example project is required for this fixture.'
+                        additionalNotes = 'Fixture metadata.'
+                    }
+                }) -Path (Join-Path $Root 'FabSubmissionMetadata.json')
             $listing = [ordered]@{
                 schema_version          = '1.0'
                 product                 = 'Test Plugin'
@@ -148,6 +168,7 @@ public sealed class FabProductTestHttpMessageHandler : HttpMessageHandler
                 promotional_content    = $false
                 forum_post              = $false
                 activation              = 'Manual activation'
+                faqs                    = @([ordered]@{ question = 'Is this a fixture?'; answer = 'Yes.' })
                 documentation_url      = $configuration.documentationUrl
                 support_url             = $configuration.supportUrl
                 source_repository_url  = 'https://github.com/metyatech/TestPlugin'

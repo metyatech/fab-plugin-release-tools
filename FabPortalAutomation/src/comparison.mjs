@@ -2,9 +2,10 @@ import { fieldCandidates, mediaCandidates, resolveCandidate } from './locators.m
 import { compareDescriptionLinks } from './description-links.mjs';
 import { portalFieldLifecycle } from './lifecycle.mjs';
 import { isFormatView } from './view-detection.mjs';
+import { compareRichText, readRichTextFromEditor, richTextToPlainText } from './rich-text.mjs';
 
 export const COMPARISON_STATES = ['MATCH', 'MISMATCH', 'NOT_VISIBLE', 'NOT_DISCOVERED', 'NOT_APPLICABLE'];
-const FORMAT_OWNED_FIELDS = new Set(['engineVersions', 'platforms', 'technicalInformationFile', 'media']);
+const FORMAT_OWNED_FIELDS = new Set(['engineVersions', 'platforms', 'technicalInformationFile', 'additionalInformationRichText', 'media']);
 
 export function fieldView(field) {
   return FORMAT_OWNED_FIELDS.has(field) || /^packages\[\d+\]\.projectFileLink$/.test(field) ? 'format' : 'listing';
@@ -163,12 +164,13 @@ function derivedSupportFromDescription(manifest, descriptionField, view) {
   if (current === null || current === undefined || current === '') {
     return lifecycleField('supportUrl', 'Support', manifest.supportUrl, descriptionField?.classification === 'NOT_DISCOVERED' ? 'NOT_DISCOVERED' : 'NOT_VISIBLE', 'The support destination cannot be verified until the Draft Description is visible.', view);
   }
-  const hasUrl = normalizeRichText(current).includes(normalizeText(manifest.supportUrl));
+  const descriptionText = typeof current === 'string' ? current : richTextToPlainText(current);
+  const hasUrl = normalizeRichText(descriptionText).includes(normalizeText(manifest.supportUrl));
   return fieldResult({
     manifestJsonPath: 'supportUrl',
     portalLabel: 'Support',
     desired: manifest.supportUrl,
-    current: hasUrl ? manifest.supportUrl : current,
+    current: hasUrl ? manifest.supportUrl : descriptionText,
     state: hasUrl ? 'MATCH' : 'MISMATCH',
     resolved: null,
     editableControlAvailable: false,
@@ -190,6 +192,21 @@ function semanticState(current, desired, { rich = false } = {}) {
   const left = rich ? normalizeRichText(current) : normalizeText(current);
   const right = rich ? normalizeRichText(desired) : normalizeText(desired);
   return left === right ? 'MATCH' : 'MISMATCH';
+}
+
+async function compareRichTextField(page, field, desired, labelName, view, { visibleText = null } = {}) {
+  if (fieldView(field) !== view) return lifecycleField(field, labelName, desired, 'NOT_APPLICABLE', `${labelName} is owned by the ${fieldView(field)} view.`, view);
+  const editor = await visibleContentEditor(page);
+  if (!editor) return lifecycleField(field, labelName, desired, 'NOT_VISIBLE', `The visible ${labelName} editor was not uniquely readable.`, view);
+  let actual;
+  try {
+    actual = await readRichTextFromEditor(editor.locator);
+  } catch (error) {
+    return fieldResult({ manifestJsonPath: field, portalLabel: labelName, desired, current: null, state: 'MISMATCH', resolved: contentEditorResolution(), editableControlAvailable: false, notes: error.message, writeTarget: null });
+  }
+  const textMatches = visibleText === null || normalizeRichText(actual.visibleText) === normalizeRichText(visibleText);
+  const state = textMatches ? compareRichText(actual.model, desired) : 'MISMATCH';
+  return fieldResult({ manifestJsonPath: field, portalLabel: labelName, desired, current: actual.model, state, resolved: contentEditorResolution(), editableControlAvailable: false, notes: textMatches ? 'Semantic block and inline marks were read from the persisted contenteditable DOM.' : 'Semantic formatting was read, but its buyer-visible text does not match the source description.', writeTarget: null });
 }
 
 async function compareTextField(page, manifest, field, labelName = field, options = {}) {
@@ -331,6 +348,38 @@ async function compareDescriptionLinksField(page, manifest, view = 'listing') {
   });
 }
 
+function compareFaqValues(actual, desired) {
+  if (!Array.isArray(actual) || actual.length !== desired.length) return 'MISMATCH';
+  return actual.every((faq, index) => faq && normalizeText(faq.question) === normalizeText(desired[index].question)
+    && normalizeText(faq.answer) === normalizeText(desired[index].answer)) ? 'MATCH' : 'MISMATCH';
+}
+
+async function readPortalFaqs(page) {
+  return page.evaluate(() => {
+    const heading = [...document.querySelectorAll('h1,h2,h3,h4,h5,h6')]
+      .find((item) => item.textContent?.trim().toLocaleLowerCase() === 'faqs');
+    if (!heading) return null;
+    const section = heading.closest('[data-invalid-field],section,fieldset') ?? heading.parentElement;
+    if (!section) return [];
+    let items = [...section.querySelectorAll('[data-faq-item],article,li')].filter((item) => item !== section);
+    if (items.length === 0) items = [...section.children].filter((item) => item !== heading.parentElement && item.tagName.toLowerCase() !== 'button');
+    const candidates = items.map((item) => {
+      const question = item.querySelector('[data-faq-question],[aria-label*="question" i],dt,h3,h4,button,input');
+      const answer = item.querySelector('[data-faq-answer],[aria-label*="answer" i],dd,[role="region"],textarea,[contenteditable="true"],p');
+      const read = (control) => control?.value ?? control?.innerText ?? control?.textContent ?? '';
+      return { question: read(question).trim(), answer: read(answer).trim() };
+    }).filter((item) => item.question && item.answer);
+    return candidates;
+  });
+}
+
+async function compareFaqs(page, manifest, view = 'listing') {
+  if (view !== 'listing') return lifecycleField('faqs', 'FAQs', manifest.faqs, 'NOT_APPLICABLE', 'FAQs are owned by the listing view.', view);
+  const actual = await readPortalFaqs(page);
+  if (actual === null) return fieldResult({ manifestJsonPath: 'faqs', portalLabel: 'FAQs', desired: manifest.faqs, current: null, state: 'NOT_VISIBLE', resolved: null, editableControlAvailable: false, notes: 'The Fab FAQ section was not visible.', writeTarget: null });
+  return fieldResult({ manifestJsonPath: 'faqs', portalLabel: 'FAQs', desired: manifest.faqs, current: actual, state: compareFaqValues(actual, manifest.faqs), resolved: { metadata: { strategy: 'dom-semantic', expression: 'FAQ heading with scoped question/answer items', matchCount: actual.length, unique: true, confidence: 'medium' } }, editableControlAvailable: false, notes: 'FAQ count, order, question, and answer were read from the visible listing DOM.', writeTarget: null });
+}
+
 function contentEditorResolution() {
   return {
     metadata: {
@@ -365,8 +414,17 @@ async function compareTechnicalInformation(page, manifestInfo, view = 'listing')
   const editor = await visibleContentEditor(page);
   if (!editor) return base;
   const desired = manifestInfo.technicalInformationText;
-  const current = editor.text;
-  const state = semanticState(current, desired, { rich: true });
+  let current = editor.text;
+  let state = semanticState(current, desired, { rich: true });
+  if (manifestInfo.manifest.additionalInformationRichText) {
+    try {
+      const actual = await readRichTextFromEditor(editor.locator);
+      current = actual.visibleText;
+      state = semanticState(current, desired, { rich: true });
+    } catch {
+      state = 'MISMATCH';
+    }
+  }
   const editable = await editor.locator.isEditable().catch(() => false);
   const disabled = await editor.locator.isDisabled().catch(() => false);
   const writeTarget = editable && !disabled
@@ -380,9 +438,12 @@ export async function compareManifest(page, manifestInfo, { view = 'listing' } =
   const fields = [];
   fields.push(await compareTextField(page, manifest, 'title', 'Title *', { view }));
   fields.push(lifecycleField('shortDescription', 'Short description', manifest.shortDescription, 'NOT_APPLICABLE', 'shortDescription is source metadata and is not a distinct Draft-owned Fab Portal field.', view));
-  const description = await compareTextField(page, manifest, 'longDescription', 'Description *', { rich: true, view });
+  const description = manifest.descriptionRichText
+    ? await compareRichTextField(page, 'descriptionRichText', manifest.descriptionRichText, 'Description *', view, { visibleText: manifest.longDescription })
+    : await compareTextField(page, manifest, 'longDescription', 'Description *', { rich: true, view });
   fields.push(description);
   fields.push(await compareDescriptionLinksField(page, manifest, view));
+  fields.push(await compareFaqs(page, manifest, view));
   fields.push(await compareTextField(page, manifest, 'productType', 'Product type *', { view }));
   fields.push(await compareCategory(page, manifest, view));
   fields.push(await compareSubcategory(page, manifest));
@@ -473,6 +534,7 @@ export async function compareManifest(page, manifestInfo, { view = 'listing' } =
   fields.push(documentation.classification === 'NOT_VISIBLE' ? await compareLabeledTechnicalUrl(page, manifest, 'documentationUrl', 'Documentation') ?? documentation : documentation);
   fields.push(derivedSupportFromDescription(manifest, description, view));
   fields.push(await compareTechnicalInformation(page, manifestInfo, view));
+  fields.push(await compareRichTextField(page, 'additionalInformationRichText', manifest.additionalInformationRichText, 'Additional information', view, { visibleText: manifestInfo.technicalInformationText }));
   fields.push(await compareMedia(page, manifest, view));
   for (const [index, pkg] of manifest.packages.entries()) {
     const field = `packages[${index}].projectFileLink`;
@@ -575,7 +637,7 @@ function derivedSupportObservation(manifest, entries) {
   if (!entry) return observationField({ entry: null, ...base, compare: () => 'NOT_DISCOVERED', note: 'The observation omitted the derived support field.' });
   if (!description) return observationField({ entry, ...base, compare: () => 'NOT_DISCOVERED', note: 'The Draft Description observation is missing, so the derived support destination cannot be verified.' });
   if (description.state !== 'OBSERVED') return observationField({ entry, ...base, compare: () => description.state, note: 'Support is derived from the Draft-owned Description field.' });
-  const currentDescription = normalizeRichText(description.value);
+  const currentDescription = normalizeRichText(typeof description.value === 'string' ? description.value : richTextToPlainText(description.value));
   const hasUrl = currentDescription.includes(normalizeText(manifest.supportUrl));
   const result = fieldResult({
     manifestJsonPath: 'supportUrl',
@@ -611,7 +673,9 @@ export function compareObservation(manifestInfo, observation) {
     field('title', 'Title', manifest.title, (current, expected) => compareObservationScalar(current, expected)),
     observationLifecycleField({ entry: entries.get('shortDescription'), manifestJsonPath: 'shortDescription', portalLabel: 'Short description', desired: manifest.shortDescription, view: 'listing', note: 'shortDescription is source metadata and is not a distinct Draft-owned Fab Portal field.' }),
     field('longDescription', 'Description', manifest.longDescription, (current, expected) => compareObservationScalar(current, expected, { rich: true })),
+    ...(manifest.descriptionRichText ? [field('descriptionRichText', 'Description formatting', manifest.descriptionRichText, (current, expected) => compareRichText(current, expected))] : []),
     field('descriptionLinks', 'Description links', manifest.descriptionLinks ?? [], (current, expected) => compareDescriptionLinks(current, expected)),
+    field('faqs', 'FAQs', manifest.faqs, (current, expected) => compareFaqValues(current, expected)),
     field('productType', 'Product type', manifest.productType, (current, expected) => compareObservationScalar(current, expected)),
     field('category', 'Category', manifest.category, (current, expected) => compareObservationScalar(current, expected)),
     field('subcategory', 'Subcategory', manifest.subcategory, (current, expected) => compareObservationArray(current, expected)),
@@ -631,6 +695,7 @@ export function compareObservation(manifestInfo, observation) {
     field('documentationUrl', 'Documentation', manifest.documentationUrl, (current, expected) => compareObservationScalar(current, expected)),
     derivedSupportObservation(manifest, entries),
     field('technicalInformationFile', 'Technical information', manifestInfo.technicalInformationText, (current, expected) => compareObservationScalar(current, expected, { rich: true }), 'The observed value is the visible technical text; the manifest path is provenance.'),
+    field('additionalInformationRichText', 'Additional information formatting', manifest.additionalInformationRichText, (current, expected) => compareRichText(current, expected)),
     field('media', 'Media', manifest.media.map((item) => ({ order: item.order, role: item.role })), (current) => compareObservationMedia(current, manifest.media), 'Portal observation covers visible count/order/roles only; local approval owns source-byte hashes.'),
   ];
   for (const [index, pkg] of manifest.packages.entries()) {

@@ -7,7 +7,7 @@ import { loadFabPortalObservation } from './observation.mjs';
 import { runPortalAutomation } from './portal.mjs';
 import { createRunDirectory, writeRunReport } from './report.mjs';
 
-const VERSION = '0.7.9';
+const VERSION = '0.8.0';
 
 function help() {
   return `Fab Publisher Portal automation
@@ -37,9 +37,9 @@ Options:
 
 Observation mode compares the supplied facts offline and does not launch or
 attach to a browser. Description text stays separate from structured
-descriptionLinks, and verification checks the actual persisted HTTPS href for
-each configured link. Literal Markdown link text is not a hyperlink. It is not
-cryptographic proof of Portal source bytes.
+descriptionLinks; when descriptionRichText is present, block and inline
+semantics must also match. FAQs and Additional information rich text are
+compared in source order. It is not cryptographic proof of Portal source bytes.
 `;
 }
 

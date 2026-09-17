@@ -18,7 +18,7 @@ const manifest = makeManifest({
   ],
 });
 
-function field(manifestJsonPath, value, view = manifestJsonPath === 'media' || manifestJsonPath === 'engineVersions' || manifestJsonPath === 'platforms' || manifestJsonPath === 'technicalInformationFile' || manifestJsonPath.startsWith('packages[') ? 'format' : 'listing') {
+function field(manifestJsonPath, value, view = manifestJsonPath === 'media' || manifestJsonPath === 'engineVersions' || manifestJsonPath === 'platforms' || manifestJsonPath === 'technicalInformationFile' || manifestJsonPath === 'additionalInformationRichText' || manifestJsonPath.startsWith('packages[') ? 'format' : 'listing') {
   return { manifestJsonPath, state: 'OBSERVED', value, view };
 }
 
@@ -27,7 +27,9 @@ function makeObservation(manifestInfo, overrides = {}) {
     title: manifest.title,
     shortDescription: manifest.shortDescription,
     longDescription: manifest.longDescription,
+    ...(manifest.descriptionRichText ? { descriptionRichText: manifest.descriptionRichText } : {}),
     descriptionLinks: manifest.descriptionLinks ?? [],
+    faqs: manifest.faqs,
     productType: manifest.productType,
     category: manifest.category,
     subcategory: manifest.subcategory,
@@ -47,6 +49,7 @@ function makeObservation(manifestInfo, overrides = {}) {
     documentationUrl: manifest.documentationUrl,
     supportUrl: manifest.supportUrl,
     technicalInformationFile: manifestInfo.technicalInformationText,
+    additionalInformationRichText: manifest.additionalInformationRichText,
     media: { count: 1, items: [{ order: 1, role: 'thumbnail' }] },
     'packages[0].projectFileLink': manifest.packages[0].projectFileLink,
     'packages[1].projectFileLink': manifest.packages[1].projectFileLink,
@@ -125,10 +128,10 @@ for (const [name, mutator, pattern] of [
 test('pure comparator matches normalized rich text, USD, Windows, engine sets, URLs, and links', async () => {
   const { manifestInfo } = await fixture();
   const observation = makeObservation(manifestInfo);
-  observation.fields.find((item) => item.manifestJsonPath === 'longDescription').value = 'Fixture   long description\r\nSupport: https://example.com/support';
+  observation.fields.find((item) => item.manifestJsonPath === 'longDescription').value = 'Fixture   long description\r\n\r\nSupport: https://example.com/support';
   const comparison = compareObservation(manifestInfo, observation);
   assert.equal(comparison.mismatchCount, 0);
-  assert.equal(comparison.counts.MATCH, 25);
+  assert.equal(comparison.counts.MATCH, 28);
   assert.equal(comparison.counts.NOT_APPLICABLE, 2);
 });
 

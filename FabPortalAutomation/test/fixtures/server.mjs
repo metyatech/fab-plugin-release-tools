@@ -13,6 +13,24 @@ function richText(value, links = []) {
   return rendered.replace(/\r\n?|\n/g, '<br>');
 }
 
+function semanticRichText(model) {
+  const run = (item) => {
+    let text = html(item.text);
+    for (const mark of [...(item.marks ?? [])].filter((value) => value !== 'link')) {
+      const tag = { bold: 'strong', italic: 'em', underline: 'u' }[mark];
+      text = `<${tag}>${text}</${tag}>`;
+    }
+    if (item.marks?.includes('link')) text = `<a href="${html(item.href)}">${text}</a>`;
+    return text.replaceAll('\n', '<br>');
+  };
+  return model.blocks.map((block) => {
+    if (block.type === 'paragraph') return `<p>${block.runs.map(run).join('')}</p>`;
+    if (block.type === 'heading') return `<h${block.level}>${block.runs.map(run).join('')}</h${block.level}>`;
+    const tag = block.type === 'unordered_list' ? 'ul' : 'ol';
+    return `<${tag}>${block.items.map((item) => `<li>${item.map(run).join('')}</li>`).join('')}</${tag}>`;
+  }).join('');
+}
+
 function pageMarkup(state, listingId) {
   const checked = (value) => value ? ' checked' : '';
   const radio = (label, isChecked) => `<label>${html(label)}<input type="radio" aria-label="${html(label)}"${checked(isChecked)}></label>`;
@@ -20,12 +38,13 @@ function pageMarkup(state, listingId) {
   const statusMarkup = state.statusRendering === 'plain-text'
     ? `<div data-status-value>${html(state.status)}</div>`
     : `<div data-testid="listing-status" data-status-value>${html(state.status)}</div>`;
+  const faqMarkup = `<section aria-labelledby="fixture-faq-heading"><h2 id="fixture-faq-heading">FAQs</h2>${(state.faqs ?? []).map((faq) => `<article data-faq-item><h3 data-faq-question>${html(faq.question)}</h3><p data-faq-answer>${html(faq.answer)}</p></article>`).join('')}</section>`;
   const listingControls = `
     <h1>${html(state.title)}</h1>
     ${statusMarkup}
     <label>Title *<input aria-label="Title *" value="${html(state.title)}" ${state.disableFields?.includes('title') ? 'disabled' : ''}></label>
     <label>Short description *<input aria-label="Short description *" value="${html(state.shortDescription)}" ${state.disableFields?.includes('shortDescription') ? 'disabled' : ''}></label>
-    <label>Description *<div role="textbox" aria-label="Description *" contenteditable="true">${richText(state.longDescription, state.descriptionLinks)}</div></label>
+    <label>Description *<div role="textbox" aria-label="Description *" contenteditable="true">${state.descriptionRichText ? semanticRichText(state.descriptionRichText) : richText(state.longDescription, state.descriptionLinks)}</div></label>
     <label>Product type *<select aria-label="Product type *"><option selected>${html(state.productType)}</option></select></label>
     <label>Category *<input role="combobox" aria-label="Category selection" value="${html(state.category)}"></label>
     <label>Tags *<input aria-label="Tags *" value="${html(state.tags[0] ?? '')}" readonly></label>
@@ -40,6 +59,7 @@ function pageMarkup(state, listingId) {
     <label>${html('Includes promotional content')}<input type="checkbox" aria-label="Includes promotional content"${checked(state.promotionalContent)}></label>
     ${radio('No, do not create a forum post', !state.forumPost)}
     <label>Activation<input aria-label="Activation" value="${html(state.activation)}"></label>
+    ${faqMarkup}
     ${(state.readOnlySections ?? []).map((label, index) => `<button type="button" aria-label="toggle ${html(label)}" aria-expanded="false" aria-controls="fixture-section-${index}">toggle ${html(label)}</button><section id="fixture-section-${index}" hidden>${html(label)} content</section>`).join('')}
     <p>Fab draft fields autosave when edited by an external interactive agent.</p>`;
   const formatControls = `
@@ -55,7 +75,7 @@ function pageMarkup(state, listingId) {
     <section aria-label="Technical details">
       <p>Documentation: ${html(state.documentationUrl)}</p>
       <p>Support: ${html(state.supportUrl)}</p>
-      <div ${state.technicalInformationNoLabel ? '' : 'aria-label="Technical Information" '}contenteditable="true">${richText(state.technicalInformationText)}</div>
+      <div ${state.technicalInformationNoLabel ? '' : 'aria-label="Technical Information" '}contenteditable="true">${state.additionalInformationRichText ? semanticRichText(state.additionalInformationRichText) : richText(state.technicalInformationText)}</div>
     </section>
     <section data-testid="media-gallery" data-existing="${html(state.mediaExisting)}" data-order="${html(state.mediaOrder ?? '')}" data-upload-order="${html(initialStateMediaOrder(state))}">${html(state.mediaExisting === 'existing' ? 'Existing media' : state.mediaExisting === 'known' || state.mediaExisting === 'uploaded' ? '001 thumbnail 002 gallery' : 'Empty gallery')}</section>
     <input type="file" data-testid="media-upload" multiple>`;

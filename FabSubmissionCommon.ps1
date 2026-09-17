@@ -262,6 +262,37 @@ function Assert-FabSubmissionSchema {
     }
 }
 
+function Assert-FabListingFaq {
+    param(
+        [Parameter(Mandatory)]
+        [object]$Listing
+    )
+
+    $property = $Listing.PSObject.Properties['faqs']
+    if ($null -eq $property -or $property.Value -isnot [System.Array] -or $property.Value.Count -lt 1) {
+        throw 'Listing faqs must be a non-empty array.'
+    }
+    $questions = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($faq in @($property.Value)) {
+        if ($null -eq $faq -or $faq -is [System.Array]) {
+            throw 'Listing FAQ entries must be objects.'
+        }
+        $names = @($faq.PSObject.Properties.Name)
+        if ($names.Count -ne 2 -or $names -cnotcontains 'question' -or $names -cnotcontains 'answer') {
+            throw 'Listing FAQ entries must contain only question and answer.'
+        }
+        $question = [string]$faq.question
+        $answer = [string]$faq.answer
+        if ([string]::IsNullOrWhiteSpace($question) -or [string]::IsNullOrWhiteSpace($answer)) {
+            throw 'Listing FAQ question and answer must be non-blank.'
+        }
+        if (-not $questions.Add($question.Trim())) {
+            throw "Listing FAQs contain a duplicate question (case-insensitive): $question"
+        }
+    }
+    return @($property.Value)
+}
+
 function Get-FabSubmissionListingData {
     param(
         [Parameter(Mandatory)]
@@ -281,6 +312,7 @@ function Get-FabSubmissionListingData {
         -SchemaPath (Join-Path $PSScriptRoot 'FabListingFields.schema.json') `
         -Description 'Listing fields'
     $listing = Read-FabSubmissionJson -Path $path
+    [void](Assert-FabListingFaq -Listing $listing)
     if ($null -eq $listing.PSObject.Properties['media_order'] -or
         $listing.media_order -isnot [System.Array]) {
         throw 'Listing media_order must be a JSON array.'

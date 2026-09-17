@@ -305,7 +305,7 @@ async function waitForFormatView(page, manifest) {
   }
 }
 
-const FORMAT_COMPARISON_FIELDS = new Set(['engineVersions', 'platforms', 'technicalInformationFile', 'media']);
+const FORMAT_COMPARISON_FIELDS = new Set(['engineVersions', 'platforms', 'technicalInformationFile', 'additionalInformationRichText', 'media']);
 const FORMAT_READ_EVIDENCE_FIELDS = new Set(['documentationUrl']);
 
 function comparisonEvidenceRank(field) {

@@ -51,6 +51,7 @@ Describe 'Fab submission preparation contracts' {
                 generated_with_ai = $false; allows_usage_with_ai = $false; promotional_content = $false;
                 forum_post = $false; activation = 'Manual'; documentation_url = 'https://example.invalid/docs';
                 support_url = 'https://example.invalid/support'; source_repository_url = 'https://github.com/metyatech/fixture';
+                faqs = @([ordered]@{ question = 'Is this a fixture?'; answer = 'Yes.' });
                 media_order = $media
             }
             Write-FabSubmissionAtomicText -Path (Join-Path $root 'FabListingFields.json') `

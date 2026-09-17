@@ -4,10 +4,17 @@ import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { TextDecoder } from 'node:util';
 import { validateDescriptionLinks } from './description-links.mjs';
+import { richTextLinks, richTextToPlainText, validateRichText } from './rich-text.mjs';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/i;
 const MAX_FILE_BYTES = 15 * 1024 * 1024 * 1024;
+
+function normalizeRichText(value) {
+  return String(value ?? '').replace(/\r\n?/g, '\n').replace(/\u00a0/g, ' ')
+    .split('\n').map((line) => line.replace(/[ \t]+/g, ' ').trim()).join('\n')
+    .replace(/\n{3,}/g, '\n\n').trim();
+}
 
 function fail(message) {
   throw new Error(`FabPortalSubmission manifest invalid: ${message}`);
@@ -27,6 +34,26 @@ function requireArray(value, field, { allowEmpty = false } = {}) {
   if (!Array.isArray(value) || (!allowEmpty && value.length === 0)) fail(`${field} must be a ${allowEmpty ? '' : 'non-empty '}array.`);
   if (value.some((item) => typeof item !== 'string' || item.trim() === '')) fail(`${field} must contain only non-blank strings.`);
   return value;
+}
+
+function requireFaqs(value, field = 'faqs') {
+  if (!Array.isArray(value) || value.length < 1) fail(`${field} must be a non-empty array.`);
+  const questions = new Set();
+  return value.map((faq, index) => {
+    if (!faq || typeof faq !== 'object' || Array.isArray(faq)) fail(`${field}[${index}] must be an object.`);
+    const keys = Object.keys(faq);
+    if (keys.length !== 2 || !keys.includes('question') || !keys.includes('answer')) fail(`${field}[${index}] must contain only question and answer.`);
+    requireString(faq.question, `${field}[${index}].question`);
+    requireString(faq.answer, `${field}[${index}].answer`);
+    const key = faq.question.trim().toLocaleLowerCase();
+    if (questions.has(key)) fail(`${field} contains duplicate questions (case-insensitive).`);
+    questions.add(key);
+    return { question: faq.question, answer: faq.answer };
+  });
+}
+
+function requireRichText(value, field) {
+  try { return validateRichText(value, field); } catch (error) { fail(error.message); }
 }
 
 function requireSha256(value, field) {
@@ -103,6 +130,15 @@ function validateTopLevel(manifest, { requirePortalReady = true } = {}) {
   requireString(manifest.title, 'title');
   requireString(manifest.shortDescription, 'shortDescription');
   requireString(manifest.longDescription, 'longDescription');
+  manifest.faqs = requireFaqs(manifest.faqs);
+  if (manifest.descriptionRichText !== undefined) {
+    manifest.descriptionRichText = requireRichText(manifest.descriptionRichText, 'descriptionRichText');
+    const derived = richTextToPlainText(manifest.descriptionRichText);
+    if (normalizeRichText(derived) !== normalizeRichText(manifest.longDescription)) fail('descriptionRichText visible text must match longDescription.');
+    const richLinks = richTextLinks(manifest.descriptionRichText);
+    if (JSON.stringify(richLinks) !== JSON.stringify(manifest.descriptionLinks ?? [])) fail('descriptionRichText links must match descriptionLinks.');
+  }
+  manifest.additionalInformationRichText = requireRichText(manifest.additionalInformationRichText, 'additionalInformationRichText');
   if (manifest.descriptionLinks !== undefined) {
     manifest.descriptionLinks = validateDescriptionLinks(manifest.longDescription, manifest.descriptionLinks);
   } else {

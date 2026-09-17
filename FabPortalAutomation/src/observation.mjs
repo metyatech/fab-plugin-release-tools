@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fieldView, normalizeText } from './comparison.mjs';
 import { validateDescriptionLinkShape } from './description-links.mjs';
 import { portalFieldLifecycle } from './lifecycle.mjs';
+import { validateRichText } from './rich-text.mjs';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
@@ -14,11 +15,11 @@ const ROOT_KEYS = new Set(['schemaVersion', 'source', 'manifestSha256', 'observe
 const FIELD_KEYS = new Set(['manifestJsonPath', 'state', 'value', 'view', 'note']);
 const BASE_PATHS = [
   'title', 'shortDescription', 'longDescription', 'productType', 'category', 'subcategory', 'tags',
-  'descriptionLinks',
+  'descriptionLinks', 'descriptionRichText', 'faqs',
   'includedFormat', 'engineVersions', 'platforms', 'license', 'personalPriceUsd',
   'professionalPriceUsd', 'matureContent', 'generatedWithAi', 'allowsUsageWithAi',
   'promotionalContent', 'forumPost', 'activation', 'documentationUrl', 'supportUrl',
-  'technicalInformationFile', 'media',
+  'technicalInformationFile', 'additionalInformationRichText', 'media',
 ];
 
 function fail(message) {
@@ -36,7 +37,8 @@ function assertExactKeys(value, allowed, field) {
 }
 
 function expectedPaths(manifest) {
-  return [...BASE_PATHS, ...manifest.packages.map((_item, index) => `packages[${index}].projectFileLink`)].sort();
+  const paths = BASE_PATHS.filter((fieldPath) => fieldPath !== 'descriptionRichText' || manifest.descriptionRichText !== undefined);
+  return [...paths, ...manifest.packages.map((_item, index) => `packages[${index}].projectFileLink`)].sort();
 }
 
 function requireNonBlankString(value, field) {
@@ -46,6 +48,20 @@ function requireNonBlankString(value, field) {
 function requireStringArray(value, field, { allowEmpty = false } = {}) {
   if (!Array.isArray(value) || (!allowEmpty && value.length === 0)) fail(`${field} must be a ${allowEmpty ? '' : 'non-empty '}string array.`);
   if (value.some((item) => typeof item !== 'string' || item.trim() === '')) fail(`${field} must contain only non-blank strings.`);
+}
+
+function validateFaqs(value, field) {
+  if (!Array.isArray(value) || value.length < 1) fail(`${field} must be a non-empty array.`);
+  const seen = new Set();
+  value.forEach((faq, index) => {
+    if (!isRecord(faq)) fail(`${field}[${index}] must be an object.`);
+    assertExactKeys(faq, new Set(['question', 'answer']), `${field}[${index}]`);
+    requireNonBlankString(faq.question, `${field}[${index}].question`);
+    requireNonBlankString(faq.answer, `${field}[${index}].answer`);
+    const key = faq.question.trim().toLocaleLowerCase();
+    if (seen.has(key)) fail(`${field} contains duplicate questions (case-insensitive).`);
+    seen.add(key);
+  });
 }
 
 function isJsonValue(value) {
@@ -90,6 +106,11 @@ function validateObservedValue(fieldPath, value, manifest) {
   if (fieldPath === 'media') return validateMediaValue(value);
   if (fieldPath === 'descriptionLinks') {
     validateDescriptionLinkShape(value, `${fieldPath}.value`);
+    return;
+  }
+  if (fieldPath === 'faqs') return validateFaqs(value, `${fieldPath}.value`);
+  if (fieldPath === 'descriptionRichText' || fieldPath === 'additionalInformationRichText') {
+    try { validateRichText(value, `${fieldPath}.value`); } catch (error) { fail(error.message); }
     return;
   }
   if (fieldPath.startsWith('packages[')) {

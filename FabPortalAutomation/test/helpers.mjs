@@ -5,6 +5,14 @@ import path from 'node:path';
 
 export const listingId = '11111111-1111-4111-8111-111111111111';
 
+export const fixtureRichText = {
+  blocks: [{ type: 'paragraph', runs: [{ text: 'Fixture long description' }] }, { type: 'paragraph', runs: [{ text: 'Support: https://example.com/support' }] }],
+};
+
+export const fixtureAdditionalInformationRichText = {
+  blocks: [{ type: 'paragraph', runs: [{ text: 'Fixture technical information' }] }],
+};
+
 export function makeManifest(overrides = {}) {
   const base = {
     schemaVersion: 2,
@@ -14,7 +22,10 @@ export function makeManifest(overrides = {}) {
     title: 'Fixture Product',
     shortDescription: 'Fixture short description',
     longDescription: 'Fixture long description',
+    descriptionRichText: fixtureRichText,
     descriptionLinks: [],
+    faqs: [{ question: 'Is this a fixture?', answer: 'Yes.' }],
+    additionalInformationRichText: fixtureAdditionalInformationRichText,
     productType: 'Tools & Plugins',
     category: 'Network & Multiplayer',
     subcategory: [],
@@ -40,7 +51,12 @@ export function makeManifest(overrides = {}) {
   };
   const manifest = structuredClone({ ...base, ...overrides });
   if (!Object.prototype.hasOwnProperty.call(overrides, 'longDescription')) {
-    manifest.longDescription = `Fixture long description\nSupport: ${manifest.supportUrl}`;
+    manifest.longDescription = `Fixture long description\n\nSupport: ${manifest.supportUrl}`;
+  } else if (!Object.prototype.hasOwnProperty.call(overrides, 'descriptionRichText')) {
+    delete manifest.descriptionRichText;
+  }
+  if (Object.prototype.hasOwnProperty.call(overrides, 'descriptionLinks') && !Object.prototype.hasOwnProperty.call(overrides, 'descriptionRichText')) {
+    delete manifest.descriptionRichText;
   }
   return manifest;
 }
@@ -52,6 +68,8 @@ export function fixtureState(manifest, overrides = {}) {
     shortDescription: manifest.shortDescription,
     longDescription: manifest.longDescription,
     descriptionLinks: manifest.descriptionLinks ?? [],
+    descriptionRichText: manifest.descriptionRichText,
+    faqs: manifest.faqs ?? [],
     productType: manifest.productType,
     category: manifest.category,
     tags: manifest.tags,
@@ -67,6 +85,7 @@ export function fixtureState(manifest, overrides = {}) {
     documentationUrl: manifest.documentationUrl,
     supportUrl: manifest.supportUrl,
     technicalInformationText: manifest.technicalInformationText ?? 'Fixture technical information',
+    additionalInformationRichText: manifest.additionalInformationRichText ?? fixtureAdditionalInformationRichText,
     platformDisplay: 'Windows',
     projectFileLink: manifest.packages[0].projectFileLink,
     mediaExisting: 'known',

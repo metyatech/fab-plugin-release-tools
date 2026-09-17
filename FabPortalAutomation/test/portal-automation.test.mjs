@@ -8,6 +8,7 @@ import { parseArgs } from '../src/cli.mjs';
 import { classifyFabView, FAB_VIEW } from '../src/view-detection.mjs';
 import { startFixture } from './fixtures/server.mjs';
 import { fixtureState, makeManifest, makeManifestInfo, listingId } from './helpers.mjs';
+import { richTextToPlainText } from '../src/rich-text.mjs';
 
 const chrome = process.env.FAB_CHROME_PATH ?? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 let browser;
@@ -108,6 +109,69 @@ test('fixture contenteditable comparison preserves multiline Description structu
   const flattened = await scenario({ manifest, state: { longDescription: manifest.longDescription.replace(/\n+/g, ' ') } });
   assert.equal(flattened.result.result, 'FAIL');
   assert.equal(flattened.result.comparison.fields.find((item) => item.manifestJsonPath === 'longDescription').classification, 'MISMATCH');
+});
+
+test('portal verifier requires semantic Description blocks and inline marks', async () => {
+  const expected = {
+    blocks: [
+      { type: 'heading', level: 2, runs: [{ text: 'Included Profiles' }] },
+      { type: 'paragraph', runs: [{ text: 'Run ' }, { text: 'Solo', marks: ['bold'] }, { text: ' now.' }] },
+      { type: 'unordered_list', items: [[{ text: 'Listen Server', marks: ['italic'] }], [{ text: 'Bad Network', marks: ['underline'] }]] },
+      { type: 'ordered_list', items: [[{ text: 'Open editor.' }], [{ text: 'Run profile.' }]] },
+      { type: 'paragraph', runs: [{ text: 'Support: https://example.com/support' }] },
+    ],
+  };
+  const manifest = makeManifest({ longDescription: richTextToPlainText(expected), descriptionRichText: expected });
+  const matching = await scenario({ manifest });
+  assert.equal(matching.result.comparison.fields.find((field) => field.manifestJsonPath === 'descriptionRichText').classification, 'MATCH');
+  const plainHeading = await scenario({ manifest, state: { descriptionRichText: { blocks: [{ type: 'paragraph', runs: [{ text: 'Included Profiles' }] }] } } });
+  assert.equal(plainHeading.result.comparison.fields.find((field) => field.manifestJsonPath === 'descriptionRichText').classification, 'MISMATCH');
+  const plainBold = await scenario({
+    manifest,
+    state: {
+      descriptionRichText: {
+        blocks: [
+          { type: 'heading', level: 2, runs: [{ text: 'Included Profiles' }] },
+          { type: 'paragraph', runs: [{ text: 'Run Solo now.' }] },
+          ...expected.blocks.slice(2),
+        ],
+      },
+    },
+  });
+  assert.equal(plainBold.result.comparison.fields.find((field) => field.manifestJsonPath === 'descriptionRichText').classification, 'MISMATCH');
+  const literalList = await scenario({ manifest, state: { descriptionRichText: { blocks: [{ type: 'heading', level: 2, runs: [{ text: 'Included Profiles' }] }, { type: 'paragraph', runs: [{ text: 'Run ' }, { text: 'Solo', marks: ['bold'] }, { text: ' now.' }] }, { type: 'paragraph', runs: [{ text: '- Listen Server\n- Bad Network' }] }, ...expected.blocks.slice(3) ] } } });
+  assert.equal(literalList.result.comparison.fields.find((field) => field.manifestJsonPath === 'descriptionRichText').classification, 'MISMATCH');
+});
+
+test('portal verifier compares FAQ existence, count, order, question, and answer', async () => {
+  const manifest = makeManifest({ faqs: [
+    { question: 'Does it support multiplayer?', answer: 'Yes.' },
+    { question: 'Is activation manual?', answer: 'Yes.' },
+  ] });
+  const matching = await scenario({ manifest });
+  assert.equal(matching.result.comparison.fields.find((field) => field.manifestJsonPath === 'faqs').classification, 'MATCH');
+  for (const faqs of [
+    [],
+    [manifest.faqs[1], manifest.faqs[0]],
+    [{ question: 'Wrong question', answer: 'Yes.' }, manifest.faqs[1]],
+    [manifest.faqs[0], { question: manifest.faqs[1].question, answer: 'Wrong answer' }],
+  ]) {
+    const result = await scenario({ manifest, state: { faqs } });
+    assert.equal(result.result.result, 'FAIL');
+    assert.equal(result.result.comparison.fields.find((field) => field.manifestJsonPath === 'faqs').classification, 'MISMATCH');
+  }
+});
+
+test('portal verifier compares generated Additional information semantics', async () => {
+  const additional = { blocks: [
+    { type: 'heading', level: 2, runs: [{ text: 'Features' }] },
+    { type: 'unordered_list', items: [[{ text: 'Reusable profiles' }], [{ text: 'Network emulation' }]] },
+  ] };
+  const manifest = makeManifest({ additionalInformationRichText: additional, technicalInformationText: richTextToPlainText(additional) });
+  const matching = await scenario({ manifest });
+  assert.equal(matching.result.result, 'PASS');
+  const flattened = await scenario({ manifest, state: { additionalInformationRichText: { blocks: [{ type: 'paragraph', runs: [{ text: 'Features\n- Reusable profiles\n- Network emulation' }] }] } } });
+  assert.equal(flattened.result.comparison.fields.find((field) => field.manifestJsonPath === 'additionalInformationRichText' && field.view === 'format').classification, 'MISMATCH');
 });
 
 

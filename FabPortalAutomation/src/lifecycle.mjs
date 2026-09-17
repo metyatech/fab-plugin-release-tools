@@ -2,7 +2,9 @@ const PORTAL_FIELD_LIFECYCLE = Object.freeze({
   title: 'DRAFT',
   shortDescription: 'SOURCE_ONLY',
   longDescription: 'DRAFT',
+  descriptionRichText: 'DRAFT',
   descriptionLinks: 'DRAFT',
+  faqs: 'DRAFT',
   productType: 'DRAFT',
   category: 'DRAFT',
   subcategory: 'DRAFT',
@@ -22,6 +24,7 @@ const PORTAL_FIELD_LIFECYCLE = Object.freeze({
   documentationUrl: 'DRAFT',
   supportUrl: 'DERIVED',
   technicalInformationFile: 'DRAFT',
+  additionalInformationRichText: 'DRAFT',
   media: 'DRAFT',
 });
 
