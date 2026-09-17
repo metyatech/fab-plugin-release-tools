@@ -5,6 +5,13 @@ Keep a Changelog and the project uses Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-09-17
+
+- Canonicalized Fab's persisted Heading 2 DOM representation (`h5`) to
+  rich-text heading level 2 in the Portal observer.
+- Kept heading-versus-paragraph and heading-level verification strict while
+  adding real Fab DOM fixture coverage for Description and Additional information.
+
 ## [0.8.2] - 2026-09-17
 
 - Fixed PowerShell rich-text validation for zero, single, and multiple inline

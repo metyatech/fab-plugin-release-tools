@@ -7,7 +7,7 @@ import { loadFabPortalObservation } from './observation.mjs';
 import { runPortalAutomation } from './portal.mjs';
 import { createRunDirectory, writeRunReport } from './report.mjs';
 
-const VERSION = '0.8.2';
+const VERSION = '0.8.3';
 
 function help() {
   return `Fab Publisher Portal automation

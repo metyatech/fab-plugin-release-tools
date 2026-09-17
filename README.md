@@ -481,6 +481,11 @@ Unreal Engine format, applies the generated structure, and observes it the
 same way. The shared tool performs no editor, FAQ, Save Draft, Submit, or
 publication writes.
 
+Fab's current editor persists its toolbar `Heading 2` choice as an `h5`
+element. The Portal adapter canonicalizes that proven Fab representation to
+rich-text heading level 2; paragraphs and other heading levels remain strict
+mismatches.
+
 Editor discovery is field-scoped: Description uses the semantic `Description *`
 field, while Additional information uses the semantic Additional information /
 Technical Information section. Other visible `contenteditable` elements, such

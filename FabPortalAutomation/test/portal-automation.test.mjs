@@ -8,7 +8,7 @@ import { parseArgs } from '../src/cli.mjs';
 import { classifyFabView, FAB_VIEW } from '../src/view-detection.mjs';
 import { startFixture } from './fixtures/server.mjs';
 import { fixtureState, makeManifest, makeManifestInfo, listingId } from './helpers.mjs';
-import { richTextToPlainText } from '../src/rich-text.mjs';
+import { normalizeFabHeadingLevel, richTextToPlainText } from '../src/rich-text.mjs';
 
 const chrome = process.env.FAB_CHROME_PATH ?? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 let browser;
@@ -145,6 +145,56 @@ test('portal verifier requires semantic Description blocks and inline marks', as
   assert.equal(plainBold.result.comparison.fields.find((field) => field.manifestJsonPath === 'descriptionRichText').classification, 'MISMATCH');
   const literalList = await scenario({ manifest, state: { descriptionRichText: { blocks: [{ type: 'heading', level: 2, runs: [{ text: 'Included Profiles' }] }, { type: 'paragraph', runs: [{ text: 'Run ' }, { text: 'Solo', marks: ['bold'] }, { text: ' now.' }] }, { type: 'paragraph', runs: [{ text: '- Listen Server\n- Bad Network' }] }, ...expected.blocks.slice(3) ] } } });
   assert.equal(literalList.result.comparison.fields.find((field) => field.manifestJsonPath === 'descriptionRichText').classification, 'MISMATCH');
+});
+
+test('Fab Heading 2 persisted as h5 is canonicalized to heading level 2', async () => {
+  assert.equal(normalizeFabHeadingLevel('h5'), 2);
+  const expected = { blocks: [{ type: 'heading', level: 2, runs: [{ text: 'Section' }] }] };
+  const manifest = makeManifest({ longDescription: richTextToPlainText(expected), descriptionRichText: expected });
+  const matching = await scenario({ manifest });
+  assert.equal(matching.result.comparison.fields.find((field) => field.manifestJsonPath === 'descriptionRichText').classification, 'MATCH');
+});
+
+test('Fab h5 does not satisfy a paragraph or another heading level', async () => {
+  const expectedParagraph = { blocks: [{ type: 'paragraph', runs: [{ text: 'Section' }] }] };
+  const paragraphManifest = makeManifest({ longDescription: richTextToPlainText(expectedParagraph), descriptionRichText: expectedParagraph });
+  const paragraphResult = await scenario({
+    manifest: paragraphManifest,
+    state: { descriptionRichText: { blocks: [{ type: 'heading', level: 2, runs: [{ text: 'Section' }] }] } },
+  });
+  assert.equal(paragraphResult.result.comparison.fields.find((field) => field.manifestJsonPath === 'descriptionRichText').classification, 'MISMATCH');
+
+  const expectedHeading = { blocks: [{ type: 'heading', level: 2, runs: [{ text: 'Section' }] }] };
+  const headingManifest = makeManifest({ longDescription: richTextToPlainText(expectedHeading), descriptionRichText: expectedHeading });
+  const differentHeadingResult = await scenario({
+    manifest: headingManifest,
+    state: { descriptionRichText: expectedHeading, richTextHeadingTag: 'h4' },
+  });
+  assert.equal(differentHeadingResult.result.comparison.fields.find((field) => field.manifestJsonPath === 'descriptionRichText').classification, 'MISMATCH');
+});
+
+test('plain and bold paragraphs do not satisfy a Fab Heading 2 expectation', async () => {
+  const expected = { blocks: [{ type: 'heading', level: 2, runs: [{ text: 'Section' }] }] };
+  const manifest = makeManifest({ longDescription: richTextToPlainText(expected), descriptionRichText: expected });
+  const plain = await scenario({
+    manifest,
+    state: { descriptionRichText: { blocks: [{ type: 'paragraph', runs: [{ text: 'Section' }] }] } },
+  });
+  assert.equal(plain.result.comparison.fields.find((field) => field.manifestJsonPath === 'descriptionRichText').classification, 'MISMATCH');
+  const bold = await scenario({
+    manifest,
+    state: { descriptionRichText: { blocks: [{ type: 'paragraph', runs: [{ text: 'Section', marks: ['bold'] }] }] } },
+  });
+  assert.equal(bold.result.comparison.fields.find((field) => field.manifestJsonPath === 'descriptionRichText').classification, 'MISMATCH');
+});
+
+test('Fab heading normalization is shared by Description and Additional information', async () => {
+  const heading = { type: 'heading', level: 2, runs: [{ text: 'Features' }] };
+  const additional = { blocks: [heading, { type: 'unordered_list', items: [[{ text: 'Reusable profiles' }]] }] };
+  const manifest = makeManifest({ additionalInformationRichText: additional, technicalInformationText: richTextToPlainText(additional) });
+  const result = await scenario({ manifest });
+  assert.equal(result.result.comparison.fields.find((field) => field.manifestJsonPath === 'descriptionRichText').classification, 'MATCH');
+  assert.equal(result.result.comparison.fields.find((field) => field.manifestJsonPath === 'additionalInformationRichText' && field.view === 'format').classification, 'MATCH');
 });
 
 test('portal verifier compares FAQ existence, count, order, question, and answer', async () => {

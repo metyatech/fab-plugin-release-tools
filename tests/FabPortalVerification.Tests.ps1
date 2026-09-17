@@ -29,9 +29,9 @@ Describe 'Fab portal verify-only contracts' {
             $toolVersion = [string]$script:ToolVersion
             $nodeCliVersion = $expectedNodeVersion
 
-            $moduleVersion | Should -BeExactly '0.8.2'
-            $toolVersion | Should -BeExactly '0.8.2'
-            $nodeCliVersion | Should -BeExactly '0.8.2'
+            $moduleVersion | Should -BeExactly '0.8.3'
+            $toolVersion | Should -BeExactly '0.8.3'
+            $nodeCliVersion | Should -BeExactly '0.8.3'
             $moduleVersion | Should -BeExactly $toolVersion
             $toolVersion | Should -BeExactly $nodeCliVersion
         }

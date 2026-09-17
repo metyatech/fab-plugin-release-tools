@@ -13,7 +13,7 @@ function richText(value, links = []) {
   return rendered.replace(/\r\n?|\n/g, '<br>');
 }
 
-function semanticRichText(model) {
+function semanticRichText(model, headingTag = 'h5') {
   const run = (item) => {
     let text = html(item.text);
     for (const mark of [...(item.marks ?? [])].filter((value) => value !== 'link')) {
@@ -25,7 +25,10 @@ function semanticRichText(model) {
   };
   return model.blocks.map((block) => {
     if (block.type === 'paragraph') return `<p>${block.runs.map(run).join('')}</p>`;
-    if (block.type === 'heading') return `<h${block.level}>${block.runs.map(run).join('')}</h${block.level}>`;
+    if (block.type === 'heading') {
+      const tag = headingTag === 'p' ? 'p' : headingTag;
+      return `<${tag}>${block.runs.map(run).join('')}</${tag}>`;
+    }
     const tag = block.type === 'unordered_list' ? 'ul' : 'ol';
     return `<${tag}>${block.items.map((item) => `<li>${item.map(run).join('')}</li>`).join('')}</${tag}>`;
   }).join('');
@@ -44,7 +47,7 @@ function pageMarkup(state, listingId) {
     ${statusMarkup}
     <label>Title *<input aria-label="Title *" value="${html(state.title)}" ${state.disableFields?.includes('title') ? 'disabled' : ''}></label>
     <label>Short description *<input aria-label="Short description *" value="${html(state.shortDescription)}" ${state.disableFields?.includes('shortDescription') ? 'disabled' : ''}></label>
-    <label>Description *<div role="textbox" aria-label="Description *" contenteditable="true">${state.descriptionRichText ? semanticRichText(state.descriptionRichText) : richText(state.longDescription, state.descriptionLinks)}</div></label>
+    <label>Description *<div role="textbox" aria-label="Description *" contenteditable="true">${state.descriptionRichText ? semanticRichText(state.descriptionRichText, state.richTextHeadingTag) : richText(state.longDescription, state.descriptionLinks)}</div></label>
     <label>Product type *<select aria-label="Product type *"><option selected>${html(state.productType)}</option></select></label>
     <label>Category *<input role="combobox" aria-label="Category selection" value="${html(state.category)}"></label>
     <label>Tags *<input aria-label="Tags *" value="${html(state.tags[0] ?? '')}" readonly></label>
@@ -75,7 +78,7 @@ function pageMarkup(state, listingId) {
     <section aria-label="Technical details">
       <p>Documentation: ${html(state.documentationUrl)}</p>
       <p>Support: ${html(state.supportUrl)}</p>
-      <div ${state.technicalInformationNoLabel ? '' : 'aria-label="Technical Information" '}contenteditable="true">${state.additionalInformationRichText ? semanticRichText(state.additionalInformationRichText) : richText(state.technicalInformationText)}</div>
+      <div ${state.technicalInformationNoLabel ? '' : 'aria-label="Technical Information" '}contenteditable="true">${state.additionalInformationRichText ? semanticRichText(state.additionalInformationRichText, state.richTextHeadingTag) : richText(state.technicalInformationText)}</div>
       ${state.additionalExtraContenteditable ? '<div role="textbox" aria-label="Additional note" contenteditable="true"><p>Additional editor companion</p></div>' : ''}
     </section>
     <section data-testid="media-gallery" data-existing="${html(state.mediaExisting)}" data-order="${html(state.mediaOrder ?? '')}" data-upload-order="${html(initialStateMediaOrder(state))}">${html(state.mediaExisting === 'existing' ? 'Existing media' : state.mediaExisting === 'known' || state.mediaExisting === 'uploaded' ? '001 thumbnail 002 gallery' : 'Empty gallery')}</section>

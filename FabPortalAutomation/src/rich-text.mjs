@@ -113,6 +113,13 @@ function sameJson(left, right) {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+export function normalizeFabHeadingLevel(tagName) {
+  const tag = String(tagName ?? '').toLowerCase();
+  if (tag === 'h5') return 2;
+  if (/^h[1-6]$/.test(tag)) return Number(tag.slice(1));
+  return null;
+}
+
 export function compareRichText(actual, expected) {
   try {
     const actualModel = validateRichText(actual, 'actual richText');
@@ -135,6 +142,12 @@ function normalizeVisibleText(value) {
 function parseEditorDom(root) {
   const unsupported = (message) => ({ unsupported: message });
   const markOrder = ['bold', 'italic', 'underline', 'link'];
+  const normalizeHeadingLevel = (tagName) => {
+    const tag = String(tagName ?? '').toLowerCase();
+    if (tag === 'h5') return 2;
+    if (/^h[1-6]$/.test(tag)) return Number(tag.slice(1));
+    return null;
+  };
   const canonicalize = (marks) => [...marks].sort((left, right) => markOrder.indexOf(left) - markOrder.indexOf(right));
   const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
   const mergeSemanticRuns = (runs) => {
@@ -188,10 +201,11 @@ function parseEditorDom(root) {
     if (child.nodeType === Node.TEXT_NODE && child.textContent.trim() === '') continue;
     if (child.nodeType !== Node.ELEMENT_NODE) return unsupported('editor contains a non-semantic top-level node');
     const tag = child.tagName.toLowerCase();
-    if (tag === 'p' || /^h[1-6]$/.test(tag)) {
+    const headingLevel = normalizeHeadingLevel(tag);
+    if (tag === 'p' || headingLevel !== null) {
       const value = runs(child);
       if (value?.unsupported) return value;
-      blocks.push(tag === 'p' ? { type: 'paragraph', runs: value } : { type: 'heading', level: Number(tag.slice(1)), runs: value });
+      blocks.push(tag === 'p' ? { type: 'paragraph', runs: value } : { type: 'heading', level: headingLevel, runs: value });
     } else if (tag === 'ul' || tag === 'ol') {
       const items = [];
       for (const item of child.children) {
