@@ -430,7 +430,40 @@ InModuleScope FabPluginReleaseTools {
 
         It 'rejects invalid schemaVersion' {
             $configuration = Get-TestConfigurationObject
+            $configuration.schemaVersion = 3
+            Save-TestConfiguration -Configuration $configuration -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'continues to accept legacy schemaVersion 1 configurations' {
+            $configuration = Get-TestConfigurationObject
+            Save-TestConfiguration -Configuration $configuration -Path $configurationPath
+            $result = Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8'
+            $result.schemaVersion | Should -Be 1
+        }
+
+        It 'accepts schemaVersion 2 with a GitHub repository identity' {
+            $configuration = Get-TestConfigurationObject
             $configuration.schemaVersion = 2
+            $configuration.testProject = [ordered]@{ repository = 'metyatech/FindInMaterialsDemo' }
+            Save-TestConfiguration -Configuration $configuration -Path $configurationPath
+            $result = Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8'
+            $result.testProject.repository | Should -BeExactly 'metyatech/FindInMaterialsDemo'
+        }
+
+        It 'requires testProject in schemaVersion 2 configurations' {
+            $configuration = Get-TestConfigurationObject
+            $configuration.schemaVersion = 2
+            Save-TestConfiguration -Configuration $configuration -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'rejects malformed test project repository identities' {
+            $configuration = Get-TestConfigurationObject
+            $configuration.schemaVersion = 2
+            $configuration.testProject = [ordered]@{ repository = 'D:\ghws\FindInMaterialsDemo' }
             Save-TestConfiguration -Configuration $configuration -Path $configurationPath
             { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
                 Should -Throw
@@ -518,6 +551,126 @@ InModuleScope FabPluginReleaseTools {
             Save-TestConfiguration -Configuration $configuration -Path $configurationPath
             { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
                 Should -Throw
+        }
+    }
+
+    Describe 'SchemaVersion 2 test project verification' {
+        BeforeEach {
+            $script:FabGitHubCalls = @()
+            Mock Get-FabGitHubCliPath { return 'gh.exe' }
+            Mock Invoke-NativeProcessCapture {
+                param($FileName, $ArgumentList, $WorkingDirectory)
+                $FileName | Should -BeExactly 'gh.exe'
+                [void]$WorkingDirectory
+                $script:FabGitHubCalls += ,@($ArgumentList)
+                if ($ArgumentList[0] -ceq 'auth') {
+                    return [pscustomobject]@{ ExitCode = 0; StdOut = 'authenticated'; StdErr = '' }
+                }
+                $endpoint = [string]$ArgumentList[1]
+                if ($endpoint -ceq 'repos/metyatech/FindInMaterialsDemo') {
+                    return [pscustomobject]@{
+                        ExitCode = 0
+                        StdOut = '{"default_branch":"main","private":true}'
+                        StdErr = ''
+                    }
+                }
+                if ($endpoint -ceq 'repos/metyatech/FindInMaterialsDemo/branches/main') {
+                    return [pscustomobject]@{
+                        ExitCode = 0
+                        StdOut = '{"commit":{"commit":{"tree":{"sha":"0123456789012345678901234567890123456789"}}}}'
+                        StdErr = ''
+                    }
+                }
+                if ($endpoint -ceq 'repos/metyatech/FindInMaterialsDemo/git/trees/0123456789012345678901234567890123456789?recursive=1') {
+                    return [pscustomobject]@{
+                        ExitCode = 0
+                        StdOut = '{"tree":[{"path":"Demo/FindInMaterialsDemo.uproject","type":"blob"}]}'
+                        StdErr = ''
+                    }
+                }
+                throw "Unexpected GitHub request: $endpoint"
+            }
+        }
+
+        It 'accepts a private GitHub repository containing a project file' {
+            { Test-FabPluginTestProjectRepository -Repository 'metyatech/FindInMaterialsDemo' } | Should -Not -Throw
+        }
+
+        It 'reports a missing repository separately from API failures' {
+            Mock Invoke-NativeProcessCapture {
+                param($FileName, $ArgumentList, $WorkingDirectory)
+                $FileName | Should -BeExactly 'gh.exe'
+                [void]$WorkingDirectory
+                $script:FabGitHubCalls += ,@($ArgumentList)
+                if ($ArgumentList[0] -ceq 'auth') {
+                    return [pscustomobject]@{ ExitCode = 0; StdOut = 'authenticated'; StdErr = '' }
+                }
+                throw 'Process failed with exit code 1: gh.exe api repos/metyatech/FindInMaterialsDemo. HTTP 404 Not Found'
+            }
+            { Test-FabPluginTestProjectRepository -Repository 'metyatech/FindInMaterialsDemo' } |
+                Should -Throw '*repository does not exist*'
+        }
+
+        It 'fails when the remote repository tree has no uproject file' {
+            Mock Invoke-NativeProcessCapture {
+                param($FileName, $ArgumentList, $WorkingDirectory)
+                $FileName | Should -BeExactly 'gh.exe'
+                [void]$WorkingDirectory
+                $script:FabGitHubCalls += ,@($ArgumentList)
+                if ($ArgumentList[0] -ceq 'auth') {
+                    return [pscustomobject]@{ ExitCode = 0; StdOut = 'authenticated'; StdErr = '' }
+                }
+                if ($ArgumentList[1] -ceq 'repos/metyatech/FindInMaterialsDemo/git/trees/0123456789012345678901234567890123456789?recursive=1') {
+                    return [pscustomobject]@{ ExitCode = 0; StdOut = '{"tree":[]}' ; StdErr = '' }
+                }
+                if ($ArgumentList[1] -ceq 'repos/metyatech/FindInMaterialsDemo') {
+                    return [pscustomobject]@{ ExitCode = 0; StdOut = '{"default_branch":"main"}'; StdErr = '' }
+                }
+                if ($ArgumentList[1] -ceq 'repos/metyatech/FindInMaterialsDemo/branches/main') {
+                    return [pscustomobject]@{
+                        ExitCode = 0
+                        StdOut = '{"commit":{"commit":{"tree":{"sha":"0123456789012345678901234567890123456789"}}}}'
+                        StdErr = ''
+                    }
+                }
+                throw "Unexpected GitHub request: $($ArgumentList[1])"
+            }
+            { Test-FabPluginTestProjectRepository -Repository 'metyatech/FindInMaterialsDemo' } |
+                Should -Throw '*contains no .uproject file*'
+        }
+
+        It 'reports GitHub authentication failures distinctly' {
+            Mock Invoke-NativeProcessCapture {
+                param($FileName, $ArgumentList, $WorkingDirectory)
+                $FileName | Should -BeExactly 'gh.exe'
+                [void]$WorkingDirectory
+                if ($ArgumentList[0] -ceq 'auth') {
+                    throw 'gh auth status failed: not logged in'
+                }
+                throw 'GitHub API must not be called after authentication failure.'
+            }
+            { Test-FabPluginTestProjectRepository -Repository 'metyatech/FindInMaterialsDemo' } |
+                Should -Throw '*GitHub authentication failed*'
+        }
+
+        It 'reports GitHub API and network failures separately from missing repositories' {
+            Mock Invoke-NativeProcessCapture {
+                param($FileName, $ArgumentList, $WorkingDirectory)
+                $FileName | Should -BeExactly 'gh.exe'
+                [void]$WorkingDirectory
+                if ($ArgumentList[0] -ceq 'auth') {
+                    return [pscustomobject]@{ ExitCode = 0; StdOut = 'authenticated'; StdErr = '' }
+                }
+                throw 'Process failed with exit code 1: gh.exe api repos/metyatech/FindInMaterialsDemo. Temporary failure in name resolution'
+            }
+            { Test-FabPluginTestProjectRepository -Repository 'metyatech/FindInMaterialsDemo' } |
+                Should -Throw '*GitHub API/network verification failed*'
+        }
+
+        It 'does not depend on a local repository path' {
+            Test-FabPluginTestProjectRepository -Repository 'metyatech/FindInMaterialsDemo'
+            @($script:FabGitHubCalls | ForEach-Object { $_ -join ' ' } | Where-Object { $_ -match '^[A-Za-z]:\\' }) |
+                Should -BeNullOrEmpty
         }
     }
 

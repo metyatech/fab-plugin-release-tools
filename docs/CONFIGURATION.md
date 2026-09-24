@@ -48,7 +48,8 @@ atomically replaces the complete `project_file_links` set.
 
 | Property | Type | Required | Allowed values and failure conditions |
 | --- | --- | --- | --- |
-| `schemaVersion` | integer | yes | Must be exactly `1`. |
+| `schemaVersion` | integer | yes | `1` keeps the legacy contract. `2` requires `testProject`. |
+| `testProject` | object | schemaVersion 2 | The persistent manual test/demo project repository identity; see below. Forbidden in schemaVersion 1. |
 | `pluginName` | string | yes | Starts with an ASCII letter or digit; remaining characters are ASCII letters, digits, or `_`. |
 | `descriptorFile` | relative path | yes | Must exactly equal `<pluginName>.uplugin`. |
 | `engineVersions` | string array | yes | Non-empty, unique `5.x` values; the requested engine must be present. |
@@ -69,6 +70,23 @@ atomically replaces the complete `project_file_links` set.
 | `thirdPartyLicenseSets` | object array | yes | Exact license-file allowlists described below; use `[]` if none. |
 | `forbiddenPackagePatterns` | regex string array | yes | Additional plugin-relative forbidden paths. Every regex must compile; these rules cannot disable the built-in unsupported-format or source-reference checks. |
 | `buildLogFailPatterns` | regex string array | yes | Additional UAT log failure patterns. Every regex must compile. |
+
+## `testProject`
+
+New Fab Unreal plugin configurations use schemaVersion 2 and identify their
+persistent manual test/demo project by GitHub owner and repository name:
+
+```json
+"schemaVersion": 2,
+"testProject": { "repository": "metyatech/FindInMaterialsDemo" }
+```
+
+Release verification uses the authenticated GitHub CLI to confirm that the
+repository exists and its default branch tree contains a `.uproject` file.
+Private repositories are supported. GitHub authentication and API/network
+failures are reported separately from a repository that returns HTTP 404.
+SchemaVersion 1 remains valid for existing configurations and does not require
+`testProject`.
 
 `forbiddenPackagePatterns` is additive. The built-in policy always rejects Fab-
 unsupported package formats such as executables, installers, and non-ZIP

@@ -495,10 +495,10 @@ function Import-FabPluginReleaseConfiguration {
     }
 
     if ($configuration.schemaVersion -isnot [long] -and $configuration.schemaVersion -isnot [int]) {
-        throw 'schemaVersion must be the integer 1.'
+        throw 'schemaVersion must be the integer 1 or 2.'
     }
-    if ($configuration.schemaVersion -ne 1) {
-        throw 'schemaVersion must be 1.'
+    if ($configuration.schemaVersion -notin @(1, 2)) {
+        throw 'schemaVersion must be 1 or 2.'
     }
     if ([string]$configuration.pluginName -cnotmatch '^[0-9A-Za-z][0-9A-Za-z_]*$') {
         throw 'pluginName must start with an ASCII letter or digit and contain only letters, digits, and underscores.'
@@ -709,6 +709,89 @@ function Invoke-NativeProcessCapture {
     }
     finally {
         $process.Dispose()
+    }
+}
+
+function Get-FabGitHubCliPath {
+    $command = Get-Command gh -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($null -eq $command) {
+        throw 'GitHub CLI (gh) is required to verify schemaVersion 2 test projects.'
+    }
+    return $command.Source
+}
+
+function Invoke-FabGitHubApi {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Endpoint
+    )
+
+    $result = Invoke-NativeProcessCapture -FileName (Get-FabGitHubCliPath) `
+        -ArgumentList @('api', $Endpoint)
+    return $result.StdOut
+}
+
+function Test-FabPluginTestProjectRepository {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Repository
+    )
+
+    $ghPath = Get-FabGitHubCliPath
+    try {
+        [void](Invoke-NativeProcessCapture -FileName $ghPath `
+            -ArgumentList @('auth', 'status', '--hostname', 'github.com'))
+    }
+    catch {
+        throw "GitHub authentication failed while verifying test project '$Repository': $($_.Exception.Message)"
+    }
+
+    try {
+        $repositoryJson = Invoke-FabGitHubApi -Endpoint "repos/$Repository"
+    }
+    catch {
+        if ($_.Exception.Message -match '(?i)(HTTP\s*404|\b404\b|Not Found \(HTTP)') {
+            throw "Test project GitHub repository does not exist: $Repository"
+        }
+        throw "GitHub API/network verification failed for test project '$Repository': $($_.Exception.Message)"
+    }
+
+    try {
+        $repositoryMetadata = $repositoryJson | ConvertFrom-Json -Depth 20
+    }
+    catch {
+        throw "GitHub returned invalid repository metadata for test project '$Repository': $($_.Exception.Message)"
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$repositoryMetadata.default_branch)) {
+        throw "GitHub repository metadata has no default branch for test project '$Repository'."
+    }
+
+    $encodedBranch = [System.Uri]::EscapeDataString([string]$repositoryMetadata.default_branch)
+    $branchJson = Invoke-FabGitHubApi -Endpoint "repos/$Repository/branches/$encodedBranch"
+    try {
+        $branchMetadata = $branchJson | ConvertFrom-Json -Depth 20
+    }
+    catch {
+        throw "GitHub returned invalid branch metadata for test project '$Repository': $($_.Exception.Message)"
+    }
+    $treeSha = [string]$branchMetadata.commit.commit.tree.sha
+    if ($treeSha -notmatch '^[0-9a-fA-F]{40}$') {
+        throw "GitHub returned an invalid default branch tree for test project '$Repository'."
+    }
+
+    $treeJson = Invoke-FabGitHubApi -Endpoint "repos/$Repository/git/trees/${treeSha}?recursive=1"
+    try {
+        $tree = $treeJson | ConvertFrom-Json -Depth 100
+    }
+    catch {
+        throw "GitHub returned an invalid repository tree for test project '$Repository': $($_.Exception.Message)"
+    }
+    $projectFile = @($tree.tree | Where-Object {
+            [string]$_.type -ceq 'blob' -and [string]$_.path -match '(?i)\.uproject$'
+        } | Select-Object -First 1)
+    if ($projectFile.Count -eq 0) {
+        throw "Test project GitHub repository contains no .uproject file: $Repository"
     }
 }
 
@@ -2989,6 +3072,10 @@ function Invoke-FabPluginReleaseCore {
             }
             $configuration = Import-FabPluginReleaseConfiguration `
                 -ConfigPath $resolvedConfigPath -EngineVersion $EngineVersion
+            if ($configuration.schemaVersion -eq 2) {
+                Test-FabPluginTestProjectRepository `
+                    -Repository ([string]$configuration.testProject.repository)
+            }
             $resolvedOutput = if ([string]::IsNullOrWhiteSpace($requestedOutputDirectory)) {
                 Join-Path $PSScriptRoot "artifacts\$($configuration.pluginName)\UE$EngineVersion"
             }

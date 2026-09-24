@@ -97,6 +97,12 @@ from [the Runtime Asset Import example](examples/RuntimeAssetImport/FabPluginRel
 and adapt its explicit allowlists. Every property is documented in
 [Configuration](docs/CONFIGURATION.md).
 
+New Fab Unreal plugin configurations use schemaVersion 2 and require a
+`testProject.repository` GitHub identity for a persistent manual test/demo
+project. Release verification uses the authenticated GitHub CLI to confirm the
+repository and a `.uproject` file in its tree. Existing schemaVersion 1
+configurations remain supported.
+
 Documentation and support URLs must not contain user information. URL checks
 use the configured URL for the request, but reports omit user information, the
 entire query, and the fragment from both requested and redirected URLs. Reports
