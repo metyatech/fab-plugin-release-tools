@@ -284,8 +284,8 @@ pwsh .\Invoke-FabUnrealEditorCapture.ps1 -PluginPath <path> `
 ```
 
 The harness runs the product Automation Test after editor initialization with
-normal RHI settings and does not use `NullRHI`, `RenderOffscreen`, or
-startup-time capture defaults.
+normal RHI settings, disables default engine plugins in the isolated host, and
+does not use `NullRHI`, `RenderOffscreen`, or startup-time capture defaults.
 
 The scenario source is product-owned C++ and must register the named
 Automation Test. It owns product-specific setup such as demo state or an MRQ
@@ -293,7 +293,10 @@ queue; the shared harness owns the temporary host, normal-RHI launch, test
 command, report directory, and failure retention. The generated helper module
 exposes the intended common operations for opening a Nomad tab, finding and
 clicking Slate controls, waiting for visible text/frames, collecting visible
-text, and saving a screenshot.
+text, and saving a screenshot. The scenario receives the report's absolute
+`proof` directory in `-FabCaptureScreenshotDirectory`; `SaveScreenshot`
+captures the active top-level Slate window and persists a PNG at the requested
+absolute file path.
 
 `FabPortalSubmission.json` is the sole structured input contract for future
 Playwright Fab Portal automation. Its paths are forward-slash paths relative

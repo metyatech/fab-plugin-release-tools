@@ -113,10 +113,110 @@ Describe 'Fab submission preparation contracts' {
         . (Join-Path $PSScriptRoot '..\Invoke-FabUnrealEditorCapture.ps1') `
             -PluginPath $TestDrive -EngineVersion 5.8 -ScenarioSource scenario.cpp `
             -AutomationTestName Fab.Fixture.Capture -SkipExecution
-        $arguments = @(Get-FabCaptureCommandArgument -ProjectPath 'C:\temp\Host.uproject' `
+        $arguments = @(Get-FabCaptureCommandArgument -ProjectPath (Join-Path $TestDrive 'Host.uproject') `
+            -ScreenshotDirectory (Join-Path $TestDrive 'proof') `
             -AutomationTestName 'Fab.Fixture.Capture')
         [string]::Join(' ', $arguments) | Should -Not -Match '(?i)NullRHI|RenderOffscreen'
+        $arguments | Should -Contain '-culture=en-US'
         [string]::Join(' ', $arguments) | Should -Match 'Automation RunTests Fab.Fixture.Capture'
+        [string]::Join(' ', $arguments) | Should -Match 'FabCaptureScreenshotDirectory='
+    }
+
+    It 'executes the editor from the generated temporary host directory' {
+        $fixtureRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $engineRoot = Join-Path $fixtureRoot 'Engine'
+        $editorPath = Join-Path $engineRoot 'Engine\Binaries\Win64\UnrealEditor.exe'
+        $pluginPath = Join-Path $fixtureRoot 'FixturePlugin'
+        $captureOutput = Join-Path $fixtureRoot 'CaptureOutput'
+        [System.IO.Directory]::CreateDirectory($pluginPath) | Out-Null
+        [System.IO.Directory]::CreateDirectory((Split-Path -Parent $editorPath)) | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $pluginPath 'FixturePlugin.uplugin'),
+            '{"FileVersion":3,"Modules":[{"Name":"FixturePlugin","Type":"Editor"}]}')
+        [System.IO.File]::WriteAllText((Join-Path $pluginPath 'scenario.cpp'), '// fixture scenario')
+        [System.IO.File]::WriteAllText($editorPath, '')
+
+        . (Join-Path $PSScriptRoot '..\Invoke-FabUnrealEditorCapture.ps1') `
+            -PluginPath $pluginPath -EngineVersion 5.8 -ScenarioSource 'scenario.cpp' `
+            -AutomationTestName Fab.Fixture.Capture -EngineRoot $engineRoot -OutputDirectory $captureOutput
+
+        $script:observedCaptureWorkingDirectory = $null
+        $script:captureExecutionOrder = [System.Collections.Generic.List[string]]::new()
+        $script:observedBuild = $null
+        Mock Invoke-FabCaptureBuild {
+            $script:captureExecutionOrder.Add('Build')
+            $script:observedBuild = [pscustomobject]@{
+                BuildToolPath = $BuildToolPath
+                ProjectPath = $ProjectPath
+                WorkingDirectory = $WorkingDirectory
+            }
+            [pscustomobject]@{ ExitCode = 0; Output = ''; Error = '' }
+        }
+        Mock Invoke-FabCaptureEditor {
+            $script:captureExecutionOrder.Add('Editor')
+            $script:observedCaptureWorkingDirectory = $WorkingDirectory
+            [pscustomobject]@{ ExitCode = 0; Output = ''; Error = '' }
+        }
+
+        $captureResults = @(Invoke-FabUnrealEditorCaptureCommand)
+        $capture = $captureResults | Where-Object { $null -ne $_.PSObject.Properties['SessionRoot'] } | Select-Object -Last 1
+
+        $script:observedCaptureWorkingDirectory | Should -BeExactly (Join-Path $capture.SessionRoot 'HostProject')
+        $script:observedBuild.BuildToolPath | Should -BeExactly (Join-Path $engineRoot `
+                'Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.exe')
+        $script:observedBuild.ProjectPath | Should -BeExactly (Join-Path $capture.SessionRoot 'HostProject\FabCaptureHost.uproject')
+        $script:observedBuild.WorkingDirectory | Should -BeExactly (Join-Path $capture.SessionRoot 'HostProject')
+        $script:captureExecutionOrder | Should -Be @('Build', 'Editor')
+        $capture.Report.arguments | Should -Contain "-FabCaptureScreenshotDirectory=$(Join-Path $capture.SessionRoot 'proof')"
+        $capture.Report.arguments | Should -Contain '-culture=en-US'
+        $capture.Report.normalRhi | Should -BeTrue
+    }
+
+    It 'generates a screenshot helper that persists PNG bytes at the requested absolute path' {
+        $fixtureRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $pluginPath = Join-Path $fixtureRoot 'FixturePlugin'
+        [System.IO.Directory]::CreateDirectory($pluginPath) | Out-Null
+        $gitObjectDirectory = Join-Path $pluginPath '.git\objects\00'
+        [System.IO.Directory]::CreateDirectory($gitObjectDirectory) | Out-Null
+        $gitObjectPath = Join-Path $gitObjectDirectory 'fixture-object'
+        [System.IO.File]::WriteAllText($gitObjectPath, 'fixture')
+        [System.IO.File]::SetAttributes($gitObjectPath, [System.IO.FileAttributes]::ReadOnly)
+        [System.IO.File]::WriteAllText((Join-Path $pluginPath 'FixturePlugin.uplugin'),
+            '{"FileVersion":3,"Modules":[{"Name":"FixturePlugin","Type":"Editor"}]}')
+        [System.IO.File]::WriteAllText((Join-Path $pluginPath 'scenario.cpp'), '// fixture scenario')
+
+        . (Join-Path $PSScriptRoot '..\Invoke-FabUnrealEditorCapture.ps1') `
+            -PluginPath $pluginPath -EngineVersion 5.8 -ScenarioSource 'scenario.cpp' `
+            -AutomationTestName Fab.Fixture.Capture -SkipExecution -OutputDirectory (Join-Path $fixtureRoot 'Output')
+
+        $captureResults = @(Invoke-FabUnrealEditorCaptureCommand)
+        $capture = $captureResults | Where-Object { $null -ne $_.PSObject.Properties['SessionRoot'] } | Select-Object -Last 1
+        $helperPath = Join-Path $capture.SessionRoot `
+            'HostProject\Plugins\FabCaptureHarness\Source\FabCaptureHarness\FabCaptureHarnessHelpers.cpp'
+        $helper = [System.IO.File]::ReadAllText($helperPath)
+        $hostProject = Get-Content -LiteralPath (Join-Path $capture.SessionRoot 'HostProject\FabCaptureHost.uproject') -Raw |
+            ConvertFrom-Json
+        $buildScript = [System.IO.File]::ReadAllText((Join-Path $capture.SessionRoot `
+                'HostProject\Plugins\FabCaptureHarness\Source\FabCaptureHarness\FabCaptureHarness.Build.cs'))
+        $harnessDescriptor = Get-Content -LiteralPath (Join-Path $capture.SessionRoot `
+                'HostProject\Plugins\FabCaptureHarness\FabCaptureHarness.uplugin') -Raw | ConvertFrom-Json
+
+        @($hostProject.Plugins | Where-Object { $_.Enabled } | ForEach-Object Name) |
+            Should -Contain 'FixturePlugin'
+        $hostProject.DisableEnginePluginsByDefault | Should -BeTrue
+        @($hostProject.Plugins | Where-Object { $_.Enabled } | ForEach-Object Name) |
+            Should -Contain 'FabCaptureHarness'
+        (Join-Path $capture.SessionRoot 'HostProject\Plugins\FixturePlugin\.git') | Should -Not -Exist
+        $buildScript | Should -Match '"FixturePlugin"'
+        $harnessDescriptor.Plugins | Where-Object { $_.Name -EQ 'FixturePlugin' -and $_.Enabled } | Should -Not -BeNullOrEmpty
+        $helper | Should -Match 'TakeScreenshot\(ActiveWindow->GetContent\(\), Pixels, ImageSize\)'
+        $helper | Should -Match 'PrepareActiveWindowForCapture\(int32 ClientWidth, int32 ClientHeight\)'
+        $helper | Should -Match 'ActiveWindow->Resize\('
+        $helper | Should -Match 'GetClientSizeInScreen\(\)'
+        $helper | Should -Match 'FImageUtils::PNGCompressImageArray'
+        $helper | Should -Match 'FFileHelper::SaveArrayToFile\(EncodedPng, \*AbsolutePath\)'
+        $helper | Should -Match 'FPaths::GetPath\(AbsolutePath\)'
+        $helper | Should -Match 'FileSize\(\*AbsolutePath\) > 0'
+        [System.IO.File]::SetAttributes($gitObjectPath, [System.IO.FileAttributes]::Normal)
     }
 }
 
