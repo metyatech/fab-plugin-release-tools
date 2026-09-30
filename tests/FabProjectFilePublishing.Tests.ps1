@@ -57,6 +57,8 @@ Describe 'Fab project file publishing' {
     }
 
     It 'falls back to the text bucket listing when Wrangler lacks JSON output' {
+        $previousToken = [Environment]::GetEnvironmentVariable('CLOUDFLARE_API_TOKEN', 'Process')
+        [Environment]::SetEnvironmentVariable('CLOUDFLARE_API_TOKEN', 'test-api-token', 'Process')
         Mock Get-FabR2Wrangler { 'wrangler' }
         Mock Invoke-FabR2Wrangler {
             param(
@@ -73,10 +75,243 @@ Describe 'Fab project file publishing' {
             }
         }
 
-        Assert-FabR2BucketAccess -Publishing ([pscustomobject]@{
-                Bucket = 'metyatech-fab-project-files'
-            }) | Should -BeExactly 'wrangler'
-        Should -Invoke Invoke-FabR2Wrangler -Times 2 -Exactly
+        try {
+            Assert-FabR2BucketAccess -Publishing ([pscustomobject]@{
+                    Bucket = 'metyatech-fab-project-files'
+                }) | Should -BeExactly 'wrangler'
+            Should -Invoke Invoke-FabR2Wrangler -Times 2 -Exactly
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable('CLOUDFLARE_API_TOKEN', $previousToken, 'Process')
+        }
+    }
+
+    It 'uses the exact configured bucket info command for local OAuth' {
+        $previousToken = [Environment]::GetEnvironmentVariable('CLOUDFLARE_API_TOKEN', 'Process')
+        $previousCi = [Environment]::GetEnvironmentVariable('CI', 'Process')
+        $previousGithubActions = [Environment]::GetEnvironmentVariable('GITHUB_ACTIONS', 'Process')
+        [Environment]::SetEnvironmentVariable('CLOUDFLARE_API_TOKEN', $null, 'Process')
+        [Environment]::SetEnvironmentVariable('CI', 'true', 'Process')
+        [Environment]::SetEnvironmentVariable('GITHUB_ACTIONS', $null, 'Process')
+        Mock Get-FabR2Wrangler { 'wrangler' }
+        Mock Invoke-FabR2Wrangler {
+            param([string]$WranglerPath, [string[]]$Arguments)
+            [void]$WranglerPath
+            [void]$Arguments
+            [pscustomobject]@{ Output = $null; Error = $null; ExitCode = 0; ExecutionMode = 'LocalOAuth' }
+        }
+
+        try {
+            Assert-FabR2BucketAccess -Publishing ([pscustomobject]@{
+                    Bucket = 'metyatech-fab-project-files'
+                }) | Should -BeExactly 'wrangler'
+            Should -Invoke Invoke-FabR2Wrangler -Times 1 -Exactly -ParameterFilter {
+                ($Arguments -join ' ') -ceq 'r2 bucket info metyatech-fab-project-files'
+            }
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable('CLOUDFLARE_API_TOKEN', $previousToken, 'Process')
+            [Environment]::SetEnvironmentVariable('CI', $previousCi, 'Process')
+            [Environment]::SetEnvironmentVariable('GITHUB_ACTIONS', $previousGithubActions, 'Process')
+        }
+    }
+
+    It 'keeps captured bucket listing for an explicit API token' {
+        $previousToken = [Environment]::GetEnvironmentVariable('CLOUDFLARE_API_TOKEN', 'Process')
+        [Environment]::SetEnvironmentVariable('CLOUDFLARE_API_TOKEN', 'test-api-token', 'Process')
+        Mock Get-FabR2Wrangler { 'wrangler' }
+        Mock Invoke-FabR2Wrangler {
+            param([string]$WranglerPath, [string[]]$Arguments)
+            [void]$WranglerPath
+            [void]$Arguments
+            [pscustomobject]@{
+                Output = '[{"name":"metyatech-fab-project-files"}]'
+                Error = ''
+                ExitCode = 0
+                ExecutionMode = 'ApiToken'
+            }
+        }
+
+        try {
+            Assert-FabR2BucketAccess -Publishing ([pscustomobject]@{
+                    Bucket = 'metyatech-fab-project-files'
+                }) | Should -BeExactly 'wrangler'
+            Should -Invoke Invoke-FabR2Wrangler -Times 1 -Exactly -ParameterFilter {
+                ($Arguments -join ' ') -ceq 'r2 bucket list --json'
+            }
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable('CLOUDFLARE_API_TOKEN', $previousToken, 'Process')
+        }
+    }
+
+    It 'rejects a missing bucket in the captured API-token bucket list' {
+        $previousToken = [Environment]::GetEnvironmentVariable('CLOUDFLARE_API_TOKEN', 'Process')
+        [Environment]::SetEnvironmentVariable('CLOUDFLARE_API_TOKEN', 'test-api-token', 'Process')
+        Mock Get-FabR2Wrangler { 'wrangler' }
+        Mock Invoke-FabR2Wrangler {
+            [pscustomobject]@{
+                Output = '[{"name":"some-other-bucket"}]'
+                Error = ''
+                ExitCode = 0
+                ExecutionMode = 'ApiToken'
+            }
+        }
+
+        try {
+            { Assert-FabR2BucketAccess -Publishing ([pscustomobject]@{
+                        Bucket = 'metyatech-fab-project-files'
+                    }) } | Should -Throw '*CLOUDFLARE_BUCKET_MISMATCH*'
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable('CLOUDFLARE_API_TOKEN', $previousToken, 'Process')
+        }
+    }
+
+    It 'fails closed on a real CI marker without an API token' {
+        $previousToken = [Environment]::GetEnvironmentVariable('CLOUDFLARE_API_TOKEN', 'Process')
+        $previousGithubActions = [Environment]::GetEnvironmentVariable('GITHUB_ACTIONS', 'Process')
+        [Environment]::SetEnvironmentVariable('CLOUDFLARE_API_TOKEN', $null, 'Process')
+        [Environment]::SetEnvironmentVariable('GITHUB_ACTIONS', 'true', 'Process')
+
+        try {
+            { Get-FabR2WranglerExecutionMode } | Should -Throw '*CLOUDFLARE_API_TOKEN_REQUIRED*'
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable('CLOUDFLARE_API_TOKEN', $previousToken, 'Process')
+            [Environment]::SetEnvironmentVariable('GITHUB_ACTIONS', $previousGithubActions, 'Process')
+        }
+    }
+
+    It 'selects the explicit API-token path before CI OAuth rejection' {
+        $previousToken = [Environment]::GetEnvironmentVariable('CLOUDFLARE_API_TOKEN', 'Process')
+        $previousGithubActions = [Environment]::GetEnvironmentVariable('GITHUB_ACTIONS', 'Process')
+        [Environment]::SetEnvironmentVariable('CLOUDFLARE_API_TOKEN', 'test-api-token', 'Process')
+        [Environment]::SetEnvironmentVariable('GITHUB_ACTIONS', 'true', 'Process')
+
+        try {
+            Get-FabR2WranglerExecutionMode | Should -BeExactly 'ApiToken'
+            $startInfo = Get-FabR2WranglerStartInfo -WranglerPath 'wrangler.cmd' `
+                -Arguments @('r2', 'bucket', 'list', '--json')
+            $startInfo.RedirectStandardOutput | Should -BeTrue
+            $startInfo.RedirectStandardError | Should -BeTrue
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable('CLOUDFLARE_API_TOKEN', $previousToken, 'Process')
+            [Environment]::SetEnvironmentVariable('GITHUB_ACTIONS', $previousGithubActions, 'Process')
+        }
+    }
+
+    It 'fails local bucket access when bucket info exits nonzero' {
+        $previousToken = [Environment]::GetEnvironmentVariable('CLOUDFLARE_API_TOKEN', 'Process')
+        $previousGithubActions = [Environment]::GetEnvironmentVariable('GITHUB_ACTIONS', 'Process')
+        [Environment]::SetEnvironmentVariable('CLOUDFLARE_API_TOKEN', $null, 'Process')
+        [Environment]::SetEnvironmentVariable('GITHUB_ACTIONS', $null, 'Process')
+        Mock Get-FabR2Wrangler { 'wrangler' }
+        Mock Invoke-FabR2Wrangler { throw 'Wrangler failed with exit code 1.' }
+
+        try {
+            { Assert-FabR2BucketAccess -Publishing ([pscustomobject]@{
+                        Bucket = 'metyatech-fab-project-files'
+                    }) } | Should -Throw '*CLOUDFLARE_BUCKET_ACCESS_FAILED*'
+            Should -Invoke Invoke-FabR2Wrangler -Times 1 -Exactly -ParameterFilter {
+                ($Arguments -join ' ') -ceq 'r2 bucket info metyatech-fab-project-files'
+            }
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable('CLOUDFLARE_API_TOKEN', $previousToken, 'Process')
+            [Environment]::SetEnvironmentVariable('GITHUB_ACTIONS', $previousGithubActions, 'Process')
+        }
+    }
+
+    It 'configures inherited console streams for local OAuth despite generic CI contamination' {
+        $previousToken = [Environment]::GetEnvironmentVariable('CLOUDFLARE_API_TOKEN', 'Process')
+        $previousCi = [Environment]::GetEnvironmentVariable('CI', 'Process')
+        $previousGithubActions = [Environment]::GetEnvironmentVariable('GITHUB_ACTIONS', 'Process')
+        [Environment]::SetEnvironmentVariable('CLOUDFLARE_API_TOKEN', $null, 'Process')
+        [Environment]::SetEnvironmentVariable('CI', 'true', 'Process')
+        [Environment]::SetEnvironmentVariable('GITHUB_ACTIONS', $null, 'Process')
+
+        try {
+            $startInfo = Get-FabR2WranglerStartInfo -WranglerPath 'wrangler.cmd' `
+                -Arguments @('r2', 'bucket', 'info', 'metyatech-fab-project-files')
+            $startInfo.UseShellExecute | Should -BeFalse
+            $startInfo.CreateNoWindow | Should -BeFalse
+            $startInfo.RedirectStandardOutput | Should -BeFalse
+            $startInfo.RedirectStandardError | Should -BeFalse
+            @($startInfo.ArgumentList) | Should -BeExactly @(
+                'r2', 'bucket', 'info', 'metyatech-fab-project-files')
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable('CLOUDFLARE_API_TOKEN', $previousToken, 'Process')
+            [Environment]::SetEnvironmentVariable('CI', $previousCi, 'Process')
+            [Environment]::SetEnvironmentVariable('GITHUB_ACTIONS', $previousGithubActions, 'Process')
+        }
+    }
+
+    It 'captures Wrangler streams for an explicit API token' {
+        $previousToken = [Environment]::GetEnvironmentVariable('CLOUDFLARE_API_TOKEN', 'Process')
+        [Environment]::SetEnvironmentVariable('CLOUDFLARE_API_TOKEN', 'test-api-token', 'Process')
+
+        try {
+            $startInfo = Get-FabR2WranglerStartInfo -WranglerPath 'wrangler.cmd' -Arguments @('r2', 'bucket', 'list')
+            $startInfo.UseShellExecute | Should -BeFalse
+            $startInfo.CreateNoWindow | Should -BeTrue
+            $startInfo.RedirectStandardOutput | Should -BeTrue
+            $startInfo.RedirectStandardError | Should -BeTrue
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable('CLOUDFLARE_API_TOKEN', $previousToken, 'Process')
+        }
+    }
+
+    It 'preserves object put arguments in local OAuth mode' {
+        $previousToken = [Environment]::GetEnvironmentVariable('CLOUDFLARE_API_TOKEN', 'Process')
+        $previousCi = [Environment]::GetEnvironmentVariable('CI', 'Process')
+        [Environment]::SetEnvironmentVariable('CLOUDFLARE_API_TOKEN', $null, 'Process')
+        [Environment]::SetEnvironmentVariable('CI', $null, 'Process')
+        $zipPath = Join-Path $TestDrive 'Product.zip'
+
+        try {
+            $arguments = Get-FabR2ObjectPutArgumentList -Bucket 'metyatech-fab-project-files' `
+                -ObjectKey 'my-product/1.0.0/UE5.8/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/Product.zip' `
+                -FilePath $zipPath
+            $startInfo = Get-FabR2WranglerStartInfo -WranglerPath 'wrangler.cmd' -Arguments $arguments
+            @($startInfo.ArgumentList) | Should -BeExactly @(
+                'r2', 'object', 'put', 'metyatech-fab-project-files/my-product/1.0.0/UE5.8/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/Product.zip',
+                '--file', $zipPath, '--remote', '--content-type', 'application/zip')
+            $startInfo.RedirectStandardOutput | Should -BeFalse
+            $startInfo.RedirectStandardError | Should -BeFalse
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable('CLOUDFLARE_API_TOKEN', $previousToken, 'Process')
+            [Environment]::SetEnvironmentVariable('CI', $previousCi, 'Process')
+        }
+    }
+
+    It 'fails nonzero Wrangler commands and sanitizes API token text from errors' {
+        $previousToken = [Environment]::GetEnvironmentVariable('CLOUDFLARE_API_TOKEN', 'Process')
+        $fakeToken = 'test-secret-token-never-log'
+        [Environment]::SetEnvironmentVariable('CLOUDFLARE_API_TOKEN', $fakeToken, 'Process')
+        $failureScript = Join-Path $TestDrive 'WranglerFailure.ps1'
+        [System.IO.File]::WriteAllText($failureScript, "[Console]::Error.WriteLine('$fakeToken'); exit 7")
+        $pwshPath = (Get-Command pwsh.exe -CommandType Application | Select-Object -First 1).Source
+
+        try {
+            $caught = $null
+            try {
+                Invoke-FabR2Wrangler -WranglerPath $pwshPath -Arguments @('-NoProfile', '-File', $failureScript)
+            }
+            catch {
+                $caught = $_.Exception.Message
+            }
+            $caught | Should -Match 'exit code 7'
+            $caught | Should -Not -Match ([regex]::Escape($fakeToken))
+            $caught | Should -Match '\[REDACTED\]'
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable('CLOUDFLARE_API_TOKEN', $previousToken, 'Process')
+        }
     }
 
     It 'omits existing project file links from the publication listing copy' {

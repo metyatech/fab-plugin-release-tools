@@ -275,6 +275,13 @@ bytes, verifies anonymous downloads after upload, and changes
 complete verified link set is replaced atomically only after every new object
 has passed remote verification.
 
+For local publishing, run `wrangler login` once and invoke the preparation
+command from the same Windows user session. When `CLOUDFLARE_API_TOKEN` is not
+set, Wrangler inherits the current console so its saved OAuth session remains
+available. CI provider environments must supply `CLOUDFLARE_API_TOKEN`; the
+publisher does not remove CI markers or reuse a saved personal OAuth session
+there.
+
 For product-specific Unreal UI evidence, use the fresh temporary-host harness:
 
 ```powershell

@@ -46,6 +46,80 @@ function Get-FabR2Wrangler {
     return $command.Source
 }
 
+function Get-FabR2WranglerExecutionMode {
+    $apiToken = [Environment]::GetEnvironmentVariable('CLOUDFLARE_API_TOKEN', 'Process')
+    if (-not [string]::IsNullOrEmpty($apiToken)) { return 'ApiToken' }
+
+    $ciProviderVariables = @(
+        'GITHUB_ACTIONS', 'TF_BUILD', 'GITLAB_CI', 'JENKINS_URL', 'BUILDKITE',
+        'CIRCLECI', 'TEAMCITY_VERSION', 'BITBUCKET_BUILD_NUMBER', 'BUILD_NUMBER',
+        'DRONE', 'TRAVIS', 'APPVEYOR', 'CODEBUILD_BUILD_ID'
+    )
+    foreach ($name in $ciProviderVariables) {
+        $value = [Environment]::GetEnvironmentVariable($name, 'Process')
+        if (-not [string]::IsNullOrWhiteSpace($value) -and $value -notmatch '^(?i:false|0)$') {
+            throw "CLOUDFLARE_API_TOKEN_REQUIRED: CI provider environment '$name' requires CLOUDFLARE_API_TOKEN."
+        }
+    }
+    return 'LocalOAuth'
+}
+
+function Get-FabR2WranglerStartInfo {
+    param(
+        [Parameter(Mandatory)]
+        [string]$WranglerPath,
+
+        [Parameter(Mandatory)]
+        [string[]]$Arguments,
+
+        [ValidateSet('ApiToken', 'LocalOAuth')]
+        [string]$ExecutionMode
+    )
+
+    if ([string]::IsNullOrEmpty($ExecutionMode)) {
+        $ExecutionMode = Get-FabR2WranglerExecutionMode
+    }
+    $captureOutput = $ExecutionMode -eq 'ApiToken'
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $WranglerPath
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $captureOutput
+    $startInfo.RedirectStandardOutput = $captureOutput
+    $startInfo.RedirectStandardError = $captureOutput
+    foreach ($argument in $Arguments) { [void]$startInfo.ArgumentList.Add($argument) }
+    return $startInfo
+}
+
+function Protect-FabR2WranglerText {
+    param(
+        [AllowNull()]
+        [string]$Text
+    )
+
+    if ($null -eq $Text) { return $null }
+    $apiToken = [Environment]::GetEnvironmentVariable('CLOUDFLARE_API_TOKEN', 'Process')
+    if (-not [string]::IsNullOrEmpty($apiToken)) {
+        return $Text.Replace($apiToken, '[REDACTED]', [System.StringComparison]::Ordinal)
+    }
+    return $Text
+}
+
+function Get-FabR2ObjectPutArgumentList {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Bucket,
+
+        [Parameter(Mandatory)]
+        [string]$ObjectKey,
+
+        [Parameter(Mandatory)]
+        [string]$FilePath
+    )
+
+    return @('r2', 'object', 'put', "$Bucket/$ObjectKey", '--file', $FilePath,
+        '--remote', '--content-type', 'application/zip')
+}
+
 function Invoke-FabR2Wrangler {
     param(
         [Parameter(Mandatory)]
@@ -55,25 +129,39 @@ function Invoke-FabR2Wrangler {
         [string[]]$Arguments
     )
 
-    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
-    $startInfo.FileName = $WranglerPath
-    $startInfo.UseShellExecute = $false
-    $startInfo.CreateNoWindow = $true
-    $startInfo.RedirectStandardOutput = $true
-    $startInfo.RedirectStandardError = $true
-    foreach ($argument in $Arguments) { [void]$startInfo.ArgumentList.Add($argument) }
+    $executionMode = Get-FabR2WranglerExecutionMode
+    $startInfo = Get-FabR2WranglerStartInfo -WranglerPath $WranglerPath `
+        -Arguments $Arguments -ExecutionMode $executionMode
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
     try {
         if (-not $process.Start()) { throw 'Unable to start Wrangler.' }
-        $stdout = $process.StandardOutput.ReadToEndAsync()
-        $stderr = $process.StandardError.ReadToEndAsync()
-        $process.WaitForExit()
-        [System.Threading.Tasks.Task]::WaitAll(@($stdout, $stderr))
-        if ($process.ExitCode -ne 0) {
-            throw "Wrangler failed with exit code $($process.ExitCode): $($stderr.Result.Trim())"
+        if ($executionMode -eq 'ApiToken') {
+            $stdout = $process.StandardOutput.ReadToEndAsync()
+            $stderr = $process.StandardError.ReadToEndAsync()
+            $process.WaitForExit()
+            [System.Threading.Tasks.Task]::WaitAll(@($stdout, $stderr))
+            $outputText = Protect-FabR2WranglerText -Text ([string]$stdout.Result)
+            $errorText = Protect-FabR2WranglerText -Text ([string]$stderr.Result)
         }
-        return [pscustomobject]@{ Output = [string]$stdout.Result; Error = [string]$stderr.Result }
+        else {
+            $process.WaitForExit()
+            $outputText = $null
+            $errorText = $null
+        }
+        if ($process.ExitCode -ne 0) {
+            $failure = "Wrangler failed with exit code $($process.ExitCode)."
+            if ($executionMode -eq 'ApiToken' -and -not [string]::IsNullOrWhiteSpace($errorText)) {
+                $failure = "Wrangler failed with exit code $($process.ExitCode): $($errorText.Trim())"
+            }
+            throw (Protect-FabR2WranglerText -Text $failure)
+        }
+        return [pscustomobject]@{
+            Output        = $outputText
+            Error         = $errorText
+            ExitCode      = $process.ExitCode
+            ExecutionMode = $executionMode
+        }
     }
     finally { $process.Dispose() }
 }
@@ -127,18 +215,31 @@ function Assert-FabR2BucketAccess {
     )
 
     $wrangler = Get-FabR2Wrangler
+    $executionMode = Get-FabR2WranglerExecutionMode
+    if ($executionMode -eq 'LocalOAuth') {
+        try {
+            [void](Invoke-FabR2Wrangler -WranglerPath $wrangler -Arguments @(
+                    'r2', 'bucket', 'info', [string]$Publishing.Bucket))
+        }
+        catch {
+            if ($_.Exception.Message -match '^CLOUDFLARE_API_TOKEN_REQUIRED:') { throw }
+            throw "CLOUDFLARE_BUCKET_ACCESS_FAILED: Wrangler could not access configured R2 bucket '$($Publishing.Bucket)'. See Wrangler output above for details."
+        }
+        return $wrangler
+    }
+
     try {
         $result = Invoke-FabR2Wrangler -WranglerPath $wrangler -Arguments @('r2', 'bucket', 'list', '--json')
     }
     catch {
         if ($_.Exception.Message -notmatch '(?i)unknown argument:\s*json') {
-            throw "CLOUDFLARE_AUTH_REQUIRED: $($_.Exception.Message)"
+            throw "CLOUDFLARE_AUTH_REQUIRED: $(Protect-FabR2WranglerText -Text $_.Exception.Message)"
         }
         try {
             $result = Invoke-FabR2Wrangler -WranglerPath $wrangler -Arguments @('r2', 'bucket', 'list')
         }
         catch {
-            throw "CLOUDFLARE_AUTH_REQUIRED: $($_.Exception.Message)"
+            throw "CLOUDFLARE_AUTH_REQUIRED: $(Protect-FabR2WranglerText -Text $_.Exception.Message)"
         }
         $bucketNames = @(
             [regex]::Matches(
@@ -309,9 +410,9 @@ function Invoke-FabProjectFilePublication {
             $remote = Get-FabR2RemoteObject -Url $url
             $action = $null
             if ($remote.StatusCode -eq 404) {
-                [void](Invoke-FabR2Wrangler -WranglerPath $wrangler -Arguments @(
-                        'r2', 'object', 'put', "$($publishing.Bucket)/$objectKey", '--file', $zipPath,
-                        '--remote', '--content-type', 'application/zip'))
+                $putArguments = Get-FabR2ObjectPutArgumentList -Bucket $publishing.Bucket `
+                    -ObjectKey $objectKey -FilePath $zipPath
+                [void](Invoke-FabR2Wrangler -WranglerPath $wrangler -Arguments $putArguments)
                 $action = 'UPLOADED'
                 $remote = Get-FabR2RemoteObject -Url $url
             }

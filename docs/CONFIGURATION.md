@@ -37,6 +37,14 @@ backslash. Credentials, tokens, and account IDs are never stored in this
 configuration. The publisher uses existing Wrangler authentication and does
 not create buckets or enable development URLs.
 
+For local publishing, authenticate with `wrangler login` under the same Windows
+user and run the publisher from that session. Without
+`CLOUDFLARE_API_TOKEN`, Wrangler inherits the console and the publisher checks
+the configured bucket with `wrangler r2 bucket info <bucket>`. CI provider
+environments require an explicit `CLOUDFLARE_API_TOKEN`; CI markers are never
+removed to enable OAuth fallback. With the token set, Wrangler output is
+captured and token text is redacted from reported failures.
+
 R2 project-file objects are published with immutable content-addressed keys
 that include the package SHA-256. A changed package with the same product
 version therefore receives a new URL; older R2 objects are not overwritten or
