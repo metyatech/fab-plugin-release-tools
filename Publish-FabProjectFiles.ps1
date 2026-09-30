@@ -359,6 +359,11 @@ function Update-FabR2ListingLinkSet {
 }
 
 function Invoke-FabProjectFilePublication {
+    [CmdletBinding()]
+    param(
+        [switch]$UpdateListingFields
+    )
+
     $root = Assert-FabSubmissionPluginRoot -PluginPath $PluginPath
     $configPath = Join-Path $root 'FabPluginRelease.json'
     Assert-FabSubmissionSchema -Path $configPath `
@@ -468,7 +473,7 @@ function Invoke-FabProjectFilePublication {
 
 if ($MyInvocation.InvocationName -ne '.') {
     try {
-        $output = @(Invoke-FabProjectFilePublication)
+        $output = @(Invoke-FabProjectFilePublication -UpdateListingFields:$UpdateListingFields)
         $output | Where-Object { $_ -is [string] } | Write-Output
         exit 0
     }

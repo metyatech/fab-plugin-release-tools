@@ -116,6 +116,23 @@ function Write-FabPreparationResult {
     return $Result
 }
 
+function Invoke-FabPreparationProjectFilePublication {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$PluginRoot,
+        [string]$EngineRoot,
+        [string]$ListingPath,
+        [switch]$UpdateListingFields
+    )
+
+    if (-not $UpdateListingFields) {
+        throw 'Guarded preparation requires project file publication to update FabListingFields.json.'
+    }
+    . (Join-Path $PSScriptRoot 'Publish-FabProjectFiles.ps1') `
+        -PluginPath $PluginRoot -EngineRoot $EngineRoot -ListingFieldsPath $ListingPath -UpdateListingFields
+    return Invoke-FabProjectFilePublication -UpdateListingFields
+}
+
 function Invoke-FabSubmissionPreparationCommand {
     $root = Assert-FabSubmissionPluginRoot -PluginPath $PluginPath
     $configPath = Join-Path $root 'FabPluginRelease.json'
@@ -180,12 +197,44 @@ function Invoke-FabSubmissionPreparationCommand {
                 reportPath = $reportPath
             })
     }
-    $linksPresent = $listing.ProjectFileLinks.Count -eq @($configuration.engineVersions).Count
+    $linksPresent = @($listing.ProjectFileLinks).Count -eq @($configuration.engineVersions).Count
     if (-not $linksPresent) {
         $publishingProperty = $configuration.PSObject.Properties['projectFilePublishing']
         if ($null -ne $publishingProperty) {
-            . (Join-Path $PSScriptRoot 'Publish-FabProjectFiles.ps1') -PluginPath $root
-            [void](Invoke-FabProjectFilePublication)
+            [void](Invoke-FabPreparationProjectFilePublication -PluginRoot $root `
+                    -EngineRoot $EngineRoot -ListingPath $listingPath -UpdateListingFields)
+
+            $listing = Import-FabProductListing -PluginRoot $root `
+                -Configuration $configuration -ListingPath $listingPath
+            if (@($listing.ProjectFileLinks).Count -ne @($configuration.engineVersions).Count) {
+                throw 'Project file publication passed without writing the complete listing link set.'
+            }
+
+            $status = Invoke-FabPreparationGitStatus -Root $root
+            $worktreeChanges = @(Get-FabPreparationWorktreeChange -Status $status)
+            $unexpected = @($worktreeChanges | Where-Object {
+                    [string]::IsNullOrWhiteSpace($_.Path) -or $_.Path -notin $expectedPaths
+                })
+            if ($unexpected.Count -gt 0) {
+                return Write-FabPreparationResult -ReportPath $reportPath -Result ([ordered]@{
+                        schemaVersion = 1; result = 'BLOCKED'; state = 'BLOCKED';
+                        pluginName = [string]$configuration.pluginName; productVersion = [string]$descriptor.VersionName;
+                        blocker = 'UNEXPECTED_WORKTREE_CHANGES'; nextAction = 'Clean unrelated worktree changes and retry.';
+                        reportPath = $reportPath
+                    })
+            }
+            $expectedDirtyPaths = @($worktreeChanges | Where-Object Path -in $expectedPaths |
+                Select-Object -ExpandProperty Path -Unique)
+            if ($expectedDirtyPaths -notcontains 'FabListingFields.json') {
+                throw 'Project file publication did not leave FabListingFields.json as an expected source change.'
+            }
+            return Write-FabPreparationResult -ReportPath $reportPath -Result ([ordered]@{
+                    schemaVersion = 1; result = 'PENDING'; state = 'SOURCE_COMMIT_REQUIRED';
+                    pluginName = [string]$configuration.pluginName; productVersion = [string]$descriptor.VersionName;
+                    mediaApproval = 'APPROVED'; projectFileLinksVerified = $false; listingIdPresent = $false; portalReady = $false;
+                    blocker = 'SOURCE_COMMIT_REQUIRED'; nextAction = 'Review and commit/push the project file links, then retry.';
+                    expectedDirtyFiles = $expectedDirtyPaths; reportPath = $reportPath
+                })
         }
         return Write-FabPreparationResult -ReportPath $reportPath -Result ([ordered]@{
                 schemaVersion = 1; result = 'PENDING'; state = 'SOURCE_COMMIT_REQUIRED';

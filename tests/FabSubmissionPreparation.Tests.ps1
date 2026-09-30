@@ -225,29 +225,45 @@ Describe 'Fab preparation expected source transitions' {
         function Invoke-PreparationFixture {
             param(
                 [string]$GitStatus,
-                [bool]$ReleaseReady = $false
+                [bool]$ReleaseReady = $false,
+                [bool]$MissingProjectLinks = $false,
+                [bool]$ProjectFilePublishing = $false
             )
             [void]$GitStatus
             [void]$ReleaseReady
+            [void]$MissingProjectLinks
+            [void]$ProjectFilePublishing
+            $script:publicationCompleted = $false
+            $script:preparationGitStatusCalls = 0
 
             $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
             [System.IO.Directory]::CreateDirectory($root) | Out-Null
             . (Join-Path $PSScriptRoot '..\Invoke-FabSubmissionPreparation.ps1') `
                 -PluginPath $root -NoOpenMediaReview
 
-            Mock Invoke-FabPreparationGitStatus { $GitStatus }
+            Mock Invoke-FabPreparationGitStatus {
+                $script:preparationGitStatusCalls++
+                if ($script:publicationCompleted) { return ' M FabListingFields.json' }
+                return $GitStatus
+            }
             Mock Import-FabProductConfiguration {
-                [pscustomobject]@{
+                $configuration = [ordered]@{
                     pluginName = 'FixturePlugin'
                     engineVersions = @('5.8')
                 }
+                if ($ProjectFilePublishing) { $configuration.projectFilePublishing = [pscustomobject]@{} }
+                return [pscustomobject]$configuration
             }
             Mock Get-FabProductDescriptor {
                 [pscustomobject]@{ VersionName = '1.0.0' }
             }
             Mock Import-FabProductListing {
+                $projectFileLinks = if ($MissingProjectLinks -and -not $script:publicationCompleted) {
+                    @()
+                }
+                else { @('https://example.invalid/package.zip') }
                 [pscustomobject]@{
-                    ProjectFileLinks = @('https://example.invalid/package.zip')
+                    ProjectFileLinks = $projectFileLinks
                 }
             }
             Mock Get-FabProductMediaApproval {
@@ -261,6 +277,17 @@ Describe 'Fab preparation expected source transitions' {
                     }
                     BundlePath = 'fixture-bundle.zip'
                 }
+            }
+            Mock Invoke-FabPreparationProjectFilePublication {
+                param(
+                    [string]$PluginRoot,
+                    [string]$ListingPath,
+                    [switch]$UpdateListingFields
+                )
+                $PluginRoot | Should -BeExactly $root
+                $ListingPath | Should -BeExactly (Join-Path $root 'FabListingFields.json')
+                $UpdateListingFields.IsPresent | Should -BeTrue
+                $script:publicationCompleted = $true
             }
 
             $output = @(Invoke-FabSubmissionPreparationCommand)
@@ -297,6 +324,14 @@ Describe 'Fab preparation expected source transitions' {
         $result.result | Should -BeExactly 'BLOCKED'
         $result.state | Should -BeExactly 'BLOCKED'
         $result.blocker | Should -BeExactly 'UNEXPECTED_WORKTREE_CHANGES'
+    }
+
+    It 'publishes missing project links, then reports only FabListingFields.json as dirty' {
+        $result = Invoke-PreparationFixture -GitStatus '' -MissingProjectLinks $true -ProjectFilePublishing $true
+        $result.result | Should -BeExactly 'PENDING'
+        $result.state | Should -BeExactly 'SOURCE_COMMIT_REQUIRED'
+        $result.expectedDirtyFiles | Should -BeExactly @('FabListingFields.json')
+        $script:publicationCompleted | Should -BeTrue
     }
 
     It 'reaches Portal verification readiness after a clean valid source state' {

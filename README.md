@@ -273,7 +273,9 @@ publisher uses existing Wrangler authentication, refuses conflicting remote
 bytes, verifies anonymous downloads after upload, and changes
 `FabListingFields.json` only with `-UpdateListingFields`; with that switch, the
 complete verified link set is replaced atomically only after every new object
-has passed remote verification.
+has passed remote verification. Guarded submission preparation enables this
+update automatically when project file links are missing, then returns
+`SOURCE_COMMIT_REQUIRED` with the listing file as an expected source change.
 
 For local publishing, run `wrangler login` once and invoke the preparation
 command from the same Windows user session. When `CLOUDFLARE_API_TOKEN` is not

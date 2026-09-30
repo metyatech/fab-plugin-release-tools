@@ -378,3 +378,152 @@ Describe 'Fab project file publishing' {
         Test-Path -LiteralPath $path | Should -BeFalse
     }
 }
+
+Describe 'Fab project file publication listing update' {
+    BeforeAll {
+        function Invoke-PublicationFixture {
+            param([bool]$FailSecondEngineVerification = $false)
+
+            $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+            [System.IO.Directory]::CreateDirectory($root) | Out-Null
+            $listingPath = Join-Path $root 'FabListingFields.json'
+            $listing = [pscustomobject]@{
+                title = 'Fixture'
+                media_order = @('Marketing/Fab/01.jpg', 'Marketing/Fab/02.jpg')
+            }
+            $initialText = ($listing | ConvertTo-Json -Depth 20) + "`n"
+            [System.IO.File]::WriteAllText($listingPath, $initialText)
+            $outputDirectory = Join-Path $root 'publication-output'
+            . (Join-Path $PSScriptRoot '..\Publish-FabProjectFiles.ps1') `
+                -PluginPath $root -ListingFieldsPath $listingPath -OutputDirectory $outputDirectory
+
+            $script:publicationFixture = [pscustomobject]@{
+                Root = $root
+                ListingPath = $listingPath
+                Listing = $listing
+                InitialText = $initialText
+                Records = @()
+                FailSecondEngineVerification = $FailSecondEngineVerification
+                RemoteCallCounts = @{}
+            }
+
+            Mock Assert-FabSubmissionPluginRoot { $PluginPath }
+            Mock Assert-FabSubmissionSchema {}
+            Mock Read-FabSubmissionJson {
+                [pscustomobject]@{
+                    pluginName = 'FixturePlugin'
+                    engineVersions = @('5.6', '5.8')
+                }
+            }
+            Mock Assert-FabProjectFilePublishingConfiguration {
+                [pscustomobject]@{
+                    Bucket = 'fixture-bucket'
+                    PublicBaseUrl = 'https://downloads.example'
+                    ObjectPrefix = 'fixture-product'
+                }
+            }
+            Mock Get-FabSubmissionListingData {
+                [pscustomobject]@{
+                    Root = $script:publicationFixture.Root
+                    Path = $script:publicationFixture.ListingPath
+                    Listing = $script:publicationFixture.Listing
+                    Media = @()
+                }
+            }
+            Mock Invoke-FabProductReleaseCore {
+                param([string]$OutputDirectory)
+                $bundleRoot = Join-Path $OutputDirectory 'bundle'
+                $records = foreach ($engineVersion in @('5.6', '5.8')) {
+                    $relativePath = "packages/UE$engineVersion/Fixture_UE$engineVersion.zip"
+                    $packagePath = Join-Path $bundleRoot ($relativePath.Replace('/', '\\'))
+                    [System.IO.Directory]::CreateDirectory((Split-Path -Parent $packagePath)) | Out-Null
+                    $bytes = [System.Text.Encoding]::UTF8.GetBytes("fixture-package-UE$engineVersion")
+                    [System.IO.File]::WriteAllBytes($packagePath, $bytes)
+                    [pscustomobject]@{
+                        EngineVersion = $engineVersion
+                        RelativePath = $relativePath
+                        Bytes = $bytes.Length
+                        Sha256 = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+                    }
+                }
+                $script:publicationFixture.Records = @($records)
+                [pscustomobject]@{
+                    BundlePath = $bundleRoot
+                    Manifest = [pscustomobject]@{
+                        pluginName = 'FixturePlugin'
+                        productVersion = '1.0.0'
+                        packages = @($records | ForEach-Object {
+                                [pscustomobject]@{
+                                    engineVersion = $_.EngineVersion
+                                    bundleRelativePath = $_.RelativePath
+                                    sha256 = $_.Sha256
+                                }
+                            })
+                    }
+                }
+            }
+            Mock Assert-FabR2BucketAccess { 'wrangler' }
+            Mock Invoke-FabR2Wrangler { 'uploaded' }
+            Mock Get-FabR2RemoteObject {
+                param([string]$Url)
+                $record = $script:publicationFixture.Records | Where-Object {
+                    $Url.Contains("/UE$($_.EngineVersion)/")
+                } | Select-Object -First 1
+                if ($null -eq $record) { throw "Unexpected fixture URL: $Url" }
+                $calls = 0
+                if ($script:publicationFixture.RemoteCallCounts.ContainsKey($record.EngineVersion)) {
+                    $calls = $script:publicationFixture.RemoteCallCounts[$record.EngineVersion]
+                }
+                $calls++
+                $script:publicationFixture.RemoteCallCounts[$record.EngineVersion] = $calls
+                if ($script:publicationFixture.FailSecondEngineVerification -and
+                    $record.EngineVersion -eq '5.8' -and $calls -eq 1) {
+                    return [pscustomobject]@{ StatusCode = 404; Bytes = 0; Sha256 = '' }
+                }
+                $sha256 = $record.Sha256
+                if ($script:publicationFixture.FailSecondEngineVerification -and
+                    $record.EngineVersion -eq '5.8') {
+                    $sha256 = '0' * 64
+                }
+                [pscustomobject]@{ StatusCode = 200; Bytes = $record.Bytes; Sha256 = $sha256 }
+            }
+
+            $publicationResult = $null
+            $errorMessage = $null
+            try {
+                $publicationOutput = @(Invoke-FabProjectFilePublication -UpdateListingFields)
+                $publicationResult = $publicationOutput | Where-Object {
+                    $null -ne $_.PSObject.Properties['ListingAction']
+                } | Select-Object -Last 1
+            }
+            catch {
+                $errorMessage = $_.Exception.Message
+            }
+            return [pscustomobject]@{
+                PublicationResult = $publicationResult
+                ErrorMessage = $errorMessage
+                Fixture = $script:publicationFixture
+            }
+        }
+    }
+
+    It 'writes the complete exact link set only after every engine verifies' {
+        $testResult = Invoke-PublicationFixture
+        $testResult.ErrorMessage | Should -BeNullOrEmpty
+        $testResult.PublicationResult.ListingAction | Should -BeExactly 'WRITTEN'
+        $listing = Get-Content -Raw -LiteralPath $testResult.Fixture.ListingPath | ConvertFrom-Json
+        @($listing.project_file_links.PSObject.Properties.Name) | Should -BeExactly @('5.6', '5.8')
+        foreach ($record in $testResult.Fixture.Records) {
+            $fileName = [System.IO.Path]::GetFileName($record.RelativePath)
+            $expectedUrl = "https://downloads.example/fixture-product/1.0.0/UE$($record.EngineVersion)/$($record.Sha256)/$fileName"
+            $listing.project_file_links.($record.EngineVersion) | Should -BeExactly $expectedUrl
+        }
+    }
+
+    It 'leaves the listing byte-for-byte unchanged when an engine verification fails' {
+        $testResult = Invoke-PublicationFixture -FailSecondEngineVerification $true
+        $testResult.ErrorMessage | Should -BeLike '*R2 object verification failed after publication*'
+        [System.IO.File]::ReadAllText($testResult.Fixture.ListingPath) |
+            Should -BeExactly $testResult.Fixture.InitialText
+    }
+}
