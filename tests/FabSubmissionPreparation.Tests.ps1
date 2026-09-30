@@ -226,12 +226,14 @@ Describe 'Fab preparation expected source transitions' {
             param(
                 [string]$GitStatus,
                 [bool]$ReleaseReady = $false,
-                [bool]$MissingProjectLinks = $false,
+                [string[]]$EngineVersions = @('5.8'),
+                [int]$ProjectLinkCount = -1,
                 [bool]$ProjectFilePublishing = $false
             )
             [void]$GitStatus
             [void]$ReleaseReady
-            [void]$MissingProjectLinks
+            [void]$EngineVersions
+            [void]$ProjectLinkCount
             [void]$ProjectFilePublishing
             $script:publicationCompleted = $false
             $script:preparationGitStatusCalls = 0
@@ -249,7 +251,7 @@ Describe 'Fab preparation expected source transitions' {
             Mock Import-FabProductConfiguration {
                 $configuration = [ordered]@{
                     pluginName = 'FixturePlugin'
-                    engineVersions = @('5.8')
+                    engineVersions = $EngineVersions
                 }
                 if ($ProjectFilePublishing) { $configuration.projectFilePublishing = [pscustomobject]@{} }
                 return [pscustomobject]$configuration
@@ -258,10 +260,21 @@ Describe 'Fab preparation expected source transitions' {
                 [pscustomobject]@{ VersionName = '1.0.0' }
             }
             Mock Import-FabProductListing {
-                $projectFileLinks = if ($MissingProjectLinks -and -not $script:publicationCompleted) {
-                    @()
+                $linkCount = if ($script:publicationCompleted) {
+                    $EngineVersions.Count
                 }
-                else { @('https://example.invalid/package.zip') }
+                elseif ($ProjectLinkCount -ge 0) {
+                    $ProjectLinkCount
+                }
+                else {
+                    $EngineVersions.Count
+                }
+                $projectFileLinks = [ordered]@{}
+                for ($index = 0; $index -lt $linkCount; $index++) {
+                    $engineVersion = $EngineVersions[$index]
+                    $projectFileLinks[$engineVersion] = "https://example.invalid/$engineVersion.zip"
+                }
+                $projectFileLinks | Should -BeOfType [System.Collections.Specialized.OrderedDictionary]
                 [pscustomobject]@{
                     ProjectFileLinks = $projectFileLinks
                 }
@@ -326,8 +339,33 @@ Describe 'Fab preparation expected source transitions' {
         $result.blocker | Should -BeExactly 'UNEXPECTED_WORKTREE_CHANGES'
     }
 
-    It 'publishes missing project links, then reports only FabListingFields.json as dirty' {
-        $result = Invoke-PreparationFixture -GitStatus '' -MissingProjectLinks $true -ProjectFilePublishing $true
+    It 'treats three configured engines and three links as complete' {
+        $result = Invoke-PreparationFixture -GitStatus '' -EngineVersions @('5.6', '5.7', '5.8') -ProjectLinkCount 3
+        $result.result | Should -BeExactly 'PASS'
+        $script:publicationCompleted | Should -BeFalse
+    }
+
+    It 'treats three configured engines and zero links as missing' {
+        $result = Invoke-PreparationFixture -GitStatus '' -EngineVersions @('5.6', '5.7', '5.8') -ProjectLinkCount 0
+        $result.state | Should -BeExactly 'SOURCE_COMMIT_REQUIRED'
+        $script:publicationCompleted | Should -BeFalse
+    }
+
+    It 'treats one configured engine and zero links as missing' {
+        $result = Invoke-PreparationFixture -GitStatus '' -EngineVersions @('5.8') -ProjectLinkCount 0
+        $result.state | Should -BeExactly 'SOURCE_COMMIT_REQUIRED'
+        $script:publicationCompleted | Should -BeFalse
+    }
+
+    It 'treats one configured engine and one link as complete' {
+        $result = Invoke-PreparationFixture -GitStatus '' -EngineVersions @('5.8') -ProjectLinkCount 1
+        $result.result | Should -BeExactly 'PASS'
+        $script:publicationCompleted | Should -BeFalse
+    }
+
+    It 'publishes missing three-engine links, then reports only FabListingFields.json as dirty' {
+        $result = Invoke-PreparationFixture -GitStatus '' -EngineVersions @('5.6', '5.7', '5.8') `
+            -ProjectLinkCount 0 -ProjectFilePublishing $true
         $result.result | Should -BeExactly 'PENDING'
         $result.state | Should -BeExactly 'SOURCE_COMMIT_REQUIRED'
         $result.expectedDirtyFiles | Should -BeExactly @('FabListingFields.json')

@@ -197,7 +197,7 @@ function Invoke-FabSubmissionPreparationCommand {
                 reportPath = $reportPath
             })
     }
-    $linksPresent = @($listing.ProjectFileLinks).Count -eq @($configuration.engineVersions).Count
+    $linksPresent = $listing.ProjectFileLinks.Count -eq @($configuration.engineVersions).Count
     if (-not $linksPresent) {
         $publishingProperty = $configuration.PSObject.Properties['projectFilePublishing']
         if ($null -ne $publishingProperty) {
@@ -206,7 +206,7 @@ function Invoke-FabSubmissionPreparationCommand {
 
             $listing = Import-FabProductListing -PluginRoot $root `
                 -Configuration $configuration -ListingPath $listingPath
-            if (@($listing.ProjectFileLinks).Count -ne @($configuration.engineVersions).Count) {
+            if ($listing.ProjectFileLinks.Count -ne @($configuration.engineVersions).Count) {
                 throw 'Project file publication passed without writing the complete listing link set.'
             }
 

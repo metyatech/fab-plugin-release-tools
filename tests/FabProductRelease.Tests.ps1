@@ -472,6 +472,18 @@ public sealed class FabProductTestHttpMessageHandler : HttpMessageHandler
             Should -Not -Throw
     }
 
+    It 'returns ProjectFileLinks as an ordered dictionary' {
+        $root = Join-Path $TestDrive 'ProjectFileLinksType'
+        $fixture = Initialize-ProductFixture -Root $root -EngineVersions @('5.8')
+        $listingPath = Join-Path $root 'FabListingFields.json'
+
+        $listing = Import-FabProductListing -PluginRoot $root `
+            -Configuration $fixture.Configuration -ListingPath $listingPath
+
+        $listing.ProjectFileLinks | Should -BeOfType [System.Collections.Specialized.OrderedDictionary]
+        $listing.ProjectFileLinks.Count | Should -Be 0
+    }
+
     It 'rejects support_url when long_description does not contain the exact URL' -ForEach @(
         @{ Name = 'absent'; LongDescription = 'No support URL here.' },
         @{ Name = 'near match'; LongDescription = 'https://support.example.invalid/' }) {
