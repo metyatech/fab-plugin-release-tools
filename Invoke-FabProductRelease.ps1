@@ -270,7 +270,14 @@ function ConvertTo-FabAdditionalInformationRichText {
         "Example Project: $example — $($technical.exampleProjectNotes)",
         "Additional Notes: $($technical.additionalNotes)"
     )
-    $blocks.Add([ordered]@{ type = 'paragraph'; runs = @(& $run ([string]::Join("`n", $detailValues))) })
+    $documentationUrl = [string]$technical.documentationUrl
+    $detailPrefix = [string]::Join("`n", @($detailValues[0..7])) + "`nDocumentation: "
+    $detailSuffix = "`n" + [string]::Join("`n", @($detailValues[9..($detailValues.Length - 1)]))
+    $detailRuns = [System.Collections.Generic.List[object]]::new()
+    $detailRuns.Add((& $run $detailPrefix))
+    $detailRuns.Add([ordered]@{ text = $documentationUrl; marks = @('link'); href = $documentationUrl })
+    $detailRuns.Add((& $run $detailSuffix))
+    $blocks.Add([ordered]@{ type = 'paragraph'; runs = $detailRuns.ToArray() })
     return [ordered]@{ blocks = $blocks.ToArray() }
 }
 

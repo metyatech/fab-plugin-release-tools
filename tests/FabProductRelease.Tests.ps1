@@ -640,6 +640,28 @@ public sealed class FabProductTestHttpMessageHandler : HttpMessageHandler
         @($manifest.packages | Where-Object { $null -ne $_.projectFileLink }) | Should -HaveCount 0
     }
 
+    It 'marks only the Documentation URL as a link in Additional information' {
+        $root = Join-Path $TestDrive 'DocumentationLink'
+        $outputRoot = Join-Path $TestDrive 'DocumentationLinkArtifacts'
+        Initialize-ProductFixture -Root $root -EngineVersions @('5.8') | Out-Null
+
+        Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot | Out-Null
+
+        $metadata = Get-Content -Raw -LiteralPath (Join-Path $root 'FabSubmissionMetadata.json') | ConvertFrom-Json
+        $manifest = Get-Content -Raw -LiteralPath (
+            Join-Path $outputRoot 'TestPlugin\FabSubmission\FabPortalSubmission.json') | ConvertFrom-Json
+        $detailRuns = @($manifest.additionalInformationRichText.blocks[-1].runs)
+
+        $detailRuns | Should -HaveCount 3
+        $detailRuns[0].text | Should -Match '(?m)Documentation: $'
+        $detailRuns[1].text | Should -BeExactly $metadata.technicalInformation.documentationUrl
+        @($detailRuns[1].marks) | Should -BeExactly @('link')
+        $detailRuns[1].href | Should -BeExactly $metadata.technicalInformation.documentationUrl
+        $detailRuns[2].text | Should -Match '^\nExample Project:'
+        $detailRuns[2].PSObject.Properties.Name | Should -Not -Contain 'marks'
+        $detailRuns[2].PSObject.Properties.Name | Should -Not -Contain 'href'
+    }
+
     It 'accepts an explicitly empty subcategory and preserves taxonomy levels in the manifest' {
         $root = Join-Path $TestDrive 'EmptySubcategory'
         $outputRoot = Join-Path $TestDrive 'EmptySubcategoryArtifacts'
