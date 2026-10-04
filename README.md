@@ -519,8 +519,12 @@ supported workflow. After an interactive agent edits a field:
 5. run read-only verification.
 
 The shared tool never writes Portal fields. The external interactive agent or
-human handles proven mismatch edits and the final Submit for review flow,
-including Manual activation selection.
+human handles proven mismatch edits and the final Submit for review flow. At
+submission, select the activation option specified by
+`FabPortalSubmission.json` and the product listing metadata. Both Automatic
+activation and Manual activation are sourced from product metadata; the shared
+tool and interactive agent must not choose Manual activation as an independent
+default.
 
 ```mermaid
 sequenceDiagram
@@ -538,7 +542,7 @@ sequenceDiagram
     Agent->>Verify: Structured observation + manifest
     Verify-->>Agent: MATCH=all, MISMATCH=0
     Agent->>Fab: Submit for review interactively
-    Agent->>Fab: Select Manual activation
+    Agent->>Fab: Select activation from manifest
 ```
 
 When an authenticated interactive browser is available, it may record a
