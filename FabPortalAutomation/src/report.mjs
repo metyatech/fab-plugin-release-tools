@@ -24,6 +24,7 @@ function markdown(result, comparison, after, network) {
 - Mode: ${result.mode}
 - Result: ${result.result}
 - Verification transport: ${result.verificationTransport ?? 'unknown'}
+- Pre-submit gate: ${result.preSubmitGate ? `enabled; ready=${result.preSubmitReady}` : 'disabled'}
 - Observation source: ${result.observationSource ?? 'null'}
 - Observation SHA-256: ${result.observationSha256 ?? 'null'}
 - Listing: ${result.listingTitle} (${result.listingId})
@@ -76,6 +77,10 @@ export async function writeRunReport({ directory, result, comparison, comparison
     listingStatus: result.listingStatus,
     manifestSha256: result.manifestSha256,
     verificationTransport: result.verificationTransport ?? null,
+    preSubmitGate: result.preSubmitGate ?? false,
+    preSubmitReady: result.preSubmitReady ?? false,
+    portalWritesAllowed: result.portalWritesAllowed ?? false,
+    submitAllowed: result.submitAllowed ?? false,
     observationSource: result.observationSource ?? null,
     observationSha256: result.observationSha256 ?? null,
     portalReady: result.portalReady,
@@ -114,6 +119,28 @@ export async function writeRunReport({ directory, result, comparison, comparison
   await writeJson(directory, 'comparison-before.json', comparison ?? { fields: [], counts: {} });
   if (comparisonAfter) await writeJson(directory, 'comparison-after.json', comparisonAfter);
   await writeJson(directory, 'network-summary.json', network ?? { networkMutationRequestsObserved: 0, networkMutationRequestsBlocked: 0, requests: [] });
+  if (result.mode === 'tag-availability') {
+    await writeJson(directory, 'tag-availability.json', {
+      schemaVersion: result.schemaVersion,
+      listingId: result.listingId,
+      checkedAtUtc: result.checkedAtUtc,
+      transport: result.transport,
+      candidates: result.candidates,
+      selectedTagsUnchanged: result.selectedTagsUnchanged,
+      networkMutationRequestsObserved: result.networkMutationRequestsObserved,
+      networkMutationRequestsBlocked: result.networkMutationRequestsBlocked,
+      persistentListingWrites: 0,
+      portalWritesAllowed: result.portalWritesAllowed,
+      submitAllowed: result.submitAllowed,
+      searchQueriesCleared: result.searchQueriesCleared,
+      optionSelectionInteractionsPerformed: result.optionSelectionInteractionsPerformed,
+      saveInvoked: result.saveInvoked,
+      submitInvoked: result.submitInvoked,
+      publishInvoked: result.publishInvoked,
+      result: result.result,
+      blockers: result.blockers,
+    });
+  }
   await writeFile(path.join(directory, 'RunReport.md'), markdown(result, comparison, comparisonAfter, network), 'utf8');
   if (page) await page.screenshot({ path: path.join(directory, 'screenshots', '01-listing.png'), fullPage: true }).catch(() => undefined);
   return directory;

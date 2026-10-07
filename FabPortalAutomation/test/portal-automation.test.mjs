@@ -3,7 +3,7 @@ import test from 'node:test';
 import { chromium } from 'playwright-core';
 import { installNetworkGuard } from '../src/network-guard.mjs';
 import { compareManifest, comparePlatformClassification, comparePriceClassification } from '../src/comparison.mjs';
-import { detectManualBlock, mergeListingAndFormatComparisons, runPortalAutomation, selectExistingTargetPage } from '../src/portal.mjs';
+import { detectManualBlock, mergeListingAndFormatComparisons, runPortalAutomation, runTagAvailabilityDiscovery, selectExistingTargetPage } from '../src/portal.mjs';
 import { parseArgs } from '../src/cli.mjs';
 import { classifyFabView, FAB_VIEW } from '../src/view-detection.mjs';
 import { startFixture } from './fixtures/server.mjs';
@@ -21,14 +21,14 @@ test.after(async () => {
   await browser.close();
 });
 
-async function scenario({ manifest = makeManifest(), state = {}, fixtureOptions = {}, mediaFiles = [], manualInteraction = null } = {}) {
+async function scenario({ manifest = makeManifest(), state = {}, fixtureOptions = {}, mediaFiles = [], manualInteraction = null, preSubmit = false } = {}) {
   const fixture = await startFixture(fixtureState(manifest, state), fixtureOptions);
   const context = await browser.newContext();
   const page = await context.newPage();
   const info = await makeManifestInfo(manifest, { mediaFiles });
   try {
     await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
-    const result = await runPortalAutomation({ manifestInfo: info, origin: fixture.origin, page, context, manualInteraction });
+    const result = await runPortalAutomation({ manifestInfo: info, origin: fixture.origin, page, context, manualInteraction, preSubmit });
     return { result, fixture };
   } finally {
     await context.close();
@@ -45,6 +45,22 @@ async function attachedRunSetup({ manifest = makeManifest(), state = {}, manualI
   return { fixture, context, page, info, manualInteraction };
 }
 
+async function tagDiscoveryScenario({ tags, state = {}, manifest = makeManifest() } = {}) {
+  const fixture = await startFixture(fixtureState(manifest, state));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const info = await makeManifestInfo(manifest);
+  try {
+    await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
+    const result = await runTagAvailabilityDiscovery({ manifestInfo: info, origin: fixture.origin, page, context, tags });
+    const diagnostics = await page.evaluate(() => ({ optionClicks: window.fixtureTagOptionClicks, query: document.querySelector('[placeholder="Search a tag"]')?.value ?? null, queries: window.fixtureTagQueries }));
+    return { result, fixture, diagnostics };
+  } finally {
+    await context.close();
+    await fixture.close();
+  }
+}
+
 test('verify-only performs zero writes', async () => {
   const { result, fixture } = await scenario();
   assert.equal(result.result, 'PASS');
@@ -54,6 +70,135 @@ test('verify-only performs zero writes', async () => {
   assert.equal(result.submitAccepted, false);
   assert.equal(result.postSubmitStatus, null);
   assert.equal(fixture.mutations.length, 0);
+});
+
+test('pre-submit verification reloads persisted state and rejects an unselected Professional price', async () => {
+  const manifest = makeManifest({ professionalPriceUsd: 19.99 });
+  const reloadState = { professionalPriceUsdAfterReload: '', professionalPricePlaceholderAfterReload: 'Select Professional price' };
+  const passive = await scenario({ manifest, state: reloadState });
+  const passivePrice = passive.result.comparison.fields.find((field) => field.manifestJsonPath === 'professionalPriceUsd');
+  assert.equal(passive.result.result, 'PASS');
+  assert.equal(passivePrice.currentVisibleValue, '19.99');
+  const { result, fixture } = await scenario({ manifest, state: reloadState, preSubmit: true });
+  const price = result.comparison?.fields.find((field) => field.manifestJsonPath === 'professionalPriceUsd');
+  assert.equal(fixture.requests.filter((request) => request.pathname.startsWith('/portal/listings/')).length, 2);
+  assert.equal(result.verificationTransport, 'cdp');
+  assert.equal(result.preSubmitGate, true);
+  assert.equal(result.preSubmitReady, false);
+  assert.equal(result.reloadCount, 1);
+  assert.equal(result.writeInteractionsPerformed, 0);
+  assert.equal(price.currentVisibleValue, 'Select Professional price');
+  assert.equal(price.classification, 'MISMATCH');
+  assert.equal(result.result, 'FAIL');
+});
+
+test('pre-submit requires portalReady before attaching to a browser', async () => {
+  const info = await makeManifestInfo(makeManifest({ portalReady: false }));
+  await assert.rejects(() => runPortalAutomation({ manifestInfo: info, preSubmit: true }), /manifest\.portalReady=true/);
+});
+
+test('tag availability discovery API exists as a separate read-only capability', async () => {
+  assert.equal(typeof runTagAvailabilityDiscovery, 'function');
+});
+
+test('pre-submit passes only when the reloaded Professional price remains selected', async () => {
+  const manifest = makeManifest({ professionalPriceUsd: 19.99 });
+  const { result, fixture } = await scenario({ manifest, state: { professionalPriceUsdAfterReload: '19.99' }, preSubmit: true });
+  assert.equal(result.result, 'PASS');
+  assert.equal(result.preSubmitGate, true);
+  assert.equal(result.preSubmitReady, true);
+  assert.equal(result.reloadCount, 1);
+  assert.equal(result.writeInteractionsPerformed, 0);
+  assert.equal(result.submitInvoked, false);
+  assert.equal(result.network.networkMutationRequestsObserved, 0);
+  assert.equal(fixture.mutations.length, 0);
+});
+
+test('pre-submit rejects non-Draft listings before reloading', async () => {
+  const { result, fixture } = await scenario({ state: { status: 'Pending approval' }, preSubmit: true });
+  assert.equal(result.result, 'FAIL');
+  assert.equal(result.reloadCount, 0);
+  assert.match(result.blockers.join(' '), /requires listing status Draft/);
+  assert.equal(fixture.requests.filter((request) => request.pathname.startsWith('/portal/listings/')).length, 1);
+});
+
+test('pre-submit rejects a network mutation attempted during reload', async () => {
+  const { result, fixture } = await scenario({ state: { preSubmitMutationOnReload: true }, preSubmit: true });
+  assert.equal(result.result, 'FAIL');
+  assert.equal(result.preSubmitReady, false);
+  assert.equal(result.network.networkMutationRequestsObserved, 1);
+  assert.equal(result.network.networkMutationRequestsBlocked, 1);
+  assert.equal(fixture.mutations.length, 0);
+});
+
+test('pre-submit readiness fails when a critical field remains unresolved', async () => {
+  const { result } = await scenario({ state: { hideProjectFileLink: true }, preSubmit: true });
+  assert.equal(result.result, 'FAIL');
+  assert.equal(result.preSubmitReady, false);
+  assert.ok(result.portalUnresolvedCount > 0);
+  assert.ok(result.blockers.some((blocker) => /unresolved fields/.test(blocker)));
+});
+
+test('tag availability classifies exact, explicit empty, and fuzzy results without selecting options', async () => {
+  const { result, fixture, diagnostics } = await tagDiscoveryScenario({
+    tags: ['Search', 'Find', 'Productivity', 'Find in Materials'],
+    state: {
+      tagSearchCases: {
+        Search: { options: [' Search '] },
+        Find: { emptyState: '0 results available' },
+        Productivity: { emptyState: 'No tags found' },
+        'Find in Materials': { options: ['Find in Materials'] },
+      },
+    },
+  });
+  assert.equal(result.result, 'PASS', JSON.stringify({ blockers: result.blockers, candidates: result.candidates, network: result.network }));
+  assert.deepEqual(result.candidates.map(({ availability }) => availability), ['AVAILABLE', 'UNAVAILABLE', 'UNAVAILABLE', 'AVAILABLE']);
+  assert.equal(result.candidates[0].exactOption, 'Search');
+  assert.equal(result.optionSelectionInteractionsPerformed, 0);
+  assert.equal(diagnostics.optionClicks, 0);
+  assert.equal(diagnostics.query, '');
+  assert.equal(result.searchQueriesCleared, true);
+  assert.deepEqual(diagnostics.queries, ['Search', '', 'Find', '', 'Productivity', '', 'Find in Materials', '']);
+  assert.equal(result.selectedTagsUnchanged, true);
+  assert.equal(result.networkMutationRequestsObserved, 0);
+  assert.equal(result.portalWritesAllowed, false);
+  assert.equal(result.submitAllowed, false);
+  assert.ok(result.network.requests.some((request) => request.graphqlOperation?.type === 'query' && request.blocked === false));
+  assert.equal(fixture.mutations.length, 0);
+});
+
+test('tag availability never treats a fuzzy result as an exact candidate match', async () => {
+  const { result, diagnostics } = await tagDiscoveryScenario({
+    tags: ['Find'],
+    state: { tagSearchCases: { Find: { options: ['Find in Materials'] } } },
+  });
+  assert.equal(result.result, 'PASS', JSON.stringify({ blockers: result.blockers, candidates: result.candidates, network: result.network }));
+  assert.equal(result.candidates[0].availability, 'NOT_PROVEN');
+  assert.equal(diagnostics.optionClicks, 0);
+  assert.equal(diagnostics.query, '');
+});
+
+test('tag availability blocks a GraphQL mutation and returns FAIL', async () => {
+  const { result, fixture, diagnostics } = await tagDiscoveryScenario({
+    tags: ['Search'],
+    state: { tagSearchOperation: 'mutation', tagSearchCases: { Search: { options: ['Search'] } } },
+  });
+  assert.equal(result.result, 'FAIL');
+  assert.equal(result.networkMutationRequestsObserved, 1);
+  assert.equal(result.networkMutationRequestsBlocked, 1);
+  assert.ok(result.network.requests.some((request) => request.graphqlOperation?.type === 'mutation' && request.blocked === true));
+  assert.equal(result.optionSelectionInteractionsPerformed, 0);
+  assert.equal(diagnostics.optionClicks, 0);
+  assert.equal(diagnostics.query, '');
+  assert.equal(fixture.mutations.length, 0);
+});
+
+test('tag availability blocks an ambiguous seller-side selector', async () => {
+  const { result, diagnostics } = await tagDiscoveryScenario({ tags: ['Search'], state: { duplicateTagSelector: true } });
+  assert.equal(result.result, 'FAIL');
+  assert.equal(result.candidates[0].availability, 'NOT_PROVEN');
+  assert.equal(result.optionSelectionInteractionsPerformed, 0);
+  assert.equal(diagnostics.optionClicks, 0);
 });
 
 test('portal collector compares persisted Description anchors separately from visible URL text', async () => {
@@ -749,6 +894,10 @@ test('USD price comparison normalizes exact cents without accepting other curren
   assert.equal(comparePriceClassification('9.99 USD', 9.99), 'MATCH');
   assert.equal(comparePriceClassification('9.99 (USD)', 9.99), 'MATCH');
   assert.equal(comparePriceClassification(9.99, 9.99), 'MATCH');
+  assert.equal(comparePriceClassification('$19.99', 19.99), 'MATCH');
+  assert.equal(comparePriceClassification('19.99', 19.99), 'MATCH');
+  assert.equal(comparePriceClassification('USD 19.99', 19.99), 'MATCH');
+  assert.equal(comparePriceClassification('Select Professional price', 19.99), 'MISMATCH');
   assert.equal(comparePriceClassification('$10.99', 9.99), 'MISMATCH');
   assert.equal(comparePriceClassification('€9.99', 9.99), 'MISMATCH');
   assert.equal(comparePriceClassification('about $9.99', 9.99), 'MISMATCH');

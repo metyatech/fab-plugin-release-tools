@@ -495,8 +495,10 @@ formats only staged PowerShell files and restages them before a commit.
 
 `FabPortalSubmission.json` is the sole production input to the verify-only
 Portal checker. Install its pinned Node dependency with `npm ci` from
-`FabPortalAutomation`. The checker supports exactly two read-only transports:
-`observation` and `cdp`.
+`FabPortalAutomation`. Ordinary verification supports two read-only transports:
+`observation` and `cdp`. An Observation is reproducible audit evidence for
+offline comparison and editing; it is not authoritative evidence that a Draft
+is ready for submission because it does not reread the current Portal DOM.
 
 The release pipeline deterministically derives
 `additionalInformationRichText` from `FabSubmissionMetadata.json`; the
@@ -510,7 +512,53 @@ For interactive AI-agent workflows, use this order:
 2. Fab autosave
 3. Reload the listing and confirm persistence
 4. Structured `FabPortalObservation.json`
-5. `Invoke-FabPortalSubmission.ps1 -ObservationPath ...`
+5. `Invoke-FabPortalSubmission.ps1 -ObservationPath ...` for offline audit
+   comparison
+
+Immediately before an interactive Submit for review, use the dedicated live
+pre-submit gate instead of relying on an Observation:
+
+```powershell
+pwsh .\Invoke-FabPortalSubmission.ps1 `
+  -ManifestPath <FabPortalSubmission.json> `
+  -CdpEndpoint <existing-authenticated-endpoint> `
+  -PreSubmit `
+  -OutputDirectory <temporary-output> `
+  -Json `
+  -VerboseOutput
+```
+
+Pre-submit verification requires `portalReady: true`, attaches to the exact
+existing listing, requires Draft status, disables the cache and reloads the
+page once, then compares only the reloaded live DOM. It reports
+`preSubmitReady=true` only when the listing identity and Draft status still
+match, `MISMATCH=0`, unresolved critical fields are zero, and observed network
+mutations are zero. Observation transport is explicitly rejected for this
+mode. It remains verify-only: it does not edit, save, submit, or publish, and
+a live PASS is not a guarantee of Fab approval.
+
+To check whether proposed tags are selectable in the current seller-side
+selector, run a read-only discovery against the same existing Draft:
+
+```powershell
+pwsh .\Invoke-FabPortalSubmission.ps1 `
+  -ManifestPath <FabPortalSubmission.json> `
+  -CdpEndpoint <existing-authenticated-endpoint> `
+  -TagAvailability `
+  -Tags @('Editor', 'Workflow', 'Search', 'Find', 'Productivity') `
+  -OutputDirectory <temporary-output> `
+  -Json
+```
+
+The seller-side selector is the availability authority; tags visible on public
+listings do not prove that a tag can currently be selected. Discovery types
+each candidate into the selector, reads results, clears the query, and never
+selects an option or saves. Only a unique exact selectable result is
+`AVAILABLE`; explicit empty results are `UNAVAILABLE`; fuzzy, ambiguous, or
+unreadable results are `NOT_PROVEN`. Consumers may adopt only `AVAILABLE`
+tags. Availability describes the current selector state and does not guarantee
+future availability. A mutation request or inability to prove the safety
+conditions fails discovery.
 
 For a formatted Description, the interactive agent reads
 `descriptionRichText`, applies the corresponding Fab toolbar controls in the
@@ -563,7 +611,9 @@ sequenceDiagram
     Agent->>Fab: Reload listing
     Agent->>Agent: Confirm persisted values
     Agent->>Verify: Structured observation + manifest
-    Verify-->>Agent: MATCH=all, MISMATCH=0
+    Verify-->>Agent: Offline audit comparison
+    Agent->>Verify: Live pre-submit gate over CDP
+    Verify-->>Agent: Reloaded DOM + MISMATCH=0
     Agent->>Fab: Submit for review interactively
     Agent->>Fab: Select activation from manifest
 ```
@@ -578,8 +628,8 @@ pwsh .\Invoke-FabPortalSubmission.ps1 `
   -ObservationPath <FabPortalObservation.json>
 ```
 
-CDP is optional for environments where an authenticated CDP session already
-works:
+Ordinary live DOM verification is available where an authenticated CDP session
+already works:
 
 ```powershell
 pwsh .\Invoke-FabPortalSubmission.ps1 `
@@ -588,13 +638,17 @@ pwsh .\Invoke-FabPortalSubmission.ps1 `
 ```
 
 Observation mode performs no browser actions. CDP verification attaches only
-to the one already-open exact listing page, performs read-only navigation and
-comparison, and blocks network mutations. No tool may bypass
+to the one already-open exact listing page, performs read-only comparison, and
+blocks network mutations. Pre-submit mode reloads that page before comparing;
+tag discovery uses the existing Tags selector solely to search/read and never
+selects a candidate. No tool may bypass
 Cloudflare/CAPTCHA/MFA. If the agent's own interactive authenticated browser
 can legitimately pass the normal site challenge, continue there and verify
-via Observation mode. Do not launch or attach a separate CDP Chrome merely to
-perform Portal writes. Credentials, MFA, and browser storage are never handled
-by this tool.
+via Observation mode while editing. For the final pre-submit gate, retain the
+same authenticated listing in the existing CDP session and run `-PreSubmit`;
+an Observation cannot satisfy that gate. Do not launch or attach a separate
+CDP Chrome merely to perform Portal writes. Credentials, MFA, and browser
+storage are never handled by this tool.
 
 If a visible Cloudflare/security challenge appears during CDP verification,
 browser operations stop for manual handoff. Complete the challenge in the

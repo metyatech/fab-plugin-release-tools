@@ -11,6 +11,21 @@ Describe 'Fab portal verify-only contracts' {
         $command = Get-Command -Name (Join-Path $repositoryRoot 'Invoke-FabPortalSubmission.ps1')
         $command.Parameters.Keys | Should -Not -Contain 'SaveDraft'
         $command.Parameters.Keys | Should -Not -Contain 'SubmitForReview'
+        $command.Parameters.Keys | Should -Contain 'PreSubmit'
+        $command.Parameters.Keys | Should -Contain 'TagAvailability'
+        $command.Parameters.Keys | Should -Contain 'Tags'
+    }
+
+    It 'rejects pre-submit verification over an Observation' {
+        $repositoryRoot = Split-Path -Parent $PSScriptRoot
+        $scriptPath = Join-Path $repositoryRoot 'Invoke-FabPortalSubmission.ps1'
+        { & $scriptPath -ManifestPath 'manifest.json' -ObservationPath 'observation.json' -PreSubmit } | Should -Throw '*cannot be satisfied by an observation artifact*'
+    }
+
+    It 'requires candidate tags for read-only availability discovery' {
+        $repositoryRoot = Split-Path -Parent $PSScriptRoot
+        $scriptPath = Join-Path $repositoryRoot 'Invoke-FabPortalSubmission.ps1'
+        { & $scriptPath -ManifestPath 'manifest.json' -CdpEndpoint 'http://127.0.0.1:1' -TagAvailability } | Should -Throw '*requires one or more -Tags candidates*'
     }
 
     It 'keeps the PowerShell module, tool, and Node CLI versions in sync' {

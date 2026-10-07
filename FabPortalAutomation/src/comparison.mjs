@@ -119,13 +119,27 @@ export function compareTagsClassification(observed, desired, { complete = true }
 
 async function compareTagsField(page, manifest, view) {
   if (fixturePage(page)) {
-    const legacy = await compareTextField(page, manifest, 'tags', 'Tags *', { view });
-    legacy.desiredValue = manifest.tags;
-    legacy.classification = manifest.tags.length === 1
-      ? compareTagsClassification(legacy.currentVisibleValue ? [legacy.currentVisibleValue] : [], manifest.tags)
-      : 'NOT_DISCOVERED';
-    legacy.notes = manifest.tags.length === 1 ? '' : 'Fixture tag controls expose only one tag value for this scenario.';
-    return legacy;
+    const chips = page.getByTestId('selected-tag').getByRole('button');
+    const observed = [];
+    for (let index = 0; index < await chips.count(); index += 1) {
+      const chip = chips.nth(index);
+      if (!await chip.isVisible().catch(() => false)) continue;
+      const label = await chip.getAttribute('aria-label').catch(() => null);
+      const text = label ?? await chip.textContent().catch(() => '');
+      const value = normalizeText(String(text).replace(/^Remove\s+/i, ''));
+      if (value) observed.push(value);
+    }
+    return fieldResult({
+      manifestJsonPath: 'tags',
+      portalLabel: 'Tags *',
+      desired: manifest.tags,
+      current: observed.length > 0 ? observed : null,
+      state: compareTagsClassification(observed, manifest.tags, { complete: observed.length > 0 }),
+      resolved: null,
+      editableControlAvailable: false,
+      notes: observed.length > 0 ? 'Complete fixture tag chips were visibly read.' : 'No complete selected tag set was visibly readable.',
+      writeTarget: null,
+    });
   }
   const chipLocator = page.getByRole('button', { name: /^Remove (?!Windows$|Win64$|Linux$|Mac(?: OS)?$|macOS$).+/i });
   const chipValues = [];

@@ -156,13 +156,197 @@ async function ensurePassiveTarget(page, manifest, origin) {
   throw lastTitleError ?? new Error('Fab listing title was not readable during passive attach.');
 }
 
+function tagChipLocator(container) {
+  return container.getByRole('button', { name: /^Remove\s+.+$/i });
+}
+
+async function readSelectedTags(container) {
+  const chips = tagChipLocator(container);
+  const values = [];
+  const count = await chips.count();
+  for (let index = 0; index < count; index += 1) {
+    const chip = chips.nth(index);
+    if (!await chip.isVisible().catch(() => false)) continue;
+    const label = await chip.getAttribute('aria-label').catch(() => null);
+    const text = label ?? await chip.textContent().catch(() => '');
+    const value = normalized(String(text).replace(/^Remove\s+/i, ''));
+    if (value) values.push(value);
+  }
+  return values.length > 0 ? values : null;
+}
+
+async function visibleTagOptions(resultList) {
+  const options = resultList.getByRole('option');
+  const visible = [];
+  for (let index = 0; index < await options.count(); index += 1) {
+    const option = options.nth(index);
+    if (await option.isVisible().catch(() => false)) visible.push(option);
+  }
+  return visible;
+}
+
+async function visibleEmptyStates(resultList) {
+  const empty = resultList.getByText(/^(?:0 results available|no tags found)$/i, { exact: true });
+  const visible = [];
+  for (let index = 0; index < await empty.count(); index += 1) {
+    const item = empty.nth(index);
+    if (await item.isVisible().catch(() => false)) visible.push(item);
+  }
+  return visible;
+}
+
+async function waitForClearedTagResults(resultList) {
+  const deadline = Date.now() + 1000;
+  while (Date.now() < deadline) {
+    const options = await visibleTagOptions(resultList);
+    const empty = await visibleEmptyStates(resultList);
+    const text = normalized(await resultList.innerText().catch(() => ''));
+    if (options.length === 0 && empty.length === 0 && text === '') return true;
+    await resultList.page().waitForTimeout(25);
+  }
+  return false;
+}
+
+async function waitForTagResults(resultList, search, requested) {
+  const requestedKey = normalized(requested).toLocaleLowerCase();
+  const deadline = Date.now() + 2000;
+  while (Date.now() < deadline) {
+    if (await search.inputValue().catch(() => null) !== requested) return { state: 'NOT_PROVEN', note: 'The tag search query did not remain visible.' };
+    const visibleEmpty = await visibleEmptyStates(resultList);
+    const visibleOptions = await visibleTagOptions(resultList);
+    const busy = (await resultList.getAttribute('aria-busy').catch(() => 'false'))?.toLowerCase() === 'true';
+    if (!busy && visibleEmpty.length === 1 && visibleOptions.length === 0) {
+      return { state: 'UNAVAILABLE', observedEmptyState: normalized(await visibleEmpty[0].innerText()) };
+    }
+    if (!busy && visibleEmpty.length > 1) return { state: 'NOT_PROVEN', note: 'The seller selector returned multiple empty-state messages.' };
+    const exactMatches = [];
+    for (const option of visibleOptions) {
+      const label = normalized(await option.innerText().catch(() => ''));
+      if (label.toLocaleLowerCase() === requestedKey && !await option.isDisabled().catch(() => true)) exactMatches.push(label);
+    }
+    if (!busy && exactMatches.length === 1) return { state: 'AVAILABLE', exactOption: exactMatches[0] };
+    if (!busy && exactMatches.length > 1) return { state: 'NOT_PROVEN', note: 'The seller selector returned an ambiguous exact result.' };
+    if (!busy && visibleOptions.length > 0) return { state: 'NOT_PROVEN', note: 'The selector returned results but no unique exact selectable option.' };
+    await resultList.page().waitForTimeout(25);
+  }
+  return { state: 'NOT_PROVEN', note: 'The seller selector result did not settle before the bounded discovery deadline.' };
+}
+
+export async function runTagAvailabilityDiscovery({ manifestInfo, tags, cdpEndpoint, origin = 'https://www.fab.com', page: injectedPage = null, context: injectedContext = null }) {
+  if (!Array.isArray(tags) || tags.length === 0 || tags.some((tag) => typeof tag !== 'string' || !tag.trim())) {
+    throw new Error('Tag availability discovery requires a non-empty array of non-blank candidate tags.');
+  }
+  const candidates = tags.map((tag) => tag.trim());
+  const normalizedCandidates = candidates.map((tag) => normalized(tag).toLocaleLowerCase());
+  if (new Set(normalizedCandidates).size !== normalizedCandidates.length) throw new Error('Tag availability candidates must be unique after case and whitespace normalization.');
+  let browser = null;
+  let context = injectedContext;
+  let page = injectedPage;
+  let targetPageSelectionReason = injectedPage ? 'Caller-supplied page was used for controlled fixture discovery.' : null;
+  if (!page) {
+    if (!context && !cdpEndpoint) throw new Error('A CDP endpoint is required for seller-side tag availability discovery.');
+    if (!context) {
+      browser = await chromium.connectOverCDP(cdpEndpoint);
+      context = browser.contexts()[0];
+    }
+    if (!context) throw new Error('The CDP browser has no default context.');
+    page = selectExistingTargetPage(context, manifestInfo.manifest, origin);
+    targetPageSelectionReason = 'Selected the only existing page with the exact Fab hostname and listing pathname; query/hash ignored.';
+  }
+  const guard = installNetworkGuard(context);
+  const result = {
+    schemaVersion: 1,
+    mode: 'tag-availability',
+    listingId: manifestInfo.manifest.listingId,
+    listingTitle: manifestInfo.manifest.title,
+    listingStatus: null,
+    checkedAtUtc: new Date().toISOString(),
+    transport: 'cdp',
+    targetPageSelectionReason,
+    candidates: candidates.map((requested) => ({ requested, availability: 'NOT_PROVEN' })),
+    selectedTagsUnchanged: 'NOT_PROVEN',
+    searchQueriesCleared: false,
+    optionSelectionInteractionsPerformed: 0,
+    saveInvoked: false,
+    submitInvoked: false,
+    portalWritesAllowed: false,
+    submitAllowed: false,
+    publishInvoked: false,
+    networkMutationRequestsObserved: 0,
+    networkMutationRequestsBlocked: 0,
+    network: null,
+    blockers: [],
+    result: 'FAIL',
+  };
+  try {
+    await ensurePassiveTarget(page, manifestInfo.manifest, origin);
+    result.listingStatus = await readStatus(page);
+    if (result.listingStatus !== 'Draft') throw new Error(`Seller-side tag discovery requires an existing Draft; observed ${result.listingStatus}.`);
+    const tagsControl = page.getByRole('combobox', { name: /^Tags(?:\s*\*)?$/i });
+    if (await tagsControl.count() !== 1 || !await tagsControl.isVisible().catch(() => false) || await tagsControl.isDisabled().catch(() => true)) {
+      throw new Error('The current seller-side Tags selector was not uniquely and safely discoverable.');
+    }
+    const tagsContainer = tagsControl.locator('xpath=..');
+    if (await tagsContainer.count() !== 1 || !await tagsContainer.isVisible().catch(() => false)) throw new Error('The current seller-side Tags selector container was not uniquely visible.');
+    const selectedBefore = await readSelectedTags(tagsContainer);
+    const initialMutations = guard.summary().networkMutationRequestsObserved;
+    await tagsControl.click();
+    if (guard.summary().networkMutationRequestsObserved !== initialMutations) throw new Error('Opening the Tags selector caused a blocked or detected network mutation.');
+    const search = page.getByPlaceholder(/^Search a tag$/i, { exact: true });
+    const resultList = page.getByRole('listbox', { name: /^Tag search results$/i });
+    if (await search.count() !== 1 || !await search.isVisible().catch(() => false)
+      || await resultList.count() !== 1) {
+      throw new Error('The seller-side tag search input or result list was not uniquely visible after opening Tags.');
+    }
+    await search.focus();
+    if (!await waitForClearedTagResults(resultList)) throw new Error('The seller-side tag results were not empty before candidate searches began.');
+    for (const [index, requested] of candidates.entries()) {
+      const beforeSearchMutations = guard.summary().networkMutationRequestsObserved;
+      await search.fill(requested);
+      const observed = await waitForTagResults(resultList, search, requested);
+      result.candidates[index] = { requested, availability: observed.state, ...(observed.exactOption ? { exactOption: observed.exactOption } : {}), ...(observed.observedEmptyState ? { observedEmptyState: observed.observedEmptyState } : {}), ...(observed.note ? { note: observed.note } : {}) };
+      await search.fill('');
+      if (await search.inputValue().catch(() => null) !== '') throw new Error('The tag search query could not be cleared after a candidate.');
+      if (!await waitForClearedTagResults(resultList)) throw new Error('The seller-side tag results did not clear after a candidate query.');
+      if (guard.summary().networkMutationRequestsObserved > beforeSearchMutations) {
+        throw new Error('Tag search caused a blocked or detected network mutation; discovery stopped.');
+      }
+    }
+    result.searchQueriesCleared = true;
+    const selectedAfter = await readSelectedTags(tagsContainer);
+    result.selectedTagsUnchanged = selectedBefore && selectedAfter
+      ? JSON.stringify(selectedBefore) === JSON.stringify(selectedAfter)
+      : 'NOT_PROVEN';
+    if (result.selectedTagsUnchanged === 'NOT_PROVEN') throw new Error('The selected tag set could not be safely identified before and after discovery.');
+    if (result.selectedTagsUnchanged === false) throw new Error('Selected tag chips changed during read-only tag availability discovery.');
+    const network = guard.summary();
+    result.network = network;
+    result.networkMutationRequestsObserved = network.networkMutationRequestsObserved;
+    result.networkMutationRequestsBlocked = network.networkMutationRequestsBlocked;
+    if (network.networkMutationRequestsObserved > 0) throw new Error('Tag availability discovery observed one or more network mutations.');
+    result.result = 'PASS';
+    return result;
+  } catch (error) {
+    result.blockers.push(error instanceof Error ? error.message : String(error));
+    return result;
+  } finally {
+    const network = guard.summary();
+    result.network = network;
+    result.networkMutationRequestsObserved = network.networkMutationRequestsObserved;
+    result.networkMutationRequestsBlocked = network.networkMutationRequestsBlocked;
+    await guard.dispose().catch(() => undefined);
+    if (browser) await browser.close().catch(() => undefined);
+  }
+}
+
 function createNavigationDiagnostics(context, result) {
   const handlers = new Map();
   const observePage = (page) => {
     if (!page || handlers.has(page)) return;
     const handler = (frame) => {
       if (frame !== page.mainFrame()) return;
-      result.humanObservedNavigationCount += 1;
+      if (result.automationNavigationInProgress) result.automationHardNavigationCount += 1;
+      else result.humanObservedNavigationCount += 1;
     };
     handlers.set(page, handler);
     page.on('framenavigated', handler);
@@ -390,8 +574,9 @@ async function readDangerousActions(page) {
   return found;
 }
 
-export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'verify', origin = 'https://www.fab.com', page: injectedPage = null, context: injectedContext = null, manualInteraction = null, maxManualChallengeCycles = DEFAULT_MANUAL_CHALLENGE_MAX_CYCLES }) {
+export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'verify', preSubmit = false, origin = 'https://www.fab.com', page: injectedPage = null, context: injectedContext = null, manualInteraction = null, maxManualChallengeCycles = DEFAULT_MANUAL_CHALLENGE_MAX_CYCLES }) {
   if (mode !== 'verify') throw new Error('Fab Portal automation supports verify mode only.');
+  if (preSubmit && !manifestInfo.manifest.portalReady) throw new Error('Pre-submit verification requires manifest.portalReady=true.');
   let browser = null;
   let context = injectedContext;
   let page = injectedPage;
@@ -419,6 +604,8 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     observationSource: 'cdp',
     observationSha256: null,
     portalReady: manifestInfo.manifest.portalReady,
+    preSubmitGate: preSubmit,
+    preSubmitReady: false,
     comparison: null,
     portalMismatchCount: 0,
     portalUnresolvedCount: 0,
@@ -428,6 +615,8 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     executedMutations: [],
     saveInvoked: false,
     submitInvoked: false,
+    portalWritesAllowed: false,
+    submitAllowed: false,
     submitAccepted: false,
     postSubmitStatus: null,
     writeInteractionsPerformed: 0,
@@ -449,6 +638,7 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     manualChallengeCompleted: false,
     manualChallengeCancelled: false,
     passiveAttach: true,
+    automationNavigationInProgress: false,
   };
   const navigationDiagnostics = createNavigationDiagnostics(context, result);
   Object.defineProperty(result, 'navigationDiagnostics', { value: navigationDiagnostics, enumerable: false, configurable: true });
@@ -483,6 +673,51 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     });
     page = initialRead.page;
     result.listingStatus = initialRead.value;
+    if (preSubmit && result.listingStatus !== 'Draft') {
+      result.blockers.push(`Pre-submit verification requires listing status Draft; observed ${result.listingStatus}.`);
+      return result;
+    }
+    if (preSubmit) {
+      await detectManualBlock(page);
+      result.automationNavigationInProgress = true;
+      let cdpSession = null;
+      try {
+        cdpSession = await page.context().newCDPSession(page);
+        await cdpSession.send('Network.enable');
+        await cdpSession.send('Network.setCacheDisabled', { cacheDisabled: true });
+        await page.reload({ waitUntil: 'load', timeout: 15000 });
+        result.reloadCount += 1;
+        result.hardNavigationCount += 1;
+      } finally {
+        if (cdpSession) {
+          await cdpSession.send('Network.setCacheDisabled', { cacheDisabled: false }).catch(() => undefined);
+          await cdpSession.detach().catch(() => undefined);
+        }
+        result.automationNavigationInProgress = false;
+      }
+      const reloadedTarget = await withManualChallengeHandoff({
+        context,
+        page,
+        manifest: manifestInfo.manifest,
+        origin,
+        result,
+        manualInteraction: interaction,
+        maxCycles: maxManualChallengeCycles,
+        diagnostics: result,
+        action: async (candidatePage) => {
+          await ensurePassiveTarget(candidatePage, manifestInfo.manifest, origin);
+          await detectManualBlock(candidatePage);
+          return readStatus(candidatePage);
+        },
+      });
+      page = reloadedTarget.page;
+      result.listingStatus = reloadedTarget.value;
+      if (result.listingStatus !== 'Draft') {
+        result.blockers.push(`Pre-submit verification requires listing status Draft after reload; observed ${result.listingStatus}.`);
+        return result;
+      }
+      result.readOnlyUiActions.push('hard reloaded exact Draft listing before comparison');
+    }
     result.dangerousActionsFound = await readDangerousActions(page);
     const collectedResult = await withManualChallengeHandoff({
       context,
@@ -503,7 +738,19 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     result.portalUnresolvedCount = result.comparison.unresolvedCritical.length;
     result.portalVerificationComplete = result.portalMismatchCount === 0 && result.portalUnresolvedCount === 0;
     if (result.comparison.mismatchCount > 0) result.blockers.push(`${result.comparison.mismatchCount} manifest mismatch(es).`);
-    result.result = result.blockers.length === 0 ? 'PASS' : 'FAIL';
+    if (preSubmit) {
+      if (result.portalUnresolvedCount > 0) result.blockers.push(`Pre-submit verification has unresolved fields: ${result.comparison.unresolvedCritical.join(', ')}.`);
+      const observedMutations = guard.summary().networkMutationRequestsObserved;
+      if (observedMutations > 0) result.blockers.push(`Pre-submit verification observed ${observedMutations} blocked or detected network mutation request(s).`);
+      result.preSubmitReady = manifestInfo.manifest.portalReady === true
+        && result.listingStatus === 'Draft'
+        && result.reloadCount >= 1
+        && result.portalMismatchCount === 0
+        && result.portalUnresolvedCount === 0
+        && observedMutations === 0;
+      if (!result.preSubmitReady && result.blockers.length === 0) result.blockers.push('Pre-submit verification did not satisfy every live readiness condition.');
+    }
+    result.result = result.blockers.length === 0 && (!preSubmit || result.preSubmitReady) ? 'PASS' : 'FAIL';
     return result;
   } catch (error) {
     if (isManualChallengeError(error)) result.manualChallengeDetected = true;

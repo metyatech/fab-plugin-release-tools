@@ -4,7 +4,7 @@ import { compareObservation } from './comparison.mjs';
 import { loadSubmissionManifest } from './manifest.mjs';
 import { createStdinManualInteraction } from './manual-handoff.mjs';
 import { loadFabPortalObservation } from './observation.mjs';
-import { runPortalAutomation } from './portal.mjs';
+import { runPortalAutomation, runTagAvailabilityDiscovery } from './portal.mjs';
 import { createRunDirectory, writeRunReport } from './report.mjs';
 
 const VERSION = '0.8.3';
@@ -14,6 +14,8 @@ function help() {
 
 Usage:
   pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> (-CdpEndpoint <endpoint> | -ObservationPath <FabPortalObservation.json>)
+  pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> -CdpEndpoint <endpoint> -PreSubmit
+  pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> -CdpEndpoint <endpoint> -TagAvailability -Tags <candidate...>
 
 Fab Portal automation supports verify mode only. Listing changes must be made
 by an interactive AI agent or the Fab Portal UI. For interactive workflows,
@@ -30,27 +32,44 @@ Acquisition modes (choose exactly one):
 Options:
   --manifest <path>       FabPortalSubmission.json (required)
   --output <directory>    Artifact root (default: ./artifacts)
+  --pre-submit            Require live CDP, reload the exact Draft, and prove persisted submit readiness
+  --tag-availability      Read current seller-side tag selector options without selecting any option
+  --tag <candidate>       Candidate tag (repeat for tag-availability mode only)
   --json                  Emit one machine-readable result object
   --verbose               Emit additional non-secret diagnostics
   --help, -h              Show this help
   --version, -V           Show the version
 
 Observation mode compares the supplied facts offline and does not launch or
-attach to a browser. Description text stays separate from structured
+attach to a browser. It is audit evidence, not authoritative submit readiness.
+Pre-submit mode is live CDP only, requires portalReady and Draft status, hard
+reloads once before comparison, and reports preSubmitReady only when persisted
+DOM, comparison, unresolved fields, and the network mutation guard all pass.
+Description text stays separate from structured
 descriptionLinks; when descriptionRichText is present, block and inline
 semantics must also match. FAQs and Additional information rich text are
-compared in source order. It is not cryptographic proof of Portal source bytes.
+compared in source order. Tag availability is read from the current seller-side
+selector; public listings are not an availability oracle. Only AVAILABLE exact
+matches are suitable for source metadata. No tag option is selected, saved,
+or submitted by this tool.
 `;
 }
 
 function parseArgs(argv) {
-  const result = { output: null, json: false, verbose: false };
+  const result = { output: null, json: false, verbose: false, tags: [] };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--help' || arg === '-h') result.help = true;
     else if (arg === '--version' || arg === '-V') result.version = true;
     else if (arg === '--json') result.json = true;
     else if (arg === '--verbose') result.verbose = true;
+    else if (arg === '--pre-submit') result.presubmit = true;
+    else if (arg === '--tag-availability') result.tagavailability = true;
+    else if (arg === '--tag') {
+      const value = argv[++index];
+      if (!value || value.startsWith('--')) throw new Error('--tag requires a candidate value.');
+      result.tags.push(value);
+    }
     else if (['--manifest', '--cdp-endpoint', '--observation', '--output'].includes(arg)) {
       const value = argv[++index];
       if (!value || value.startsWith('--')) throw new Error(`${arg} requires a value.`);
@@ -62,6 +81,14 @@ function parseArgs(argv) {
   if (!result.help && !result.version) {
     if (!result.manifest) throw new Error('--manifest is required. Use --help.');
     if (hasCdp === hasObservation) throw new Error('Exactly one of --cdp-endpoint or --observation is required. Use --help.');
+    if (result.presubmit && (hasObservation || !hasCdp)) {
+      throw new Error('Pre-submit verification requires live browser/CDP verification and cannot be satisfied by an observation artifact.');
+    }
+    if (result.tagavailability && (!hasCdp || hasObservation || result.presubmit)) {
+      throw new Error('Tag availability discovery requires live browser/CDP verification and cannot use an observation artifact.');
+    }
+    if (result.tagavailability && result.tags.length === 0) throw new Error('--tag-availability requires one or more --tag candidates.');
+    if (!result.tagavailability && result.tags.length > 0) throw new Error('--tag is valid only with --tag-availability.');
   }
   return result;
 }
@@ -72,9 +99,15 @@ function emit(value, json) {
     process.stdout.write(`FAB PORTAL AUTOMATION: ${value.result}\n`);
     process.stdout.write(`Mode: ${value.mode}\nListing: ${value.listingTitle} (${value.listingId})\nStatus: ${value.listingStatus ?? 'unknown'}\n`);
     process.stdout.write(`verificationTransport=${value.verificationTransport ?? 'unknown'} observationSource=${value.observationSource ?? 'null'} observationSha256=${value.observationSha256 ?? 'null'}\n`);
+    if (value.preSubmitGate) process.stdout.write(`preSubmitGate=true preSubmitReady=${value.preSubmitReady} reloadCount=${value.reloadCount}\n`);
+    if (value.mode === 'tag-availability') {
+      for (const candidate of value.candidates ?? []) process.stdout.write(`tag=${candidate.requested} availability=${candidate.availability}\n`);
+      process.stdout.write(`selectedTagsUnchanged=${value.selectedTagsUnchanged} searchQueriesCleared=${value.searchQueriesCleared} optionSelectionInteractionsPerformed=${value.optionSelectionInteractionsPerformed}\n`);
+    }
     if (value.comparison?.counts) process.stdout.write(`MATCH=${value.comparison.counts.MATCH ?? 0} MISMATCH=${value.comparison.counts.MISMATCH ?? 0} NOT_VISIBLE=${value.comparison.counts.NOT_VISIBLE ?? 0} NOT_DISCOVERED=${value.comparison.counts.NOT_DISCOVERED ?? 0} NOT_APPLICABLE=${value.comparison.counts.NOT_APPLICABLE ?? 0}\n`);
     process.stdout.write(`portalMismatchCount=${value.portalMismatchCount ?? 0} portalUnresolvedCount=${value.portalUnresolvedCount ?? 0} portalVerificationComplete=${value.portalVerificationComplete ?? false}\n`);
     process.stdout.write(`writeInteractionsPerformed=${value.writeInteractionsPerformed} Save=${value.saveInvoked} Submit=${value.submitInvoked}\n`);
+    if (value.preSubmitGate) process.stdout.write(`portalWritesAllowed=${value.portalWritesAllowed} submitAllowed=${value.submitAllowed}\n`);
     process.stdout.write(`submitAccepted=${value.submitAccepted} postSubmitStatus=${value.postSubmitStatus ?? 'null'}\n`);
     process.stdout.write(`writeReady=${value.writeReady} writeBlockers=${value.writeBlockers?.length ?? 0}\n`);
     process.stdout.write(`manualChallengeDetected=${value.manualChallengeDetected} manualChallengeHandoffCount=${value.manualChallengeHandoffCount} manualChallengeCompleted=${value.manualChallengeCompleted} manualChallengeCancelled=${value.manualChallengeCancelled}\n`);
@@ -102,6 +135,10 @@ function observationResult(manifestInfo, observationInfo, comparison) {
     listingStatus: observation.listingStatus,
     manifestSha256: manifestInfo.manifestSha256,
     portalReady: manifestInfo.manifest.portalReady,
+    preSubmitGate: false,
+    preSubmitReady: false,
+    portalWritesAllowed: false,
+    submitAllowed: false,
     comparison,
     comparisonAfter: null,
     portalMismatchCount: comparison.mismatchCount,
@@ -144,17 +181,20 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
   const createDirectory = dependencies.createDirectory ?? createRunDirectory;
   const writeReportFile = dependencies.writeReport ?? writeRunReport;
   const run = dependencies.run ?? runPortalAutomation;
+  const runTagDiscovery = dependencies.runTagDiscovery ?? runTagAvailabilityDiscovery;
   const loadObservation = dependencies.loadObservation ?? loadFabPortalObservation;
   const compareObservationValue = dependencies.compareObservation ?? compareObservation;
   const manualInteraction = args.observation ? null : dependencies.manualInteraction ?? createStdinManualInteraction();
-  const manifestInfo = await loadManifest(args.manifest, { requirePortalReady: false });
+  const manifestInfo = await loadManifest(args.manifest, { requirePortalReady: Boolean(args.presubmit) });
   const artifactDirectory = await createDirectory(args.output ?? path.resolve('artifacts'), manifestInfo.manifest.pluginName);
   let result;
   if (args.observation) {
     const observationInfo = await loadObservation(args.observation, manifestInfo);
     result = observationResult(manifestInfo, observationInfo, compareObservationValue(manifestInfo, observationInfo.observation));
+  } else if (args.tagavailability) {
+    result = await runTagDiscovery({ manifestInfo, cdpEndpoint: args.cdpendpoint, tags: args.tags });
   } else {
-    result = await run({ manifestInfo, cdpEndpoint: args.cdpendpoint, manualInteraction });
+    result = await run({ manifestInfo, cdpEndpoint: args.cdpendpoint, manualInteraction, ...(args.presubmit ? { preSubmit: true } : {}) });
   }
   result.artifactDirectory = artifactDirectory;
   await writeReportFile({ directory: artifactDirectory, result, comparison: result.comparison, comparisonAfter: result.comparisonAfter, network: result.network, page: result.page });

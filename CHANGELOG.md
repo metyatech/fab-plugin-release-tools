@@ -5,6 +5,12 @@ Keep a Changelog and the project uses Semantic Versioning.
 
 ## [Unreleased]
 
+- Added live pre-submit verification that hard reloads an exact Draft before
+  comparing persisted Portal DOM and rejects Observation transport as a
+  submit-readiness proof.
+- Added read-only seller-side tag availability discovery with exact matching,
+  query clearing, and network-mutation protection.
+
 ## [0.8.3] - 2026-09-17
 
 - Canonicalized Fab's persisted Heading 2 DOM representation (`h5`) to

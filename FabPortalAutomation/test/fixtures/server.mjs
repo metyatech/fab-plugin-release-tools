@@ -50,12 +50,17 @@ function pageMarkup(state, listingId) {
     <label>Description *<div role="textbox" aria-label="Description *" contenteditable="true">${state.descriptionRichText ? semanticRichText(state.descriptionRichText, state.richTextHeadingTag) : richText(state.longDescription, state.descriptionLinks)}</div></label>
     <label>Product type *<select aria-label="Product type *"><option selected>${html(state.productType)}</option></select></label>
     <label>Category *<input role="combobox" aria-label="Category selection" value="${html(state.category)}"></label>
-    <label>Tags *<input aria-label="Tags *" value="${html(state.tags[0] ?? '')}" readonly></label>
+    <label>Tags *<div data-testid="tag-selector">
+      ${(state.tags ?? []).map((tag) => `<span data-testid="selected-tag"><button type="button" aria-label="Remove ${html(tag)}">${html(tag)}</button></span>`).join('')}
+      <input role="combobox" aria-label="Tags *" placeholder="Search a tag" value="">
+      ${state.duplicateTagSelector ? '<input role="combobox" aria-label="Tags *" placeholder="Search a tag" value="">' : ''}
+      <div role="listbox" aria-label="Tag search results" hidden></div>
+    </div></label>
     <button type="button" data-testid="included-format">Unreal Engine</button>
     ${state.mainProjectVersionsVisible ? '<h2>Project Versions*</h2><a href="/portal/listings">Back to listings</a>' : ''}
     ${radio('Standard License (Free or Paid)', true)}
     <label>Personal price *<input aria-label="Personal price *" value="${html(state.personalPriceUsd)}"></label>
-    <label>Professional price *<input aria-label="Professional price *" value="${html(state.professionalPriceUsd)}"></label>
+    <label>Professional price *<input aria-label="Professional price *" value="${html(state.professionalPriceUsd)}"${state.professionalPricePlaceholder ? ` placeholder="${html(state.professionalPricePlaceholder)}"` : ''}></label>
     ${radio('No, this listing does not contain mature content.', !state.matureContent)}
     ${radio('Yes, it was partly or fully created with generative AI', state.generatedWithAi)}
     <label>${html('Do not allow this product to be used by Generative AI Programs.')}<input type="checkbox" aria-label="Do not allow this product to be used by Generative AI Programs."${checked(!state.allowsUsageWithAi)}></label>
@@ -74,7 +79,7 @@ function pageMarkup(state, listingId) {
     <h3>Project Versions*</h3>
     ${state.engineVersions.map((version) => `<div>UE_${html(version)}</div>`).join('')}
     <button type="button" aria-label="Remove ${html(state.platformDisplay ?? 'Windows')}">Remove ${html(state.platformDisplay ?? 'Windows')}</button>
-    <label>Project File Link<input aria-label="Project File Link" value="${html(state.projectFileLink)}" ${state.disableFields?.includes('projectFileLink') ? 'disabled' : ''}></label>
+    ${state.hideProjectFileLink ? '' : `<label>Project File Link<input aria-label="Project File Link" value="${html(state.projectFileLink)}" ${state.disableFields?.includes('projectFileLink') ? 'disabled' : ''}></label>`}
     <section aria-label="Technical details">
       <p>Documentation: ${html(state.documentationUrl)}</p>
       <p>Support: ${html(state.supportUrl)}</p>
@@ -113,6 +118,49 @@ function pageMarkup(state, listingId) {
     document.querySelector('[data-testid="format-listing-summary"]')?.addEventListener('click', () => setView('listing'));
     let stagedInputObserved = false;
     const challenge = document.querySelector('[data-testid="fixture-challenge"]');
+    const tagSelector = document.querySelector('[data-testid="tag-selector"]');
+    const tagSearch = tagSelector?.querySelector('input[placeholder="Search a tag"]');
+    const tagResults = tagSelector?.querySelector('[role="listbox"]');
+    window.fixtureTagOptionClicks = 0;
+    window.fixtureTagQueries = [];
+    tagSelector?.addEventListener('click', (event) => {
+      if (event.target.closest('[role="option"]')) window.fixtureTagOptionClicks += 1;
+      else if (tagResults) tagResults.hidden = false;
+    });
+    tagSearch?.addEventListener('focus', () => { if (tagResults) tagResults.hidden = false; });
+    tagSearch?.addEventListener('input', async () => {
+      if (tagResults) { tagResults.replaceChildren(); tagResults.hidden = false; }
+      const candidate = tagSearch.value;
+      window.fixtureTagQueries.push(candidate);
+      if (!candidate || !tagResults) return;
+      const response = await fetch('/graphql', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ query: ${JSON.stringify(state.tagSearchOperation === 'mutation' ? 'mutation TagAvailabilitySearch { searchTags }' : 'query TagAvailabilitySearch { searchTags }')}, variables: { candidate } }),
+      });
+      const result = await response.json();
+      for (const label of result.options ?? []) {
+        const option = document.createElement('div');
+        option.setAttribute('role', 'option');
+        option.setAttribute('aria-selected', 'false');
+        option.textContent = label;
+        tagResults.append(option);
+      }
+      if (result.emptyState) {
+        const empty = document.createElement('div');
+        empty.textContent = result.emptyState;
+        tagResults.append(empty);
+      }
+    });
+    if (${state.preSubmitMutationOnReload ? 'true' : 'false'}) {
+      const mutationFixtureLoaded = sessionStorage.getItem('mutationFixtureLoaded');
+      sessionStorage.setItem('mutationFixtureLoaded', 'true');
+      if (mutationFixtureLoaded) window.addEventListener('load', () => fetch('/graphql', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ query: 'mutation DraftWrite { updateDraft }' }),
+      }).catch(() => undefined));
+    }
     const revealChallenge = () => { if (challenge) challenge.hidden = false; };
     document.querySelectorAll('input,select,[contenteditable="true"]').forEach((control) => control.addEventListener('input', () => {
       if (${state.challengeAfterFirstMutation ? 'true' : 'false'} && !stagedInputObserved) {
@@ -145,10 +193,12 @@ export async function startFixture(initialState, { redirectListingId = null } = 
   const state = structuredClone(initialState);
   const requests = [];
   const mutations = [];
+  let listingPageLoads = 0;
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, 'http://127.0.0.1');
     requests.push({ method: request.method, pathname: url.pathname });
     if (request.method === 'GET' && url.pathname.startsWith('/portal/listings/')) {
+      listingPageLoads += 1;
       const listingId = url.pathname.split('/')[3];
       if (redirectListingId && listingId !== redirectListingId) {
         response.writeHead(302, { location: `/portal/listings/${redirectListingId}/edit` });
@@ -156,7 +206,10 @@ export async function startFixture(initialState, { redirectListingId = null } = 
         return;
       }
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      response.end(pageMarkup(state, listingId));
+      const pageState = listingPageLoads > 1 && Object.prototype.hasOwnProperty.call(state, 'professionalPriceUsdAfterReload')
+        ? { ...state, professionalPriceUsd: state.professionalPriceUsdAfterReload, professionalPricePlaceholder: state.professionalPricePlaceholderAfterReload ?? '' }
+        : state;
+      response.end(pageMarkup(pageState, listingId));
       return;
     }
     if (request.method === 'POST' && url.pathname === '/graphql') {
@@ -165,7 +218,8 @@ export async function startFixture(initialState, { redirectListingId = null } = 
       try { body = JSON.parse(bodyText || '{}'); } catch { /* the guard owns malformed request handling */ }
       if (/\bmutation\b/i.test(body.query ?? '')) mutations.push({ method: 'POST', pathname: url.pathname, body: { operationName: body.operationName ?? null } });
       response.writeHead(200, { 'content-type': 'application/json' });
-      response.end('{}');
+      const tagCase = state.tagSearchCases?.[body.variables?.candidate];
+      response.end(JSON.stringify({ options: tagCase?.options ?? [], emptyState: tagCase?.emptyState ?? (tagCase?.options?.length ? null : '0 results available') }));
       return;
     }
     response.writeHead(200, { 'content-type': 'application/json' });

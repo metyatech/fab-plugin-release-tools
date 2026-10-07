@@ -6,6 +6,9 @@ param(
     [string]$CdpEndpoint,
     [string]$ObservationPath,
     [string]$OutputDirectory,
+    [string[]]$Tags,
+    [switch]$PreSubmit,
+    [switch]$TagAvailability,
     [switch]$Json,
     [switch]$VerboseOutput,
     [switch]$Help,
@@ -76,6 +79,21 @@ $hasObservationPath = -not [string]::IsNullOrWhiteSpace($ObservationPath)
 if ($hasCdpEndpoint -eq $hasObservationPath) {
     throw 'Exactly one of CdpEndpoint or ObservationPath is required. Use -Help for usage.'
 }
+if ($PreSubmit -and $hasObservationPath) {
+    throw 'Pre-submit verification requires live browser/CDP verification and cannot be satisfied by an observation artifact.'
+}
+if ($PreSubmit -and -not $hasCdpEndpoint) {
+    throw 'Pre-submit verification requires live browser/CDP verification and cannot be satisfied by an observation artifact.'
+}
+if ($TagAvailability -and (-not $hasCdpEndpoint -or $hasObservationPath -or $PreSubmit)) {
+    throw 'Tag availability discovery requires live browser/CDP verification and cannot use an observation artifact.'
+}
+if ($TagAvailability -and (-not $Tags -or $Tags.Count -eq 0)) {
+    throw 'TagAvailability requires one or more -Tags candidates.'
+}
+if (-not $TagAvailability -and $Tags) {
+    throw '-Tags is valid only with -TagAvailability.'
+}
 $runtime = Join-Path $PSScriptRoot 'FabPortalAutomation'
 if (-not (Test-Path -LiteralPath (Join-Path $runtime 'node_modules\playwright-core\package.json') -PathType Leaf)) {
     throw "Portal automation dependencies are not installed. Run npm ci in $runtime."
@@ -98,6 +116,14 @@ if (-not [string]::IsNullOrWhiteSpace($OutputDirectory)) {
 }
 if ($Json) { [void]$arguments.Add('--json') }
 if ($VerboseOutput) { [void]$arguments.Add('--verbose') }
+if ($PreSubmit) { [void]$arguments.Add('--pre-submit') }
+if ($TagAvailability) {
+    [void]$arguments.Add('--tag-availability')
+    foreach ($tag in $Tags) {
+        [void]$arguments.Add('--tag')
+        [void]$arguments.Add($tag)
+    }
+}
 $result = Invoke-NodeProcess -Arguments $arguments.ToArray() -Interactive
 if (-not [string]::IsNullOrEmpty($result.StandardOutput)) {
     $result.StandardOutput | Write-Output
