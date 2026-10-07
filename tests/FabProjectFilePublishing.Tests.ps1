@@ -382,7 +382,10 @@ Describe 'Fab project file publishing' {
 Describe 'Fab project file publication listing update' {
     BeforeAll {
         function Invoke-PublicationFixture {
-            param([bool]$FailSecondEngineVerification = $false)
+            param(
+                [bool]$FailSecondEngineVerification = $false,
+                [string]$TestProjectPath
+            )
 
             $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
             [System.IO.Directory]::CreateDirectory($root) | Out-Null
@@ -395,7 +398,8 @@ Describe 'Fab project file publication listing update' {
             [System.IO.File]::WriteAllText($listingPath, $initialText)
             $outputDirectory = Join-Path $root 'publication-output'
             . (Join-Path $PSScriptRoot '..\Publish-FabProjectFiles.ps1') `
-                -PluginPath $root -ListingFieldsPath $listingPath -OutputDirectory $outputDirectory
+                -PluginPath $root -ListingFieldsPath $listingPath -OutputDirectory $outputDirectory `
+                -TestProjectPath $TestProjectPath
 
             $script:publicationFixture = [pscustomobject]@{
                 Root = $root
@@ -404,6 +408,8 @@ Describe 'Fab project file publication listing update' {
                 InitialText = $initialText
                 Records = @()
                 FailSecondEngineVerification = $FailSecondEngineVerification
+                TestProjectPath = $TestProjectPath
+                ForwardedTestProjectPath = $null
                 RemoteCallCounts = @{}
             }
 
@@ -431,7 +437,8 @@ Describe 'Fab project file publication listing update' {
                 }
             }
             Mock Invoke-FabProductReleaseCore {
-                param([string]$OutputDirectory)
+                param([string]$OutputDirectory, [string]$TestProjectPath)
+                $script:publicationFixture.ForwardedTestProjectPath = $TestProjectPath
                 $bundleRoot = Join-Path $OutputDirectory 'bundle'
                 $records = foreach ($engineVersion in @('5.6', '5.8')) {
                     $relativePath = "packages/UE$engineVersion/Fixture_UE$engineVersion.zip"
@@ -491,7 +498,8 @@ Describe 'Fab project file publication listing update' {
             $publicationResult = $null
             $errorMessage = $null
             try {
-                $publicationOutput = @(Invoke-FabProjectFilePublication -UpdateListingFields)
+                $publicationOutput = @(Invoke-FabProjectFilePublication `
+                    -TestProjectPath $TestProjectPath -UpdateListingFields)
                 $publicationResult = $publicationOutput | Where-Object {
                     $null -ne $_.PSObject.Properties['ListingAction']
                 } | Select-Object -Last 1
@@ -525,5 +533,12 @@ Describe 'Fab project file publication listing update' {
         $testResult.ErrorMessage | Should -BeLike '*R2 object verification failed after publication*'
         [System.IO.File]::ReadAllText($testResult.Fixture.ListingPath) |
             Should -BeExactly $testResult.Fixture.InitialText
+    }
+
+    It 'forwards TestProjectPath through direct project-file publication to product release' {
+        $testProjectPath = Join-Path $TestDrive 'reviewer-demo-project'
+        $testResult = Invoke-PublicationFixture -TestProjectPath $testProjectPath
+        $testResult.ErrorMessage | Should -BeNullOrEmpty
+        $testResult.Fixture.ForwardedTestProjectPath | Should -BeExactly $testProjectPath
     }
 }

@@ -6,6 +6,10 @@ Publishes canonical product ZIPs to an already configured Cloudflare R2 bucket.
 
 .EXAMPLE
 pwsh .\Publish-FabProjectFiles.ps1 -PluginPath ..\MyPlugin -UpdateListingFields
+
+.EXAMPLE
+pwsh .\Publish-FabProjectFiles.ps1 -PluginPath ..\MyPlugin `
+    -TestProjectPath ..\MyDemoProject -UpdateListingFields
 ##>
 [CmdletBinding()]
 param(
@@ -18,6 +22,8 @@ param(
 
     [string]$OutputDirectory,
 
+    [string]$TestProjectPath,
+
     [switch]$UpdateListingFields
 )
 
@@ -28,10 +34,11 @@ $ErrorActionPreference = 'Stop'
 [void]$EngineRoot
 [void]$ListingFieldsPath
 [void]$OutputDirectory
+[void]$TestProjectPath
 [void]$UpdateListingFields
 . (Join-Path $PSScriptRoot 'Invoke-FabProductRelease.ps1') `
     -PluginPath $PluginPath -EngineRoot $EngineRoot -ListingFieldsPath $ListingFieldsPath `
-    -OutputDirectory $OutputDirectory -KeepWorkingDirectory:$false
+    -OutputDirectory $OutputDirectory -TestProjectPath $TestProjectPath -KeepWorkingDirectory:$false
 
 function Get-FabR2Wrangler {
     $command = Get-Command wrangler -CommandType Application -ErrorAction SilentlyContinue |
@@ -361,6 +368,8 @@ function Update-FabR2ListingLinkSet {
 function Invoke-FabProjectFilePublication {
     [CmdletBinding()]
     param(
+        [string]$TestProjectPath,
+
         [switch]$UpdateListingFields
     )
 
@@ -390,6 +399,7 @@ function Invoke-FabProjectFilePublication {
             OutputDirectory   = $buildRoot
         }
         if (-not [string]::IsNullOrWhiteSpace($EngineRoot)) { $releaseArguments.EngineRoot = $EngineRoot }
+        if (-not [string]::IsNullOrWhiteSpace($TestProjectPath)) { $releaseArguments.TestProjectPath = $TestProjectPath }
         $releaseResult = Invoke-FabProductReleaseCore @releaseArguments
         $manifest = $releaseResult.Manifest
         $wrangler = Assert-FabR2BucketAccess -Publishing $publishing
@@ -473,7 +483,7 @@ function Invoke-FabProjectFilePublication {
 
 if ($MyInvocation.InvocationName -ne '.') {
     try {
-        $output = @(Invoke-FabProjectFilePublication -UpdateListingFields:$UpdateListingFields)
+        $output = @(Invoke-FabProjectFilePublication -TestProjectPath $TestProjectPath -UpdateListingFields:$UpdateListingFields)
         $output | Where-Object { $_ -is [string] } | Write-Output
         exit 0
     }

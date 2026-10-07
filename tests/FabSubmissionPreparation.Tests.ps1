@@ -228,20 +228,22 @@ Describe 'Fab preparation expected source transitions' {
                 [bool]$ReleaseReady = $false,
                 [string[]]$EngineVersions = @('5.8'),
                 [int]$ProjectLinkCount = -1,
-                [bool]$ProjectFilePublishing = $false
+                [bool]$ProjectFilePublishing = $false,
+                [string]$TestProjectPath
             )
             [void]$GitStatus
             [void]$ReleaseReady
             [void]$EngineVersions
             [void]$ProjectLinkCount
             [void]$ProjectFilePublishing
+            $script:expectedTestProjectPath = $TestProjectPath
             $script:publicationCompleted = $false
             $script:preparationGitStatusCalls = 0
 
             $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
             [System.IO.Directory]::CreateDirectory($root) | Out-Null
             . (Join-Path $PSScriptRoot '..\Invoke-FabSubmissionPreparation.ps1') `
-                -PluginPath $root -NoOpenMediaReview
+                -PluginPath $root -NoOpenMediaReview -TestProjectPath $TestProjectPath
 
             Mock Invoke-FabPreparationGitStatus {
                 $script:preparationGitStatusCalls++
@@ -254,6 +256,13 @@ Describe 'Fab preparation expected source transitions' {
                     engineVersions = $EngineVersions
                 }
                 if ($ProjectFilePublishing) { $configuration.projectFilePublishing = [pscustomobject]@{} }
+                if (-not [string]::IsNullOrWhiteSpace($TestProjectPath)) {
+                    $configuration.schemaVersion = 3
+                    $configuration.testProject = [pscustomobject]@{
+                        repository = 'metyatech/FindInMaterialsDemo'
+                        distribution = 'fab-additional-file'
+                    }
+                }
                 return [pscustomobject]$configuration
             }
             Mock Get-FabProductDescriptor {
@@ -295,10 +304,14 @@ Describe 'Fab preparation expected source transitions' {
                 param(
                     [string]$PluginRoot,
                     [string]$ListingPath,
+                    [string]$TestProjectPath,
                     [switch]$UpdateListingFields
                 )
                 $PluginRoot | Should -BeExactly $root
                 $ListingPath | Should -BeExactly (Join-Path $root 'FabListingFields.json')
+                if (-not [string]::IsNullOrWhiteSpace($script:expectedTestProjectPath)) {
+                    $TestProjectPath | Should -BeExactly $script:expectedTestProjectPath
+                }
                 $UpdateListingFields.IsPresent | Should -BeTrue
                 $script:publicationCompleted = $true
             }
@@ -369,6 +382,15 @@ Describe 'Fab preparation expected source transitions' {
         $result.result | Should -BeExactly 'PENDING'
         $result.state | Should -BeExactly 'SOURCE_COMMIT_REQUIRED'
         $result.expectedDirtyFiles | Should -BeExactly @('FabListingFields.json')
+        $script:publicationCompleted | Should -BeTrue
+    }
+
+    It 'forwards TestProjectPath through guarded publication for a schemaVersion 3 additional-file product' {
+        $script:expectedTestProjectPath = Join-Path $TestDrive 'FindInMaterialsDemo'
+        $result = Invoke-PreparationFixture -GitStatus '' -EngineVersions @('5.8') `
+            -ProjectLinkCount 0 -ProjectFilePublishing $true `
+            -TestProjectPath $script:expectedTestProjectPath
+        $result.state | Should -BeExactly 'SOURCE_COMMIT_REQUIRED'
         $script:publicationCompleted | Should -BeTrue
     }
 

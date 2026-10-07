@@ -29,10 +29,15 @@ jobs:
             throw "Required UE 5.8 Build.version is missing: $buildVersionPath"
           }
           $buildVersion = Get-Content -Raw -LiteralPath $buildVersionPath | ConvertFrom-Json
+          $patchVersion = 0
+          if ($null -eq $buildVersion.PatchVersion -or
+              -not [int]::TryParse([string]$buildVersion.PatchVersion, [ref]$patchVersion) -or
+              $patchVersion -lt 0) {
+            throw "UE Build.version has an invalid patch version: $($buildVersion.PatchVersion)"
+          }
           if ([int]$buildVersion.MajorVersion -ne 5 -or
-              [int]$buildVersion.MinorVersion -ne 8 -or
-              [int]$buildVersion.PatchVersion -ne 2) {
-            throw "Expected UE 5.8.2, found $($buildVersion.MajorVersion).$($buildVersion.MinorVersion).$($buildVersion.PatchVersion)"
+              [int]$buildVersion.MinorVersion -ne 8) {
+            throw "Expected UE 5.8.x with a valid patch version, found $($buildVersion.MajorVersion).$($buildVersion.MinorVersion).$($buildVersion.PatchVersion)"
           }
           Write-Output "UE58_BUILD_VERSION=$($buildVersion.MajorVersion).$($buildVersion.MinorVersion).$($buildVersion.PatchVersion)"
 

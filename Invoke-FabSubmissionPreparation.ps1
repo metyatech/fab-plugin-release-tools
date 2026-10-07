@@ -126,6 +126,7 @@ function Invoke-FabPreparationProjectFilePublication {
         [Parameter(Mandatory)] [string]$PluginRoot,
         [string]$EngineRoot,
         [string]$ListingPath,
+        [string]$TestProjectPath,
         [switch]$UpdateListingFields
     )
 
@@ -133,8 +134,9 @@ function Invoke-FabPreparationProjectFilePublication {
         throw 'Guarded preparation requires project file publication to update FabListingFields.json.'
     }
     . (Join-Path $PSScriptRoot 'Publish-FabProjectFiles.ps1') `
-        -PluginPath $PluginRoot -EngineRoot $EngineRoot -ListingFieldsPath $ListingPath -UpdateListingFields
-    return Invoke-FabProjectFilePublication -UpdateListingFields
+        -PluginPath $PluginRoot -EngineRoot $EngineRoot -ListingFieldsPath $ListingPath `
+        -TestProjectPath $TestProjectPath -UpdateListingFields
+    return Invoke-FabProjectFilePublication -TestProjectPath $TestProjectPath -UpdateListingFields
 }
 
 function Invoke-FabSubmissionPreparationCommand {
@@ -206,7 +208,8 @@ function Invoke-FabSubmissionPreparationCommand {
         $publishingProperty = $configuration.PSObject.Properties['projectFilePublishing']
         if ($null -ne $publishingProperty) {
             [void](Invoke-FabPreparationProjectFilePublication -PluginRoot $root `
-                    -EngineRoot $EngineRoot -ListingPath $listingPath -UpdateListingFields)
+                    -EngineRoot $EngineRoot -ListingPath $listingPath `
+                    -TestProjectPath $TestProjectPath -UpdateListingFields)
 
             $listing = Import-FabProductListing -PluginRoot $root `
                 -Configuration $configuration -ListingPath $listingPath

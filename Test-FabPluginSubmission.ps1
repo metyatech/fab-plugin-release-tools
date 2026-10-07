@@ -237,10 +237,21 @@ function ConvertTo-TechnicalInformationText {
     $lines.Add("Prerequisites: $prerequisitesText")
     $lines.Add("Documentation: $($technical.documentationUrl)")
     $distribution = if ($Configuration.schemaVersion -eq 3) { [string]$Configuration.testProject.distribution } else { $null }
-    $example = switch ($distribution) {
-        'fab-additional-file' { "Included as Fab Additional File `"$ArchiveName`"" }
-        'external-url' { [string]$technical.exampleProjectUrl }
-        default { 'Not applicable' }
+    if ($null -eq $distribution) {
+        $example = if ([string]::IsNullOrWhiteSpace([string]$technical.exampleProjectUrl)) {
+            'Not applicable'
+        }
+        else {
+            [string]$technical.exampleProjectUrl
+        }
+    }
+    else {
+        $example = switch ($distribution) {
+            'internal-validation' { 'Not applicable' }
+            'fab-additional-file' { "Included as Fab Additional File `"$ArchiveName`"" }
+            'external-url' { [string]$technical.exampleProjectUrl }
+            default { 'Not applicable' }
+        }
     }
     $lines.Add("Example Project: $example — $($technical.exampleProjectNotes)")
     $lines.Add("Additional Notes: $($technical.additionalNotes)")

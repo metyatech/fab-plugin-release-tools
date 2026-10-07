@@ -8,6 +8,20 @@ Describe 'Fab product release orchestration' {
         $scriptPath = Join-Path $PSScriptRoot '..\Invoke-FabProductRelease.ps1'
         . $scriptPath -PluginPath $PSScriptRoot
         $script:OriginalArchiveGit = (Get-Command Invoke-FabTestProjectGit).ScriptBlock
+        $submissionScriptPath = Join-Path $PSScriptRoot '..\Test-FabPluginSubmission.ps1'
+        $submissionTokens = $null
+        $submissionParseErrors = $null
+        $submissionAst = [System.Management.Automation.Language.Parser]::ParseFile(
+            $submissionScriptPath, [ref]$submissionTokens, [ref]$submissionParseErrors)
+        $technicalInformationFunction = $submissionAst.Find({
+                param($node)
+                $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -ceq 'ConvertTo-TechnicalInformationText'
+            }, $true)
+        if ($null -eq $technicalInformationFunction) {
+            throw 'ConvertTo-TechnicalInformationText was not found in Test-FabPluginSubmission.ps1.'
+        }
+        . ([scriptblock]::Create($technicalInformationFunction.Extent.Text))
 
         if ($null -eq ('FabProductTestHttpMessageHandler' -as [type])) {
             Add-Type -TypeDefinition @'
@@ -723,6 +737,54 @@ public sealed class FabProductTestHttpMessageHandler : HttpMessageHandler
             }) | Should -HaveCount 1
     }
 
+    It 'renders schemaVersion 1 legacy example project URLs consistently in plain and rich text' {
+        $root = Join-Path $TestDrive 'LegacyExampleProjectV1'
+        Initialize-ProductFixture -Root $root -EngineVersions @('5.8') | Out-Null
+        $metadata = Get-Content -Raw -LiteralPath (Join-Path $root 'FabSubmissionMetadata.json') | ConvertFrom-Json
+        $metadata.technicalInformation.exampleProjectUrl = 'https://example.invalid/legacy-v1.zip'
+        $configuration = [pscustomobject]@{ schemaVersion = 1 }
+
+        $plain = ConvertTo-TechnicalInformationText -Metadata $metadata -Configuration $configuration
+        $rich = ConvertTo-FabAdditionalInformationRichText -Metadata $metadata `
+            -Configuration $configuration -ArchiveName $null
+        $rich = $rich | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+        $plainLine = [regex]::Match($plain, '(?m)^Example Project:.*$').Value
+        $richRuns = @($rich.blocks[-1].runs)
+        $richText = [string]::Join('', @($richRuns | ForEach-Object { [string]$_.text }))
+        $richLine = [regex]::Match($richText, '(?m)^Example Project:.*$').Value
+
+        $plainLine | Should -BeExactly 'Example Project: https://example.invalid/legacy-v1.zip — No example project is required for this fixture.'
+        $richLine | Should -BeExactly $plainLine
+        @($richRuns | Where-Object {
+                $marks = $_.PSObject.Properties['marks']
+                $null -ne $marks -and @($marks.Value) -contains 'link'
+            }) | Should -HaveCount 1
+    }
+
+    It 'renders schemaVersion 2 legacy example project URLs consistently in plain and rich text' {
+        $root = Join-Path $TestDrive 'LegacyExampleProjectV2'
+        Initialize-ProductFixture -Root $root -EngineVersions @('5.8') | Out-Null
+        $metadata = Get-Content -Raw -LiteralPath (Join-Path $root 'FabSubmissionMetadata.json') | ConvertFrom-Json
+        $metadata.technicalInformation.exampleProjectUrl = 'https://example.invalid/legacy-v2.zip'
+        $configuration = [pscustomobject]@{ schemaVersion = 2 }
+
+        $plain = ConvertTo-TechnicalInformationText -Metadata $metadata -Configuration $configuration
+        $rich = ConvertTo-FabAdditionalInformationRichText -Metadata $metadata `
+            -Configuration $configuration -ArchiveName $null
+        $rich = $rich | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+        $plainLine = [regex]::Match($plain, '(?m)^Example Project:.*$').Value
+        $richRuns = @($rich.blocks[-1].runs)
+        $richText = [string]::Join('', @($richRuns | ForEach-Object { [string]$_.text }))
+        $richLine = [regex]::Match($richText, '(?m)^Example Project:.*$').Value
+
+        $plainLine | Should -BeExactly 'Example Project: https://example.invalid/legacy-v2.zip — No example project is required for this fixture.'
+        $richLine | Should -BeExactly $plainLine
+        @($richRuns | Where-Object {
+                $marks = $_.PSObject.Properties['marks']
+                $null -ne $marks -and @($marks.Value) -contains 'link'
+            }) | Should -HaveCount 1
+    }
+
     It 'requires TestProjectPath before starting a schemaVersion 3 additional-file release' {
         $root = Join-Path $TestDrive 'MissingTestProjectPath'
         $outputRoot = Join-Path $TestDrive 'MissingTestProjectPathArtifacts'
@@ -773,6 +835,35 @@ public sealed class FabProductTestHttpMessageHandler : HttpMessageHandler
         finally { $archive.Dispose() }
     }
 
+    It 'fails closed when HEAD changes after archive source capture and never reads symbolic HEAD paths' {
+        $sourceRoot = Initialize-ArchiveTestProject -Root (Join-Path $TestDrive 'MutatingArchiveSource')
+        $script:archiveHeadMutated = $false
+        Mock Invoke-FabTestProjectGit -MockWith {
+            param($Root, $Arguments, $Binary)
+            if ($Arguments[0] -eq 'fetch') { return '' }
+            $result = & $script:OriginalArchiveGit -Root $Root -Arguments $Arguments -Binary:$Binary
+            if (-not $script:archiveHeadMutated -and $Arguments[0] -eq 'show') {
+                $script:archiveHeadMutated = $true
+                [System.IO.File]::WriteAllText((Join-Path $Root 'README.md'), 'changed during archive generation' + "`n")
+                [void](Invoke-ArchiveTestGit -Root $Root -Arguments @('add', 'README.md'))
+                [void](Invoke-ArchiveTestGit -Root $Root -Arguments @('commit', '-m', 'concurrent HEAD change'))
+                [void](Invoke-ArchiveTestGit -Root $Root -Arguments @('update-ref', 'refs/remotes/origin/main', 'HEAD'))
+            }
+            return $result
+        }
+        $configuration = [pscustomobject]@{
+            pluginName = 'FindInMaterials'
+            engineVersions = @('5.8')
+            testProject = [pscustomobject]@{ repository = 'metyatech/FindInMaterialsDemo'; distribution = 'fab-additional-file' }
+        }
+        { Write-FabTestProjectArchive -TestProjectPath $sourceRoot -Configuration $configuration `
+                -BundleRoot (Join-Path $TestDrive 'MutatingArchiveOutput') } |
+            Should -Throw '*source state changed during archive generation*'
+        $archiveSource = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot '..\Invoke-FabProductRelease.ps1')
+        $archiveFunction = [regex]::Match($archiveSource, '(?s)function Write-FabTestProjectArchive \{.*?(?=\nfunction )').Value
+        $archiveFunction | Should -Not -Match 'show\s+.*HEAD:'
+    }
+
     It 'rejects dirty test-project repositories before fetching or archiving' {
         $sourceRoot = Initialize-ArchiveTestProject -Root (Join-Path $TestDrive 'DirtyArchiveSource')
         [System.IO.File]::WriteAllText((Join-Path $sourceRoot 'untracked.txt'), 'dirty')
@@ -814,13 +905,14 @@ public sealed class FabProductTestHttpMessageHandler : HttpMessageHandler
         $badEngine = Initialize-ArchiveTestProject -Root (Join-Path $TestDrive 'BadEngineArchiveSource') -EngineAssociation '5.9'
         { Write-FabTestProjectArchive -TestProjectPath $badEngine -Configuration $configuration `
                 -BundleRoot (Join-Path $TestDrive 'BadEngineArchiveOutput') } | Should -Throw '*EngineAssociation*'
-        Assert-MockCalled Invoke-FabTestProjectGit -ParameterFilter { $Arguments[0] -eq 'fetch' } -Times 0
+        Assert-MockCalled Invoke-FabTestProjectGit -ParameterFilter { $Arguments[0] -eq 'fetch' } -Times 1
 
         $generated = Initialize-ArchiveTestProject -Root (Join-Path $TestDrive 'GeneratedArchiveSource')
         [System.IO.Directory]::CreateDirectory((Join-Path $generated 'Intermediate')) | Out-Null
         [System.IO.File]::WriteAllText((Join-Path $generated 'Intermediate\Generated.txt'), 'generated')
         [void](Invoke-ArchiveTestGit -Root $generated -Arguments @('add', '--all'))
         [void](Invoke-ArchiveTestGit -Root $generated -Arguments @('commit', '-m', 'tracked generated output'))
+        [void](Invoke-ArchiveTestGit -Root $generated -Arguments @('update-ref', 'refs/remotes/origin/main', 'HEAD'))
         { Write-FabTestProjectArchive -TestProjectPath $generated -Configuration $configuration `
                 -BundleRoot (Join-Path $TestDrive 'GeneratedArchiveOutput') } | Should -Throw '*Forbidden tracked file*'
     }
@@ -862,6 +954,7 @@ public sealed class FabProductTestHttpMessageHandler : HttpMessageHandler
         [System.IO.File]::WriteAllText((Join-Path $pluginCopy 'Plugins\FindInMaterials\FindInMaterials.uplugin'), '{}')
         [void](Invoke-ArchiveTestGit -Root $pluginCopy -Arguments @('add', '--all'))
         [void](Invoke-ArchiveTestGit -Root $pluginCopy -Arguments @('commit', '-m', 'tracked plugin copy'))
+        [void](Invoke-ArchiveTestGit -Root $pluginCopy -Arguments @('update-ref', 'refs/remotes/origin/main', 'HEAD'))
         { Write-FabTestProjectArchive -TestProjectPath $pluginCopy -Configuration $configuration `
                 -BundleRoot (Join-Path $TestDrive 'PluginCopyArchiveOutput') } | Should -Throw '*Forbidden tracked file*'
 
@@ -871,6 +964,7 @@ public sealed class FabProductTestHttpMessageHandler : HttpMessageHandler
         $blob = (Invoke-ArchiveTestGit -Root $symlink -Arguments @('hash-object', '-w', 'Content/TrackedLink.txt')).Trim()
         [void](Invoke-ArchiveTestGit -Root $symlink -Arguments @('update-index', '--add', '--cacheinfo', '120000', $blob, 'Content/TrackedLink.txt'))
         [void](Invoke-ArchiveTestGit -Root $symlink -Arguments @('commit', '-m', 'tracked symlink'))
+        [void](Invoke-ArchiveTestGit -Root $symlink -Arguments @('update-ref', 'refs/remotes/origin/main', 'HEAD'))
         { Write-FabTestProjectArchive -TestProjectPath $symlink -Configuration $configuration `
                 -BundleRoot (Join-Path $TestDrive 'SymlinkArchiveOutput') } | Should -Throw '*Tracked symlinks are forbidden*'
     }

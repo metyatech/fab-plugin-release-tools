@@ -2047,31 +2047,47 @@ function Write-FabTestProjectArchive {
     if ($origin -notmatch 'github\.com[:/]([^/]+/[^/]+?)(?:\.git)?$' -or $Matches[1] -cne [string]$Configuration.testProject.repository) {
         throw "Test project origin '$origin' does not match configured repository '$($Configuration.testProject.repository)'."
     }
-    $head = ([string](Invoke-FabTestProjectGit -Root $root -Arguments @('rev-parse', 'HEAD'))).Trim()
-    $tracked = @(([string](Invoke-FabTestProjectGit -Root $root -Arguments @('ls-files', '-z'))) -split "`0" | Where-Object { $_ })
-    $uprojects = @($tracked | Where-Object { $_ -notmatch '[\\/]' -and $_.EndsWith('.uproject', [System.StringComparison]::OrdinalIgnoreCase) })
+    [void](Invoke-FabTestProjectGit -Root $root -Arguments @('fetch', '--quiet', 'origin'))
+    if (-not [string]::IsNullOrWhiteSpace([string](Invoke-FabTestProjectGit -Root $root -Arguments @('status', '--porcelain', '--untracked-files=all')))) {
+        throw 'Test project worktree must be clean, including untracked files.'
+    }
+    $sourceCommit = ([string](Invoke-FabTestProjectGit -Root $root -Arguments @('rev-parse', 'HEAD'))).Trim().ToLowerInvariant()
+    if ($sourceCommit -notmatch '^[0-9a-f]{40}$') { throw 'Test project HEAD did not resolve to an exact 40-character Git commit SHA.' }
+    $upstream = ([string](Invoke-FabTestProjectGit -Root $root -Arguments @('rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'))).Trim()
+    $upstreamCommit = ([string](Invoke-FabTestProjectGit -Root $root -Arguments @('rev-parse', '--verify', "$upstream^{commit}"))).Trim().ToLowerInvariant()
+    if ($upstreamCommit -cne $sourceCommit) { throw 'Test project HEAD must be equal to its upstream (ahead/behind 0/0).' }
+    $counts = @(([string](Invoke-FabTestProjectGit -Root $root -Arguments @('rev-list', '--left-right', '--count', "$sourceCommit...$upstream"))).Trim() -split '\s+')
+    if ($counts.Count -ne 2 -or $counts[0] -ne '0' -or $counts[1] -ne '0') { throw 'Test project HEAD must be equal to its upstream (ahead/behind 0/0).' }
+    $treeBytes = [byte[]](Invoke-FabTestProjectGit -Root $root `
+        -Arguments @('ls-tree', '-r', '-z', '--full-tree', $sourceCommit) -Binary)
+    $treeText = [System.Text.UTF8Encoding]::new($false, $true).GetString($treeBytes)
+    $treeRecords = $treeText.Split([char]0, [System.StringSplitOptions]::RemoveEmptyEntries)
+    $trackedEntries = [System.Collections.Generic.List[object]]::new()
+    foreach ($record in $treeRecords) {
+        $separator = $record.IndexOf("`t")
+        if ($separator -lt 0) { throw 'Captured Git tree contains a malformed entry.' }
+        $metadata = $record.Substring(0, $separator).Split(' ')
+        if ($metadata.Count -ne 3 -or $metadata[1] -cne 'blob') { throw "Unsupported captured Git tree entry: $record" }
+        $trackedEntries.Add([pscustomobject]@{ Mode = $metadata[0]; Path = $record.Substring($separator + 1) })
+    }
+    foreach ($entry in $trackedEntries) {
+        if ($entry.Mode -ceq '120000') { throw "Tracked symlinks are forbidden in test project: $($entry.Path)" }
+        if ($entry.Mode -cnotin @('100644', '100755')) { throw "Unsupported tracked Git mode '$($entry.Mode)' in test project: $($entry.Path)" }
+        if ($entry.Path -match '(?i)(?:^|/)(?:Binaries|DerivedDataCache|Intermediate|Saved|\.vs)(?:/|$)' -or
+            $entry.Path -match "(?i)^Plugins/(?:FindInMaterials|$([regex]::Escape([string]$Configuration.pluginName)))(?:/|$)") {
+            throw "Forbidden tracked file in test project: $($entry.Path)"
+        }
+    }
+    $uprojects = @($trackedEntries | Where-Object { $_.Path -notmatch '/' -and $_.Path.EndsWith('.uproject', [System.StringComparison]::OrdinalIgnoreCase) })
     if ($uprojects.Count -ne 1) { throw 'Test project root must contain exactly one tracked .uproject file.' }
-    $descriptorPath = Join-Path $root $uprojects[0]
-    $project = [System.IO.File]::ReadAllText($descriptorPath) | ConvertFrom-Json -Depth 20
+    $uprojectBytes = [byte[]](Invoke-FabTestProjectGit -Root $root -Arguments @('show', "$sourceCommit`:$($uprojects[0].Path)") -Binary)
+    $uprojectText = [System.Text.UTF8Encoding]::new($false, $true).GetString($uprojectBytes).TrimStart([char]0xFEFF)
+    $project = $uprojectText | ConvertFrom-Json -Depth 20
     $engine = [string]$project.EngineAssociation
     if ($engine -notmatch '^5\.[0-9]+$' -or @($Configuration.engineVersions | ForEach-Object { [string]$_ }) -cnotcontains $engine) {
         throw "Test project's EngineAssociation '$engine' must be a supported 5.x plugin engine version."
     }
-    $staged = ([string](Invoke-FabTestProjectGit -Root $root -Arguments @('ls-files', '-s', '-z'))).Split([char]0, [System.StringSplitOptions]::RemoveEmptyEntries)
-    foreach ($record in $staged) {
-        if ($record -match '^120000\s') { throw "Tracked symlinks are forbidden in test project: $($record -split "`t")[-1]" }
-    }
-    foreach ($path in $tracked) {
-        if ($path -match '(?i)(?:^|/)(?:Binaries|DerivedDataCache|Intermediate|Saved|\.vs)(?:/|$)' -or
-            $path -match "(?i)^Plugins/(?:FindInMaterials|$([regex]::Escape([string]$Configuration.pluginName)))(?:/|$)") {
-            throw "Forbidden tracked file in test project: $path"
-        }
-    }
-    [void](Invoke-FabTestProjectGit -Root $root -Arguments @('fetch', '--quiet', 'origin'))
-    $upstream = [string](Invoke-FabTestProjectGit -Root $root -Arguments @('rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'))
-    $counts = @(([string](Invoke-FabTestProjectGit -Root $root -Arguments @('rev-list', '--left-right', '--count', "HEAD...$($upstream.Trim())"))).Trim() -split '\s+')
-    if ($counts.Count -ne 2 -or $counts[0] -ne '0' -or $counts[1] -ne '0') { throw 'Test project HEAD must be equal to its upstream (ahead/behind 0/0).' }
-    $projectName = [System.IO.Path]::GetFileNameWithoutExtension($uprojects[0])
+    $projectName = [System.IO.Path]::GetFileNameWithoutExtension([string]$uprojects[0].Path)
     $fileName = "${projectName}_UE${engine}.zip"
     $archiveDirectory = Join-Path $BundleRoot 'additional-files'
     [System.IO.Directory]::CreateDirectory($archiveDirectory) | Out-Null
@@ -2081,8 +2097,10 @@ function Write-FabTestProjectArchive {
     try {
         $archive = [System.IO.Compression.ZipArchive]::new($stream, [System.IO.Compression.ZipArchiveMode]::Create, $true)
         try {
-            foreach ($path in @($tracked | Sort-Object -CaseSensitive)) {
-                $bytes = [byte[]](Invoke-FabTestProjectGit -Root $root -Arguments @('show', "HEAD:$($path.Replace('\', '/'))") -Binary)
+            $orderedPaths = [string[]]@($trackedEntries | ForEach-Object { [string]$_.Path })
+            [Array]::Sort($orderedPaths, [System.StringComparer]::Ordinal)
+            foreach ($path in $orderedPaths) {
+                $bytes = [byte[]](Invoke-FabTestProjectGit -Root $root -Arguments @('show', "$sourceCommit`:$path") -Binary)
                 $entry = $archive.CreateEntry("$projectName/$($path.Replace('\', '/'))", [System.IO.Compression.CompressionLevel]::Optimal)
                 $entry.LastWriteTime = [DateTimeOffset]::new(2000, 1, 1, 0, 0, 0, [TimeSpan]::Zero)
                 $entryStream = $entry.Open()
@@ -2097,10 +2115,11 @@ function Write-FabTestProjectArchive {
     $readArchive = [System.IO.Compression.ZipFile]::OpenRead($archivePath)
     try {
         $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
-        $expected = @{}
-        foreach ($path in $tracked) {
-            $bytes = [byte[]](Invoke-FabTestProjectGit -Root $root -Arguments @('show', "HEAD:$($path.Replace('\', '/'))") -Binary)
-            $expected["$projectName/$($path.Replace('\', '/'))"] = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+        $expected = [System.Collections.Generic.Dictionary[string, string]]::new([System.StringComparer]::Ordinal)
+        foreach ($path in $orderedPaths) {
+            $bytes = [byte[]](Invoke-FabTestProjectGit -Root $root -Arguments @('show', "$sourceCommit`:$path") -Binary)
+            $expected.Add("$projectName/$($path.Replace('\', '/'))",
+                [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant())
         }
         foreach ($entry in $readArchive.Entries) {
             $name = $entry.FullName
@@ -2109,16 +2128,21 @@ function Write-FabTestProjectArchive {
             if (-not $expected.ContainsKey($name)) { throw "Unexpected ZIP entry: $name" }
             if ($expected.ContainsKey($name)) {
                 $archiveStream = $entry.Open(); try { $sha = [Security.Cryptography.SHA256]::HashData($archiveStream) } finally { $archiveStream.Dispose() }
-                if ([Convert]::ToHexString($sha).ToLowerInvariant() -cne $expected[$name]) { throw "ZIP entry content does not match Git HEAD: $name" }
-                $expected.Remove($name)
+                if ([Convert]::ToHexString($sha).ToLowerInvariant() -cne $expected[$name]) { throw "ZIP entry content does not match captured Git commit: $name" }
+                [void]$expected.Remove($name)
             }
         }
         if ($expected.Count -ne 0) { throw "ZIP is missing tracked files: $($expected.Keys -join ', ')" }
     }
     finally { $readArchive.Dispose() }
+    $finalHead = ([string](Invoke-FabTestProjectGit -Root $root -Arguments @('rev-parse', 'HEAD'))).Trim().ToLowerInvariant()
+    $finalStatus = [string](Invoke-FabTestProjectGit -Root $root -Arguments @('status', '--porcelain', '--untracked-files=all'))
+    if ($finalHead -cne $sourceCommit -or -not [string]::IsNullOrWhiteSpace($finalStatus)) {
+        throw 'Test project source state changed during archive generation.'
+    }
     $hash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
     return [pscustomobject]@{
-        Manifest = [ordered]@{ role = 'example-project'; fileName = $fileName; bundleRelativePath = "additional-files/$fileName"; engineVersion = $engine; sizeBytes = $length; sha256 = $hash; sourceRepository = [string]$Configuration.testProject.repository; sourceCommit = $head }
+        Manifest = [ordered]@{ role = 'example-project'; fileName = $fileName; bundleRelativePath = "additional-files/$fileName"; engineVersion = $engine; sizeBytes = $length; sha256 = $hash; sourceRepository = [string]$Configuration.testProject.repository; sourceCommit = $sourceCommit }
         Path = $archivePath
         FileName = $fileName
     }

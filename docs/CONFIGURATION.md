@@ -100,7 +100,10 @@ HTTPS URL. Fab Additional File requires a null URL, non-blank notes, and
 match the configured GitHub identity, and be synchronized with upstream; its
 tracked files are then archived and verified deterministically. SchemaVersion
 1 and 2 remain supported with their existing behavior. SchemaVersion 2 and 3
-repository verification uses the authenticated GitHub CLI.
+repository verification uses the authenticated GitHub CLI. `TestProjectPath`
+is optional on ordinary release and project-file publication commands; the
+guarded preparation path forwards it when regenerating missing project-file
+links.
 
 `forbiddenPackagePatterns` is additive. The built-in policy always rejects Fab-
 unsupported package formats such as executables, installers, and non-ZIP

@@ -176,7 +176,8 @@ listing title. `public_release_sha256` is an optional SHA-256 cross-check for a
 single-engine legacy `project_file_link`.
 
 Optional parameters are `-EngineRoot`, `-ListingFieldsPath`,
-`-OutputDirectory`, `-KeepWorkingDirectory`, and `-PublishProjectFiles`.
+`-OutputDirectory`, `-KeepWorkingDirectory`, `-PublishProjectFiles`, and
+`-TestProjectPath`.
 `-OutputDirectory` is the artifact root; the default is this repository's
 `artifacts` directory. Each run stages under
 `<artifactRoot>/<pluginName>/.sessions/<guid>/` on the same volume as the final
@@ -196,7 +197,17 @@ also pass `-TestProjectPath <clean-project-repository>`. The release validates
 the repository identity and exact pushed HEAD, then adds a deterministic
 `additional-files/<ProjectName>_UE<EngineAssociation>.zip` and its provenance
 to `FabPortalSubmission.json`. `Invoke-FabSubmissionPreparation.ps1` accepts
-the same `-TestProjectPath` parameter and forwards it to product release.
+the same `-TestProjectPath` parameter and forwards it to product release. The
+guarded path that regenerates missing project-file links also forwards this
+parameter through `Publish-FabProjectFiles.ps1` to product release. The
+publisher accepts optional `-TestProjectPath` alongside `-EngineRoot`,
+`-ListingFieldsPath`, and `-OutputDirectory`:
+
+```powershell
+pwsh .\Publish-FabProjectFiles.ps1 -PluginPath <path> `
+  -TestProjectPath <clean-demo-project-repository> -UpdateListingFields
+```
+
 Upload the exact generated filename to Fab Additional Files manually; portal
 automation does not upload it. Smoke-test the Quick Start in Unreal Editor
 before submitting for review.
