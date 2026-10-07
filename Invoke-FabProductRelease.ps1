@@ -19,6 +19,8 @@ param(
 
     [string]$OutputDirectory,
 
+    [string]$TestProjectPath,
+
     [switch]$KeepWorkingDirectory,
 
     [switch]$PublishProjectFiles
@@ -242,7 +244,11 @@ function Assert-FabProductRichText {
 function ConvertTo-FabAdditionalInformationRichText {
     param(
         [Parameter(Mandatory)]
-        [object]$Metadata
+        [object]$Metadata,
+
+        [object]$Configuration,
+
+        [string]$ArchiveName
     )
 
     $technical = $Metadata.technicalInformation
@@ -256,7 +262,17 @@ function ConvertTo-FabAdditionalInformationRichText {
     $networkReplicated = if ($technical.networkReplicated) { 'Yes' } else { 'No' }
     $dependencies = if (@($technical.dependencies).Count -eq 0) { 'None' } else { [string]::Join(', ', @($technical.dependencies)) }
     $prerequisites = if (@($technical.prerequisites).Count -eq 0) { 'None' } else { [string]::Join(', ', @($technical.prerequisites)) }
-    $example = if ($null -eq $technical.exampleProjectUrl) { 'Not applicable' } else { [string]$technical.exampleProjectUrl }
+    $distribution = if ($Configuration.schemaVersion -eq 3) { [string]$Configuration.testProject.distribution } else { $null }
+    $example = if ($Configuration.schemaVersion -ne 3) {
+        if ($null -eq $technical.exampleProjectUrl) { 'Not applicable' } else { [string]$technical.exampleProjectUrl }
+    }
+    else {
+        switch ($distribution) {
+            'fab-additional-file' { "Included as Fab Additional File `"$ArchiveName`"" }
+            'external-url' { [string]$technical.exampleProjectUrl }
+            default { 'Not applicable' }
+        }
+    }
     $detailValues = @(
         "Number of Blueprints: $($technical.numberOfBlueprints)",
         "Number of C++ Classes: $($technical.numberOfCppClasses)",
@@ -272,7 +288,7 @@ function ConvertTo-FabAdditionalInformationRichText {
     )
     $documentationUrl = [string]$technical.documentationUrl
     $detailPrefix = [string]::Join("`n", @($detailValues[0..7])) + "`nDocumentation: "
-    $detailSuffix = "`n" + [string]::Join("`n", @($detailValues[9..($detailValues.Length - 1)]))
+    $detailSuffix = "`n$($detailValues[9])`n" + [string]::Join("`n", @($detailValues[10..($detailValues.Length - 1)]))
     $detailRuns = [System.Collections.Generic.List[object]]::new()
     $detailRuns.Add((& $run $detailPrefix))
     $detailRuns.Add([ordered]@{ text = $documentationUrl; marks = @('link'); href = $documentationUrl })
@@ -758,7 +774,9 @@ function Invoke-FabProductSubmissionValidation {
         [string]$PackageZipPath,
 
         [Parameter(Mandatory)]
-        [string]$OutputPath
+        [string]$OutputPath,
+
+        [string]$TestProjectArchiveName
     )
 
     $pwshPath = (Get-Command pwsh -ErrorAction Stop).Source
@@ -775,6 +793,10 @@ function Invoke-FabProductSubmissionValidation {
             '-PackageZipPath', $PackageZipPath,
             '-OutputDirectory', $OutputPath)) {
         [void]$startInfo.ArgumentList.Add($argument)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($TestProjectArchiveName)) {
+        [void]$startInfo.ArgumentList.Add('-TestProjectArchiveName')
+        [void]$startInfo.ArgumentList.Add($TestProjectArchiveName)
     }
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
@@ -1866,7 +1888,9 @@ function Write-FabProductChecklist {
         [Parameter(Mandatory)]
         [string]$MediaApprovalStatus,
 
-        [bool]$TpsValidationEnabled
+        [bool]$TpsValidationEnabled,
+
+        [object]$AdditionalFile
     )
 
     $lines = [System.Collections.Generic.List[string]]::new()
@@ -1877,6 +1901,12 @@ function Write-FabProductChecklist {
     $lines.Add('PASS - listing schema validation')
     $lines.Add('PASS - listing/config consistency')
     $lines.Add('PASS - technical information consistency')
+    if ($null -ne $AdditionalFile) {
+        $lines.Add('PASS - deterministic example project archive generated')
+        $lines.Add("PASS - source repository/commit verified: $($AdditionalFile.sourceRepository)@$($AdditionalFile.sourceCommit)")
+        $lines.Add("MANUAL REQUIRED - upload exact file '$($AdditionalFile.fileName)' to Fab Additional Files")
+        $lines.Add('MANUAL REQUIRED - smoke-test the Quick Start in Unreal Engine before Submit for review')
+    }
     $lines.Add("PASS - media integrity ($($Media.Count) ordered file(s))")
     switch ($MediaApprovalStatus) {
         'approved' { $lines.Add('PASS - Human media approval') }
@@ -1971,6 +2001,129 @@ function Get-FabProductMediaApproval {
     }
 }
 
+function Invoke-FabTestProjectGit {
+    param([Parameter(Mandatory)][string]$Root, [Parameter(Mandatory)][string[]]$Arguments, [switch]$Binary)
+    $git = (Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    $info = [System.Diagnostics.ProcessStartInfo]::new()
+    $info.FileName = $git
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    [void]$info.ArgumentList.Add('-C'); [void]$info.ArgumentList.Add($Root)
+    foreach ($argument in $Arguments) { [void]$info.ArgumentList.Add($argument) }
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $info
+    try {
+        if (-not $process.Start()) { throw 'Unable to start Git.' }
+        $stderr = $process.StandardError.ReadToEndAsync()
+        if ($Binary) {
+            $memory = [System.IO.MemoryStream]::new()
+            $process.StandardOutput.BaseStream.CopyTo($memory)
+            $output = $memory.ToArray(); $memory.Dispose()
+        }
+        else { $output = $process.StandardOutput.ReadToEnd() }
+        $process.WaitForExit(); $stderr.Wait()
+        if ($process.ExitCode -ne 0) { throw "Git command failed: git $($Arguments -join ' '): $($stderr.Result.Trim())" }
+        return $output
+    }
+    finally { $process.Dispose() }
+}
+
+function Write-FabTestProjectArchive {
+    param(
+        [Parameter(Mandatory)][string]$TestProjectPath,
+        [Parameter(Mandatory)][object]$Configuration,
+        [Parameter(Mandatory)][string]$BundleRoot
+    )
+    $root = [System.IO.Path]::GetFullPath($TestProjectPath).TrimEnd('\', '/')
+    if (-not [System.IO.Directory]::Exists($root)) { throw "TestProjectPath is not a directory: $root" }
+    $gitRoot = [System.IO.Path]::GetFullPath(([string](Invoke-FabTestProjectGit -Root $root -Arguments @('rev-parse', '--show-toplevel'))).Trim()).TrimEnd('\', '/')
+    if (-not $gitRoot.Equals($root, [System.StringComparison]::OrdinalIgnoreCase)) { throw 'TestProjectPath must be a Git repository root.' }
+    if (-not [string]::IsNullOrWhiteSpace([string](Invoke-FabTestProjectGit -Root $root -Arguments @('status', '--porcelain', '--untracked-files=all')))) {
+        throw 'Test project worktree must be clean, including untracked files.'
+    }
+    $origin = ([string](Invoke-FabTestProjectGit -Root $root -Arguments @('remote', 'get-url', 'origin'))).Trim()
+    if ($origin -notmatch 'github\.com[:/]([^/]+/[^/]+?)(?:\.git)?$' -or $Matches[1] -cne [string]$Configuration.testProject.repository) {
+        throw "Test project origin '$origin' does not match configured repository '$($Configuration.testProject.repository)'."
+    }
+    $head = ([string](Invoke-FabTestProjectGit -Root $root -Arguments @('rev-parse', 'HEAD'))).Trim()
+    $tracked = @(([string](Invoke-FabTestProjectGit -Root $root -Arguments @('ls-files', '-z'))) -split "`0" | Where-Object { $_ })
+    $uprojects = @($tracked | Where-Object { $_ -notmatch '[\\/]' -and $_.EndsWith('.uproject', [System.StringComparison]::OrdinalIgnoreCase) })
+    if ($uprojects.Count -ne 1) { throw 'Test project root must contain exactly one tracked .uproject file.' }
+    $descriptorPath = Join-Path $root $uprojects[0]
+    $project = [System.IO.File]::ReadAllText($descriptorPath) | ConvertFrom-Json -Depth 20
+    $engine = [string]$project.EngineAssociation
+    if ($engine -notmatch '^5\.[0-9]+$' -or @($Configuration.engineVersions | ForEach-Object { [string]$_ }) -cnotcontains $engine) {
+        throw "Test project's EngineAssociation '$engine' must be a supported 5.x plugin engine version."
+    }
+    $staged = ([string](Invoke-FabTestProjectGit -Root $root -Arguments @('ls-files', '-s', '-z'))).Split([char]0, [System.StringSplitOptions]::RemoveEmptyEntries)
+    foreach ($record in $staged) {
+        if ($record -match '^120000\s') { throw "Tracked symlinks are forbidden in test project: $($record -split "`t")[-1]" }
+    }
+    foreach ($path in $tracked) {
+        if ($path -match '(?i)(?:^|/)(?:Binaries|DerivedDataCache|Intermediate|Saved|\.vs)(?:/|$)' -or
+            $path -match "(?i)^Plugins/(?:FindInMaterials|$([regex]::Escape([string]$Configuration.pluginName)))(?:/|$)") {
+            throw "Forbidden tracked file in test project: $path"
+        }
+    }
+    [void](Invoke-FabTestProjectGit -Root $root -Arguments @('fetch', '--quiet', 'origin'))
+    $upstream = [string](Invoke-FabTestProjectGit -Root $root -Arguments @('rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'))
+    $counts = @(([string](Invoke-FabTestProjectGit -Root $root -Arguments @('rev-list', '--left-right', '--count', "HEAD...$($upstream.Trim())"))).Trim() -split '\s+')
+    if ($counts.Count -ne 2 -or $counts[0] -ne '0' -or $counts[1] -ne '0') { throw 'Test project HEAD must be equal to its upstream (ahead/behind 0/0).' }
+    $projectName = [System.IO.Path]::GetFileNameWithoutExtension($uprojects[0])
+    $fileName = "${projectName}_UE${engine}.zip"
+    $archiveDirectory = Join-Path $BundleRoot 'additional-files'
+    [System.IO.Directory]::CreateDirectory($archiveDirectory) | Out-Null
+    $archivePath = Join-Path $archiveDirectory $fileName
+    Add-Type -AssemblyName System.IO.Compression
+    $stream = [System.IO.File]::Open($archivePath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+    try {
+        $archive = [System.IO.Compression.ZipArchive]::new($stream, [System.IO.Compression.ZipArchiveMode]::Create, $true)
+        try {
+            foreach ($path in @($tracked | Sort-Object -CaseSensitive)) {
+                $bytes = [byte[]](Invoke-FabTestProjectGit -Root $root -Arguments @('show', "HEAD:$($path.Replace('\', '/'))") -Binary)
+                $entry = $archive.CreateEntry("$projectName/$($path.Replace('\', '/'))", [System.IO.Compression.CompressionLevel]::Optimal)
+                $entry.LastWriteTime = [DateTimeOffset]::new(2000, 1, 1, 0, 0, 0, [TimeSpan]::Zero)
+                $entryStream = $entry.Open()
+                try { $entryStream.Write($bytes, 0, $bytes.Length) } finally { $entryStream.Dispose() }
+            }
+        }
+        finally { $archive.Dispose() }
+    }
+    finally { $stream.Dispose() }
+    $length = (Get-Item -LiteralPath $archivePath).Length
+    if ($length -gt 6000000000) { throw "Test project archive exceeds the 6,000,000,000-byte limit: $length" }
+    $readArchive = [System.IO.Compression.ZipFile]::OpenRead($archivePath)
+    try {
+        $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+        $expected = @{}
+        foreach ($path in $tracked) {
+            $bytes = [byte[]](Invoke-FabTestProjectGit -Root $root -Arguments @('show', "HEAD:$($path.Replace('\', '/'))") -Binary)
+            $expected["$projectName/$($path.Replace('\', '/'))"] = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+        }
+        foreach ($entry in $readArchive.Entries) {
+            $name = $entry.FullName
+            if ([System.IO.Path]::IsPathRooted($name) -or $name -match '(^|/)\.\.(?:/|$)' -or $name -match '^[A-Za-z]:') { throw "Unsafe ZIP entry path: $name" }
+            if (-not $seen.Add($name)) { throw "Duplicate ZIP entry path: $name" }
+            if (-not $expected.ContainsKey($name)) { throw "Unexpected ZIP entry: $name" }
+            if ($expected.ContainsKey($name)) {
+                $archiveStream = $entry.Open(); try { $sha = [Security.Cryptography.SHA256]::HashData($archiveStream) } finally { $archiveStream.Dispose() }
+                if ([Convert]::ToHexString($sha).ToLowerInvariant() -cne $expected[$name]) { throw "ZIP entry content does not match Git HEAD: $name" }
+                $expected.Remove($name)
+            }
+        }
+        if ($expected.Count -ne 0) { throw "ZIP is missing tracked files: $($expected.Keys -join ', ')" }
+    }
+    finally { $readArchive.Dispose() }
+    $hash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    return [pscustomobject]@{
+        Manifest = [ordered]@{ role = 'example-project'; fileName = $fileName; bundleRelativePath = "additional-files/$fileName"; engineVersion = $engine; sizeBytes = $length; sha256 = $hash; sourceRepository = [string]$Configuration.testProject.repository; sourceCommit = $head }
+        Path = $archivePath
+        FileName = $fileName
+    }
+}
+
 function Invoke-FabProductReleaseCore {
     [CmdletBinding()]
     param(
@@ -1985,7 +2138,9 @@ function Invoke-FabProductReleaseCore {
 
         [switch]$KeepWorkingDirectory,
 
-        [switch]$PublishProjectFiles
+        [switch]$PublishProjectFiles,
+
+        [string]$TestProjectPath
     )
 
     $resolvedPluginPath = [System.IO.Path]::GetFullPath($PluginPath).TrimEnd('\', '/')
@@ -2030,10 +2185,19 @@ function Invoke-FabProductReleaseCore {
     [System.IO.Directory]::CreateDirectory($releasesRoot) | Out-Null
     [System.IO.Directory]::CreateDirectory($validationRoot) | Out-Null
     [System.IO.Directory]::CreateDirectory($stagingRoot) | Out-Null
+    $additionalProject = $null
     $releaseResults = [System.Collections.Generic.List[object]]::new()
     $submissionOutputs = [System.Collections.Generic.List[string]]::new()
     $tpsValidationEnabled = [System.IO.File]::Exists((Join-Path $resolvedPluginPath 'FabTpsDeclarations.json'))
     try {
+        if ($configuration.schemaVersion -eq 3 -and [string]$configuration.testProject.distribution -ceq 'fab-additional-file') {
+            if ([string]::IsNullOrWhiteSpace($TestProjectPath)) { throw 'TestProjectPath is required for fab-additional-file distribution.' }
+            $additionalProject = Write-FabTestProjectArchive -TestProjectPath $TestProjectPath `
+                -Configuration $configuration -BundleRoot $stagingRoot
+        }
+        elseif (-not [string]::IsNullOrWhiteSpace($TestProjectPath)) {
+            throw 'TestProjectPath is only valid for fab-additional-file distribution.'
+        }
         $tpsValidationOutput = $null
         if ($tpsValidationEnabled) {
             $tpsValidationOutput = Join-Path $validationRoot 'tps'
@@ -2057,7 +2221,8 @@ function Invoke-FabProductReleaseCore {
             $validationOutput = Join-Path $validationRoot "UE$engineVersion"
             [System.IO.Directory]::CreateDirectory($validationOutput) | Out-Null
             [void](Invoke-FabProductSubmissionValidation -PluginRoot $resolvedPluginPath `
-                -PackageZipPath $release.ZipPath -OutputPath $validationOutput
+                -PackageZipPath $release.ZipPath -OutputPath $validationOutput `
+                -TestProjectArchiveName $(if ($null -ne $additionalProject) { $additionalProject.FileName } else { $null })
             )
             $technicalPath = Join-Path $validationOutput 'FabTechnicalInformation.txt'
             if (-not [System.IO.File]::Exists($technicalPath)) {
@@ -2090,7 +2255,9 @@ function Invoke-FabProductReleaseCore {
             throw 'FabSubmissionMetadata.json is required to derive Additional information rich text.'
         }
         $metadata = Read-FabProductJson -Path $metadataPath
-        $additionalInformationRichText = ConvertTo-FabAdditionalInformationRichText -Metadata $metadata
+        $additionalInformationRichText = ConvertTo-FabAdditionalInformationRichText -Metadata $metadata `
+            -Configuration $configuration `
+            -ArchiveName $(if ($null -ne $additionalProject) { $additionalProject.FileName } else { $null })
         if ($tpsValidationEnabled) {
             foreach ($name in @('FabTpsSubmission.txt', 'FabTpsSubmission.json')) {
                 [System.IO.File]::Copy(
@@ -2143,6 +2310,7 @@ function Invoke-FabProductReleaseCore {
             }
             generatedAtUtc           = [DateTimeOffset]::UtcNow.ToString('O')
         }
+        if ($null -ne $additionalProject) { $manifest.additionalFiles = @($additionalProject.Manifest) }
         if ($null -ne $listing.DescriptionRichText) {
             $manifest.descriptionRichText = $listing.DescriptionRichText
         }
@@ -2153,7 +2321,8 @@ function Invoke-FabProductReleaseCore {
             -EngineVersions $engineVersions -Media @($listing.Media) `
             -ProjectLinks $projectFileLinks -PortalReady $manifest.portalReady `
             -MediaApprovalStatus $mediaApproval.Status `
-            -TpsValidationEnabled:$tpsValidationEnabled
+            -TpsValidationEnabled:$tpsValidationEnabled `
+            -AdditionalFile $(if ($null -ne $additionalProject) { $additionalProject.Manifest } else { $null })
 
         $backupBundle = "$publicBundle.__previous_$([guid]::NewGuid().ToString('N'))"
         $hadPreviousBundle = [System.IO.Directory]::Exists($publicBundle)
@@ -2211,6 +2380,7 @@ if ($MyInvocation.InvocationName -ne '.') {
             PluginPath           = $PluginPath
             KeepWorkingDirectory = $KeepWorkingDirectory
             PublishProjectFiles  = $PublishProjectFiles
+            TestProjectPath      = $TestProjectPath
         }
         foreach ($name in @('EngineRoot', 'ListingFieldsPath', 'OutputDirectory')) {
             if ($PSBoundParameters.ContainsKey($name)) {

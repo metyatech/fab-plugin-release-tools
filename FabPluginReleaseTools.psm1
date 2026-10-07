@@ -495,10 +495,10 @@ function Import-FabPluginReleaseConfiguration {
     }
 
     if ($configuration.schemaVersion -isnot [long] -and $configuration.schemaVersion -isnot [int]) {
-        throw 'schemaVersion must be the integer 1 or 2.'
+        throw 'schemaVersion must be the integer 1, 2, or 3.'
     }
-    if ($configuration.schemaVersion -notin @(1, 2)) {
-        throw 'schemaVersion must be 1 or 2.'
+    if ($configuration.schemaVersion -notin @(1, 2, 3)) {
+        throw 'schemaVersion must be 1, 2, or 3.'
     }
     if ([string]$configuration.pluginName -cnotmatch '^[0-9A-Za-z][0-9A-Za-z_]*$') {
         throw 'pluginName must start with an ASCII letter or digit and contain only letters, digits, and underscores.'
@@ -716,7 +716,7 @@ function Get-FabGitHubCliPath {
     $command = Get-Command gh -CommandType Application -ErrorAction SilentlyContinue |
         Select-Object -First 1
     if ($null -eq $command) {
-        throw 'GitHub CLI (gh) is required to verify schemaVersion 2 test projects.'
+        throw 'GitHub CLI (gh) is required to verify schemaVersion 2 or 3 test projects.'
     }
     return $command.Source
 }
@@ -3072,7 +3072,7 @@ function Invoke-FabPluginReleaseCore {
             }
             $configuration = Import-FabPluginReleaseConfiguration `
                 -ConfigPath $resolvedConfigPath -EngineVersion $EngineVersion
-            if ($configuration.schemaVersion -eq 2) {
+            if ($configuration.schemaVersion -in @(2, 3)) {
                 Test-FabPluginTestProjectRepository `
                     -Repository ([string]$configuration.testProject.repository)
             }

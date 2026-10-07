@@ -1,4 +1,4 @@
-# Copyright (c) 2026 metyatech. All rights reserved.
+﻿# Copyright (c) 2026 metyatech. All rights reserved.
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -7,6 +7,7 @@ Describe 'Fab product release orchestration' {
     BeforeAll {
         $scriptPath = Join-Path $PSScriptRoot '..\Invoke-FabProductRelease.ps1'
         . $scriptPath -PluginPath $PSScriptRoot
+        $script:OriginalArchiveGit = (Get-Command Invoke-FabTestProjectGit).ScriptBlock
 
         if ($null -eq ('FabProductTestHttpMessageHandler' -as [type])) {
             Add-Type -TypeDefinition @'
@@ -223,6 +224,36 @@ public sealed class FabProductTestHttpMessageHandler : HttpMessageHandler
                 $arguments.ListingFieldsPath = $ListingFieldsPath
             }
             return Invoke-FabProductReleaseCore @arguments
+        }
+
+        function Invoke-ArchiveTestGit {
+            param([Parameter(Mandatory)][string]$Root, [Parameter(Mandatory)][string[]]$Arguments)
+            $result = git -C $Root @Arguments 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "Test Git command failed: $($Arguments -join ' '): $($result -join "`n")" }
+            return [string]::Join("`n", @($result))
+        }
+
+        function Initialize-ArchiveTestProject {
+            param(
+                [Parameter(Mandatory)][string]$Root,
+                [string]$EngineAssociation = '5.8'
+            )
+            [System.IO.Directory]::CreateDirectory($Root) | Out-Null
+            [void](Invoke-ArchiveTestGit -Root $Root -Arguments @('init', '--initial-branch=main'))
+            [void](Invoke-ArchiveTestGit -Root $Root -Arguments @('config', 'user.name', 'Fab Test'))
+            [void](Invoke-ArchiveTestGit -Root $Root -Arguments @('config', 'user.email', 'fab-test@example.invalid'))
+            [System.IO.File]::WriteAllText((Join-Path $Root 'Demo.uproject'),
+                (@{ FileVersion = 3; EngineAssociation = $EngineAssociation; Description = 'Fixture' } | ConvertTo-Json) + "`n")
+            [System.IO.File]::WriteAllText((Join-Path $Root 'README.md'), 'Quick Start' + "`n")
+            [System.IO.File]::WriteAllText((Join-Path $Root 'LICENSE'), 'MIT' + "`n")
+            [System.IO.Directory]::CreateDirectory((Join-Path $Root 'Content')) | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $Root 'Content\Known.txt'), 'known')
+            [void](Invoke-ArchiveTestGit -Root $Root -Arguments @('add', '--all'))
+            [void](Invoke-ArchiveTestGit -Root $Root -Arguments @('commit', '-m', 'fixture'))
+            [void](Invoke-ArchiveTestGit -Root $Root -Arguments @('remote', 'add', 'origin', 'https://github.com/metyatech/FindInMaterialsDemo.git'))
+            [void](Invoke-ArchiveTestGit -Root $Root -Arguments @('update-ref', 'refs/remotes/origin/main', 'HEAD'))
+            [void](Invoke-ArchiveTestGit -Root $Root -Arguments @('branch', '--set-upstream-to=origin/main', 'main'))
+            return $Root
         }
     }
 
@@ -660,6 +691,188 @@ public sealed class FabProductTestHttpMessageHandler : HttpMessageHandler
         $detailRuns[2].text | Should -Match '^\nExample Project:'
         $detailRuns[2].PSObject.Properties.Name | Should -Not -Contain 'marks'
         $detailRuns[2].PSObject.Properties.Name | Should -Not -Contain 'href'
+
+        $configuration = [pscustomobject]@{
+            schemaVersion = 3
+            testProject = [pscustomobject]@{ distribution = 'fab-additional-file' }
+        }
+        $richText = ConvertTo-FabAdditionalInformationRichText -Metadata $metadata `
+            -Configuration $configuration -ArchiveName 'FindInMaterialsDemo_UE5.8.zip'
+        $richText = $richText | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+        $richRuns = @($richText.blocks[-1].runs)
+        [string]::Join('', @($richRuns | ForEach-Object { [string]$_.text })) |
+            Should -Match 'Example Project: Included as Fab Additional File "FindInMaterialsDemo_UE5\.8\.zip" — No example project is required for this fixture\.'
+        @($richRuns | Where-Object {
+                $marks = $_.PSObject.Properties['marks']
+                $null -ne $marks -and @($marks.Value) -contains 'link'
+            }) | Should -HaveCount 1
+        $richRuns[1].text | Should -BeExactly $metadata.technicalInformation.documentationUrl
+
+        $legacyMetadata = $metadata | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+        $legacyMetadata.technicalInformation.exampleProjectUrl = 'https://example.invalid/demo.zip'
+        $legacyConfiguration = [pscustomobject]@{ schemaVersion = 2 }
+        $legacyRichText = ConvertTo-FabAdditionalInformationRichText -Metadata $legacyMetadata `
+            -Configuration $legacyConfiguration -ArchiveName $null
+        $legacyRichText = $legacyRichText | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+        $legacyRuns = @($legacyRichText.blocks[-1].runs)
+        [string]::Join('', @($legacyRuns | ForEach-Object { [string]$_.text })) |
+            Should -Match 'Example Project: https://example\.invalid/demo\.zip —'
+        @($legacyRuns | Where-Object {
+                $marks = $_.PSObject.Properties['marks']
+                $null -ne $marks -and @($marks.Value) -contains 'link'
+            }) | Should -HaveCount 1
+    }
+
+    It 'requires TestProjectPath before starting a schemaVersion 3 additional-file release' {
+        $root = Join-Path $TestDrive 'MissingTestProjectPath'
+        $outputRoot = Join-Path $TestDrive 'MissingTestProjectPathArtifacts'
+        Initialize-ProductFixture -Root $root -EngineVersions @('5.8') | Out-Null
+        $configPath = Join-Path $root 'FabPluginRelease.json'
+        $configuration = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json -AsHashtable
+        $configuration.schemaVersion = 3
+        $configuration.testProject = [ordered]@{
+            repository = 'metyatech/FindInMaterialsDemo'
+            distribution = 'fab-additional-file'
+        }
+        Write-ProductFixtureJson -Value $configuration -Path $configPath
+
+        { Invoke-ProductCoreForTest -PluginRoot $root -OutputRoot $outputRoot } |
+            Should -Throw '*TestProjectPath is required*'
+        @($script:ProductReleaseInvocations) | Should -HaveCount 0
+    }
+
+    It 'generates deterministic archives with all clean tracked files and exact provenance' {
+        $sourceRoot = Initialize-ArchiveTestProject -Root (Join-Path $TestDrive 'ArchiveSource')
+        Mock Invoke-FabTestProjectGit -MockWith {
+            param($Root, $Arguments, $Binary)
+            if ($Arguments[0] -eq 'fetch') { return '' }
+            & $script:OriginalArchiveGit -Root $Root -Arguments $Arguments -Binary:$Binary
+        }
+        $configuration = [pscustomobject]@{
+            pluginName = 'FindInMaterials'
+            engineVersions = @('5.8')
+            testProject = [pscustomobject]@{ repository = 'metyatech/FindInMaterialsDemo'; distribution = 'fab-additional-file' }
+        }
+        $first = Write-FabTestProjectArchive -TestProjectPath $sourceRoot -Configuration $configuration `
+            -BundleRoot (Join-Path $TestDrive 'ArchiveOutputOne')
+        $second = Write-FabTestProjectArchive -TestProjectPath $sourceRoot -Configuration $configuration `
+            -BundleRoot (Join-Path $TestDrive 'ArchiveOutputTwo')
+
+        $first.FileName | Should -BeExactly 'Demo_UE5.8.zip'
+        $first.Manifest.sourceRepository | Should -BeExactly 'metyatech/FindInMaterialsDemo'
+        $first.Manifest.sourceCommit | Should -BeExactly (Invoke-ArchiveTestGit -Root $sourceRoot -Arguments @('rev-parse', 'HEAD')).Trim()
+        $first.Manifest.engineVersion | Should -BeExactly '5.8'
+        $first.Manifest.sha256 | Should -BeExactly $second.Manifest.sha256
+        $archive = [System.IO.Compression.ZipFile]::OpenRead($first.Path)
+        try {
+            @($archive.Entries | ForEach-Object FullName) | Should -Contain 'Demo/Demo.uproject'
+            @($archive.Entries | ForEach-Object FullName) | Should -Contain 'Demo/Content/Known.txt'
+            @($archive.Entries | ForEach-Object FullName) | Should -Contain 'Demo/LICENSE'
+            @($archive.Entries | ForEach-Object FullName) | Should -Not -Contain 'Demo/.git/config'
+        }
+        finally { $archive.Dispose() }
+    }
+
+    It 'rejects dirty test-project repositories before fetching or archiving' {
+        $sourceRoot = Initialize-ArchiveTestProject -Root (Join-Path $TestDrive 'DirtyArchiveSource')
+        [System.IO.File]::WriteAllText((Join-Path $sourceRoot 'untracked.txt'), 'dirty')
+        Mock Invoke-FabTestProjectGit -MockWith {
+            param($Root, $Arguments, $Binary)
+            if ($Arguments[0] -eq 'fetch') { return '' }
+            & $script:OriginalArchiveGit -Root $Root -Arguments $Arguments -Binary:$Binary
+        }
+        $configuration = [pscustomobject]@{ pluginName = 'FindInMaterials'; engineVersions = @('5.8'); testProject = [pscustomobject]@{ repository = 'metyatech/FindInMaterialsDemo' } }
+
+        { Write-FabTestProjectArchive -TestProjectPath $sourceRoot -Configuration $configuration `
+                -BundleRoot (Join-Path $TestDrive 'DirtyArchiveOutput') } | Should -Throw '*worktree must be clean*'
+        Assert-MockCalled Invoke-FabTestProjectGit -ParameterFilter { $Arguments[0] -eq 'fetch' } -Times 0
+        (Join-Path $TestDrive 'DirtyArchiveOutput\additional-files') | Should -Not -Exist
+    }
+
+    It 'rejects a mismatched GitHub origin before fetching or archiving' {
+        $sourceRoot = Initialize-ArchiveTestProject -Root (Join-Path $TestDrive 'WrongOriginArchiveSource')
+        [void](Invoke-ArchiveTestGit -Root $sourceRoot -Arguments @('remote', 'set-url', 'origin', 'https://github.com/metyatech/OtherDemo.git'))
+        Mock Invoke-FabTestProjectGit -MockWith {
+            param($Root, $Arguments, $Binary)
+            if ($Arguments[0] -eq 'fetch') { return '' }
+            & $script:OriginalArchiveGit -Root $Root -Arguments $Arguments -Binary:$Binary
+        }
+        $configuration = [pscustomobject]@{ pluginName = 'FindInMaterials'; engineVersions = @('5.8'); testProject = [pscustomobject]@{ repository = 'metyatech/FindInMaterialsDemo' } }
+
+        { Write-FabTestProjectArchive -TestProjectPath $sourceRoot -Configuration $configuration `
+                -BundleRoot (Join-Path $TestDrive 'WrongOriginArchiveOutput') } | Should -Throw '*does not match configured repository*'
+        Assert-MockCalled Invoke-FabTestProjectGit -ParameterFilter { $Arguments[0] -eq 'fetch' } -Times 0
+    }
+
+    It 'rejects unsupported engine versions and tracked generated Unreal directories' {
+        Mock Invoke-FabTestProjectGit -MockWith {
+            param($Root, $Arguments, $Binary)
+            if ($Arguments[0] -eq 'fetch') { return '' }
+            & $script:OriginalArchiveGit -Root $Root -Arguments $Arguments -Binary:$Binary
+        }
+        $configuration = [pscustomobject]@{ pluginName = 'FindInMaterials'; engineVersions = @('5.8'); testProject = [pscustomobject]@{ repository = 'metyatech/FindInMaterialsDemo' } }
+        $badEngine = Initialize-ArchiveTestProject -Root (Join-Path $TestDrive 'BadEngineArchiveSource') -EngineAssociation '5.9'
+        { Write-FabTestProjectArchive -TestProjectPath $badEngine -Configuration $configuration `
+                -BundleRoot (Join-Path $TestDrive 'BadEngineArchiveOutput') } | Should -Throw '*EngineAssociation*'
+        Assert-MockCalled Invoke-FabTestProjectGit -ParameterFilter { $Arguments[0] -eq 'fetch' } -Times 0
+
+        $generated = Initialize-ArchiveTestProject -Root (Join-Path $TestDrive 'GeneratedArchiveSource')
+        [System.IO.Directory]::CreateDirectory((Join-Path $generated 'Intermediate')) | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $generated 'Intermediate\Generated.txt'), 'generated')
+        [void](Invoke-ArchiveTestGit -Root $generated -Arguments @('add', '--all'))
+        [void](Invoke-ArchiveTestGit -Root $generated -Arguments @('commit', '-m', 'tracked generated output'))
+        { Write-FabTestProjectArchive -TestProjectPath $generated -Configuration $configuration `
+                -BundleRoot (Join-Path $TestDrive 'GeneratedArchiveOutput') } | Should -Throw '*Forbidden tracked file*'
+    }
+
+    It 'rejects test project commits that are ahead of or behind upstream' {
+        Mock Invoke-FabTestProjectGit -MockWith {
+            param($Root, $Arguments, $Binary)
+            if ($Arguments[0] -eq 'fetch') { return '' }
+            & $script:OriginalArchiveGit -Root $Root -Arguments $Arguments -Binary:$Binary
+        }
+        $configuration = [pscustomobject]@{ pluginName = 'FindInMaterials'; engineVersions = @('5.8'); testProject = [pscustomobject]@{ repository = 'metyatech/FindInMaterialsDemo' } }
+
+        $ahead = Initialize-ArchiveTestProject -Root (Join-Path $TestDrive 'AheadArchiveSource')
+        [System.IO.File]::WriteAllText((Join-Path $ahead 'Ahead.txt'), 'ahead')
+        [void](Invoke-ArchiveTestGit -Root $ahead -Arguments @('add', '--all'))
+        [void](Invoke-ArchiveTestGit -Root $ahead -Arguments @('commit', '-m', 'ahead'))
+        { Write-FabTestProjectArchive -TestProjectPath $ahead -Configuration $configuration `
+                -BundleRoot (Join-Path $TestDrive 'AheadArchiveOutput') } | Should -Throw '*ahead/behind 0/0*'
+
+        $behind = Initialize-ArchiveTestProject -Root (Join-Path $TestDrive 'BehindArchiveSource')
+        [System.IO.File]::WriteAllText((Join-Path $behind 'Upstream.txt'), 'upstream')
+        [void](Invoke-ArchiveTestGit -Root $behind -Arguments @('add', '--all'))
+        [void](Invoke-ArchiveTestGit -Root $behind -Arguments @('commit', '-m', 'upstream'))
+        [void](Invoke-ArchiveTestGit -Root $behind -Arguments @('update-ref', 'refs/remotes/origin/main', 'HEAD'))
+        [void](Invoke-ArchiveTestGit -Root $behind -Arguments @('reset', '--hard', 'HEAD~1'))
+        { Write-FabTestProjectArchive -TestProjectPath $behind -Configuration $configuration `
+                -BundleRoot (Join-Path $TestDrive 'BehindArchiveOutput') } | Should -Throw '*ahead/behind 0/0*'
+    }
+
+    It 'rejects tracked plugin copies and tracked symlinks' {
+        Mock Invoke-FabTestProjectGit -MockWith {
+            param($Root, $Arguments, $Binary)
+            if ($Arguments[0] -eq 'fetch') { return '' }
+            & $script:OriginalArchiveGit -Root $Root -Arguments $Arguments -Binary:$Binary
+        }
+        $configuration = [pscustomobject]@{ pluginName = 'FindInMaterials'; engineVersions = @('5.8'); testProject = [pscustomobject]@{ repository = 'metyatech/FindInMaterialsDemo' } }
+        $pluginCopy = Initialize-ArchiveTestProject -Root (Join-Path $TestDrive 'PluginCopyArchiveSource')
+        [System.IO.Directory]::CreateDirectory((Join-Path $pluginCopy 'Plugins\FindInMaterials')) | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $pluginCopy 'Plugins\FindInMaterials\FindInMaterials.uplugin'), '{}')
+        [void](Invoke-ArchiveTestGit -Root $pluginCopy -Arguments @('add', '--all'))
+        [void](Invoke-ArchiveTestGit -Root $pluginCopy -Arguments @('commit', '-m', 'tracked plugin copy'))
+        { Write-FabTestProjectArchive -TestProjectPath $pluginCopy -Configuration $configuration `
+                -BundleRoot (Join-Path $TestDrive 'PluginCopyArchiveOutput') } | Should -Throw '*Forbidden tracked file*'
+
+        $symlink = Initialize-ArchiveTestProject -Root (Join-Path $TestDrive 'SymlinkArchiveSource')
+        [void](Invoke-ArchiveTestGit -Root $symlink -Arguments @('config', 'core.symlinks', 'false'))
+        [System.IO.File]::WriteAllText((Join-Path $symlink 'Content\TrackedLink.txt'), 'Known.txt')
+        $blob = (Invoke-ArchiveTestGit -Root $symlink -Arguments @('hash-object', '-w', 'Content/TrackedLink.txt')).Trim()
+        [void](Invoke-ArchiveTestGit -Root $symlink -Arguments @('update-index', '--add', '--cacheinfo', '120000', $blob, 'Content/TrackedLink.txt'))
+        [void](Invoke-ArchiveTestGit -Root $symlink -Arguments @('commit', '-m', 'tracked symlink'))
+        { Write-FabTestProjectArchive -TestProjectPath $symlink -Configuration $configuration `
+                -BundleRoot (Join-Path $TestDrive 'SymlinkArchiveOutput') } | Should -Throw '*Tracked symlinks are forbidden*'
     }
 
     It 'accepts an explicitly empty subcategory and preserves taxonomy levels in the manifest' {

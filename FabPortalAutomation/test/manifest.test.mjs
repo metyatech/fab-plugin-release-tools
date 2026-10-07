@@ -41,6 +41,32 @@ test('manifest loader exposes Technical Information file content separately', as
   assert.equal(loaded.manifest.technicalInformationFile, 'submission/FabTechnicalInformation.txt');
 });
 
+test('manifest loader type-checks optional Additional Files without requiring portal upload', async () => {
+  const fixture = await validManifestBundle();
+  fixture.manifest.additionalFiles = [{
+    role: 'example-project',
+    fileName: 'FindInMaterialsDemo_UE5.8.zip',
+    bundleRelativePath: 'additional-files/FindInMaterialsDemo_UE5.8.zip',
+    engineVersion: '5.8',
+    sizeBytes: 123,
+    sha256: 'c'.repeat(64),
+    sourceRepository: 'metyatech/FindInMaterialsDemo',
+    sourceCommit: 'd'.repeat(40),
+  }];
+  await writeFile(fixture.manifestPath, JSON.stringify(fixture.manifest));
+  const loaded = await loadSubmissionManifest(fixture.manifestPath);
+  assert.deepEqual(loaded.manifest.additionalFiles, fixture.manifest.additionalFiles);
+  assert.equal(loaded.mediaFiles.length, 1);
+  assert.equal(loaded.packageFiles.length, 1);
+});
+
+test('manifest loader rejects malformed optional Additional Files metadata', async () => {
+  const fixture = await validManifestBundle();
+  fixture.manifest.additionalFiles = [{ role: 'example-project', fileName: 'demo.zip' }];
+  await writeFile(fixture.manifestPath, JSON.stringify(fixture.manifest));
+  await assert.rejects(() => loadSubmissionManifest(fixture.manifestPath), /additionalFiles\[0\]/);
+});
+
 test('verify manifest loading accepts generator-style portal-unready packages', async () => {
   const fixture = await validManifestBundle();
   fixture.manifest.portalReady = false;

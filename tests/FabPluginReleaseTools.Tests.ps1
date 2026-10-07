@@ -430,7 +430,7 @@ InModuleScope FabPluginReleaseTools {
 
         It 'rejects invalid schemaVersion' {
             $configuration = Get-TestConfigurationObject
-            $configuration.schemaVersion = 3
+            $configuration.schemaVersion = 4
             Save-TestConfiguration -Configuration $configuration -Path $configurationPath
             { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
                 Should -Throw
@@ -450,6 +450,39 @@ InModuleScope FabPluginReleaseTools {
             Save-TestConfiguration -Configuration $configuration -Path $configurationPath
             $result = Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8'
             $result.testProject.repository | Should -BeExactly 'metyatech/FindInMaterialsDemo'
+        }
+
+        It 'accepts schemaVersion 3 with a Fab Additional File test project distribution' {
+            $configuration = Get-TestConfigurationObject
+            $configuration.schemaVersion = 3
+            $configuration.testProject = [ordered]@{
+                repository = 'metyatech/FindInMaterialsDemo'
+                distribution = 'fab-additional-file'
+            }
+            Save-TestConfiguration -Configuration $configuration -Path $configurationPath
+            $result = Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8'
+            $result.testProject.distribution | Should -BeExactly 'fab-additional-file'
+        }
+
+        It 'requires a distribution for schemaVersion 3 test projects' {
+            $configuration = Get-TestConfigurationObject
+            $configuration.schemaVersion = 3
+            $configuration.testProject = [ordered]@{ repository = 'metyatech/FindInMaterialsDemo' }
+            Save-TestConfiguration -Configuration $configuration -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
+        }
+
+        It 'rejects unknown schemaVersion 3 test project distributions' {
+            $configuration = Get-TestConfigurationObject
+            $configuration.schemaVersion = 3
+            $configuration.testProject = [ordered]@{
+                repository = 'metyatech/FindInMaterialsDemo'
+                distribution = 'private-url'
+            }
+            Save-TestConfiguration -Configuration $configuration -Path $configurationPath
+            { Import-FabPluginReleaseConfiguration -ConfigPath $configurationPath -EngineVersion '5.8' } |
+                Should -Throw
         }
 
         It 'requires testProject in schemaVersion 2 configurations' {

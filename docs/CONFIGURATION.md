@@ -56,8 +56,8 @@ atomically replaces the complete `project_file_links` set.
 
 | Property | Type | Required | Allowed values and failure conditions |
 | --- | --- | --- | --- |
-| `schemaVersion` | integer | yes | `1` keeps the legacy contract. `2` requires `testProject`. |
-| `testProject` | object | schemaVersion 2 | The persistent manual test/demo project repository identity; see below. Forbidden in schemaVersion 1. |
+| `schemaVersion` | integer | yes | `1` is legacy, `2` requires `testProject.repository`, and `3` also requires `testProject.distribution`. |
+| `testProject` | object | schemaVersion 2 or 3 | Test/demo repository identity and, for schemaVersion 3, its distribution; see below. Forbidden in schemaVersion 1. |
 | `pluginName` | string | yes | Starts with an ASCII letter or digit; remaining characters are ASCII letters, digits, or `_`. |
 | `descriptorFile` | relative path | yes | Must exactly equal `<pluginName>.uplugin`. |
 | `engineVersions` | string array | yes | Non-empty, unique `5.x` values; the requested engine must be present. |
@@ -81,20 +81,26 @@ atomically replaces the complete `project_file_links` set.
 
 ## `testProject`
 
-New Fab Unreal plugin configurations use schemaVersion 2 and identify their
-persistent manual test/demo project by GitHub owner and repository name:
+SchemaVersion 2 identifies the repository and preserves its existing validation
+semantics. SchemaVersion 3 requires a distribution choice:
 
 ```json
-"schemaVersion": 2,
-"testProject": { "repository": "metyatech/FindInMaterialsDemo" }
+"schemaVersion": 3,
+"testProject": {
+  "repository": "metyatech/FindInMaterialsDemo",
+  "distribution": "fab-additional-file"
+}
 ```
 
-Release verification uses the authenticated GitHub CLI to confirm that the
-repository exists and its default branch tree contains a `.uproject` file.
-Private repositories are supported. GitHub authentication and API/network
-failures are reported separately from a repository that returns HTTP 404.
-SchemaVersion 1 remains valid for existing configurations and does not require
-`testProject`.
+Allowed `distribution` values are `internal-validation`, `external-url`, and
+`fab-additional-file`. Internal-validation requires a null
+`exampleProjectUrl` and an explanation. External-url requires a reachable
+HTTPS URL. Fab Additional File requires a null URL, non-blank notes, and
+`-TestProjectPath` during product release. The source repository must be clean,
+match the configured GitHub identity, and be synchronized with upstream; its
+tracked files are then archived and verified deterministically. SchemaVersion
+1 and 2 remain supported with their existing behavior. SchemaVersion 2 and 3
+repository verification uses the authenticated GitHub CLI.
 
 `forbiddenPackagePatterns` is additive. The built-in policy always rejects Fab-
 unsupported package formats such as executables, installers, and non-ZIP

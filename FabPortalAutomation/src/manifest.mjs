@@ -121,6 +121,23 @@ function validateMedia(manifest) {
   if (manifest.media.some((item) => item?.role !== 'thumbnail' && item?.role !== 'gallery')) fail('media roles must be thumbnail or gallery.');
 }
 
+function validateAdditionalFiles(value) {
+  if (!Array.isArray(value)) fail('additionalFiles must be an array when present.');
+  const required = ['role', 'fileName', 'bundleRelativePath', 'engineVersion', 'sizeBytes', 'sha256', 'sourceRepository', 'sourceCommit'];
+  for (const [index, item] of value.entries()) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) fail(`additionalFiles[${index}] must be an object.`);
+    if (Object.keys(item).length !== required.length || required.some((key) => !Object.prototype.hasOwnProperty.call(item, key))) {
+      fail(`additionalFiles[${index}] must contain exactly the declared example-project fields.`);
+    }
+    if (item.role !== 'example-project') fail(`additionalFiles[${index}].role must be example-project.`);
+    for (const field of ['fileName', 'bundleRelativePath', 'sourceRepository']) requireString(item[field], `additionalFiles[${index}].${field}`);
+    if (!/^5\.\d+$/.test(item.engineVersion)) fail(`additionalFiles[${index}].engineVersion must be a 5.x version.`);
+    if (!Number.isSafeInteger(item.sizeBytes) || item.sizeBytes < 0) fail(`additionalFiles[${index}].sizeBytes must be a non-negative integer.`);
+    if (typeof item.sha256 !== 'string' || !SHA256_PATTERN.test(item.sha256)) fail(`additionalFiles[${index}].sha256 must be a SHA-256 hexadecimal value.`);
+    if (!/^[0-9a-f]{40}$/.test(item.sourceCommit)) fail(`additionalFiles[${index}].sourceCommit must be a lowercase Git commit SHA.`);
+  }
+}
+
 function validateTopLevel(manifest, { requirePortalReady = true } = {}) {
   if (manifest.schemaVersion !== 2) fail('schemaVersion must equal 2.');
   if (typeof manifest.portalReady !== 'boolean') fail('portalReady must be a boolean.');
@@ -164,6 +181,7 @@ function validateTopLevel(manifest, { requirePortalReady = true } = {}) {
     if (!value.startsWith('https://')) fail(`${field} must be HTTPS.`);
   }
   requireString(manifest.technicalInformationFile, 'technicalInformationFile');
+  if (Object.prototype.hasOwnProperty.call(manifest, 'additionalFiles')) validateAdditionalFiles(manifest.additionalFiles);
   if (!Array.isArray(manifest.packages) || manifest.packages.length === 0) fail('packages must be a non-empty array.');
   if (manifest.packages.length !== manifest.engineVersions.length) fail('packages count must equal engineVersions count.');
   const packageVersions = manifest.packages.map((item, index) => requireString(item?.engineVersion, `packages[${index}].engineVersion`));

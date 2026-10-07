@@ -97,11 +97,13 @@ from [the Runtime Asset Import example](examples/RuntimeAssetImport/FabPluginRel
 and adapt its explicit allowlists. Every property is documented in
 [Configuration](docs/CONFIGURATION.md).
 
-New Fab Unreal plugin configurations use schemaVersion 2 and require a
-`testProject.repository` GitHub identity for a persistent manual test/demo
-project. Release verification uses the authenticated GitHub CLI to confirm the
-repository and a `.uproject` file in its tree. Existing schemaVersion 1
-configurations remain supported.
+New Fab Unreal plugin configurations use schemaVersion 3 and require a
+`testProject.repository` GitHub identity plus an explicit `distribution`:
+`internal-validation`, `external-url`, or `fab-additional-file`. Internal
+validation projects stay private; external URLs must be reachable HTTPS URLs;
+Fab Additional File projects are archived deterministically from a clean,
+upstream-synced repository. SchemaVersion 1 and 2 configurations retain their
+existing behavior.
 
 Documentation and support URLs must not contain user information. URL checks
 use the configured URL for the request, but reports omit user information, the
@@ -188,6 +190,16 @@ For a local validated bundle:
 ```powershell
 pwsh .\Invoke-FabProductRelease.ps1 -PluginPath <path>
 ```
+
+For `schemaVersion: 3` with `testProject.distribution: "fab-additional-file"`,
+also pass `-TestProjectPath <clean-project-repository>`. The release validates
+the repository identity and exact pushed HEAD, then adds a deterministic
+`additional-files/<ProjectName>_UE<EngineAssociation>.zip` and its provenance
+to `FabPortalSubmission.json`. `Invoke-FabSubmissionPreparation.ps1` accepts
+the same `-TestProjectPath` parameter and forwards it to product release.
+Upload the exact generated filename to Fab Additional Files manually; portal
+automation does not upload it. Smoke-test the Quick Start in Unreal Editor
+before submitting for review.
 
 Without `-PublishProjectFiles`, project file links must be supplied in
 `project_file_links` for every engine version. The legacy singular

@@ -18,6 +18,8 @@ param(
 
     [string]$OutputDirectory,
 
+    [string]$TestProjectPath,
+
     [switch]$NoOpenMediaReview,
 
     [switch]$KeepWorkingDirectory
@@ -28,10 +30,12 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'FabSubmissionCommon.ps1')
 . (Join-Path $PSScriptRoot 'Invoke-FabProductRelease.ps1') `
     -PluginPath $PluginPath -EngineRoot $EngineRoot -ListingFieldsPath $ListingFieldsPath `
-    -OutputDirectory $OutputDirectory -KeepWorkingDirectory:$KeepWorkingDirectory
+    -OutputDirectory $OutputDirectory -TestProjectPath $TestProjectPath `
+    -KeepWorkingDirectory:$KeepWorkingDirectory
 [void]$EngineRoot
 [void]$ListingFieldsPath
 [void]$OutputDirectory
+[void]$TestProjectPath
 [void]$NoOpenMediaReview
 [void]$KeepWorkingDirectory
 
@@ -245,6 +249,7 @@ function Invoke-FabSubmissionPreparationCommand {
             })
     }
     $releaseArguments = @{ PluginPath = $root; KeepWorkingDirectory = $KeepWorkingDirectory }
+    if (-not [string]::IsNullOrWhiteSpace($TestProjectPath)) { $releaseArguments.TestProjectPath = $TestProjectPath }
     if (-not [string]::IsNullOrWhiteSpace($EngineRoot)) { $releaseArguments.EngineRoot = $EngineRoot }
     if (-not [string]::IsNullOrWhiteSpace($ListingFieldsPath)) { $releaseArguments.ListingFieldsPath = $ListingFieldsPath }
     if (-not [string]::IsNullOrWhiteSpace($OutputDirectory)) {

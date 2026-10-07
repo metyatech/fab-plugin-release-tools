@@ -7,7 +7,9 @@ param(
 
     [string]$PackageZipPath,
 
-    [string]$OutputDirectory
+    [string]$OutputDirectory,
+
+    [string]$TestProjectArchiveName
 )
 
 Set-StrictMode -Version Latest
@@ -201,7 +203,11 @@ function Get-LicenseInventory {
 function ConvertTo-TechnicalInformationText {
     param(
         [Parameter(Mandatory)]
-        [object]$Metadata
+        [object]$Metadata,
+
+        [object]$Configuration,
+
+        [string]$ArchiveName
     )
 
     $technical = $Metadata.technicalInformation
@@ -230,7 +236,12 @@ function ConvertTo-TechnicalInformationText {
     $lines.Add("Dependencies: $dependenciesText")
     $lines.Add("Prerequisites: $prerequisitesText")
     $lines.Add("Documentation: $($technical.documentationUrl)")
-    $example = if ($null -eq $technical.exampleProjectUrl) { 'Not applicable' } else { [string]$technical.exampleProjectUrl }
+    $distribution = if ($Configuration.schemaVersion -eq 3) { [string]$Configuration.testProject.distribution } else { $null }
+    $example = switch ($distribution) {
+        'fab-additional-file' { "Included as Fab Additional File `"$ArchiveName`"" }
+        'external-url' { [string]$technical.exampleProjectUrl }
+        default { 'Not applicable' }
+    }
     $lines.Add("Example Project: $example — $($technical.exampleProjectNotes)")
     $lines.Add("Additional Notes: $($technical.additionalNotes)")
     return ([string]::Join("`n", $lines) + "`n")
@@ -275,15 +286,49 @@ try {
     Assert-SubmissionText -Object $metadata.technicalInformation -Name 'networkReplicationNotes'
     Assert-SubmissionText -Object $metadata.technicalInformation -Name 'exampleProjectNotes'
     Assert-SubmissionText -Object $metadata.technicalInformation -Name 'additionalNotes'
-    if ($null -eq $metadata.technicalInformation.exampleProjectUrl -and
-        $metadata.technicalInformation.exampleProjectNotes -notmatch '(?i)not\s+(?:applicable|needed|required)|no\s+example') {
-        throw 'exampleProjectNotes must explain why exampleProjectUrl is null.'
+    $distribution = if ($config.schemaVersion -eq 3) { [string]$config.testProject.distribution } else { 'legacy' }
+    switch ($distribution) {
+        'internal-validation' {
+            if ($null -ne $metadata.technicalInformation.exampleProjectUrl) {
+                throw 'internal-validation requires exampleProjectUrl to be null.'
+            }
+            if ($metadata.technicalInformation.exampleProjectNotes -notmatch '(?i)not\s+(?:applicable|needed|required)|no\s+example') {
+                throw 'exampleProjectNotes must explain why exampleProjectUrl is null.'
+            }
+        }
+        'fab-additional-file' {
+            if ($null -ne $metadata.technicalInformation.exampleProjectUrl) {
+                throw 'fab-additional-file requires exampleProjectUrl to be null.'
+            }
+            if ([string]::IsNullOrWhiteSpace($metadata.technicalInformation.exampleProjectNotes)) {
+                throw 'fab-additional-file requires non-blank exampleProjectNotes.'
+            }
+            if ([string]::IsNullOrWhiteSpace($TestProjectArchiveName)) {
+                throw 'fab-additional-file requires the generated test project archive filename.'
+            }
+        }
+        'external-url' {
+            if ($null -eq $metadata.technicalInformation.exampleProjectUrl) {
+                throw 'external-url requires exampleProjectUrl.'
+            }
+            Test-SubmissionUrl -Url ([string]$metadata.technicalInformation.exampleProjectUrl) -Name 'exampleProjectUrl'
+        }
+        default {
+            if ($null -eq $metadata.technicalInformation.exampleProjectUrl -and
+                $metadata.technicalInformation.exampleProjectNotes -notmatch '(?i)not\s+(?:applicable|needed|required)|no\s+example') {
+                throw 'exampleProjectNotes must explain why exampleProjectUrl is null.'
+            }
+        }
     }
     if ([int]$metadata.technicalInformation.numberOfBlueprints -ne (Get-BlueprintAssetCount -PluginRoot $resolvedPluginPath)) {
         throw 'numberOfBlueprints must equal Blueprint assets in the shipped Content tree.'
     }
     Test-SubmissionUrl -Url ([string]$metadata.technicalInformation.documentationUrl) -Name 'documentationUrl'
-    if ($null -ne $metadata.technicalInformation.exampleProjectUrl) {
+    if ($distribution -ne 'external-url' -and $distribution -ne 'legacy' -and
+        $null -ne $metadata.technicalInformation.exampleProjectUrl) {
+        throw 'exampleProjectUrl must be null for this test project distribution.'
+    }
+    if ($distribution -eq 'legacy' -and $null -ne $metadata.technicalInformation.exampleProjectUrl) {
         Test-SubmissionUrl -Url ([string]$metadata.technicalInformation.exampleProjectUrl) -Name 'exampleProjectUrl'
     }
 
@@ -321,7 +366,8 @@ try {
     }
     [System.IO.Directory]::CreateDirectory($outputRoot) | Out-Null
     $textPath = Join-Path $outputRoot 'FabTechnicalInformation.txt'
-    [System.IO.File]::WriteAllText($textPath, (ConvertTo-TechnicalInformationText -Metadata $metadata),
+    [System.IO.File]::WriteAllText($textPath, (ConvertTo-TechnicalInformationText -Metadata $metadata `
+            -Configuration $config -ArchiveName $TestProjectArchiveName),
         [System.Text.UTF8Encoding]::new($false))
     Write-Output "Fab Technical Information: $textPath"
     if ($PackageZipPath) {
