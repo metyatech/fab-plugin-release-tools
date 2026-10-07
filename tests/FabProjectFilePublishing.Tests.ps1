@@ -268,6 +268,15 @@ Describe 'Fab project file publishing' {
     It 'preserves object put arguments in local OAuth mode' {
         $previousToken = [Environment]::GetEnvironmentVariable('CLOUDFLARE_API_TOKEN', 'Process')
         $previousCi = [Environment]::GetEnvironmentVariable('CI', 'Process')
+        $ciProviderMarkers = @(
+            'GITHUB_ACTIONS', 'TF_BUILD', 'GITLAB_CI', 'JENKINS_URL', 'BUILDKITE',
+            'CIRCLECI', 'TEAMCITY_VERSION', 'BITBUCKET_BUILD_NUMBER', 'BUILD_NUMBER'
+        )
+        $previousCiProviderMarkers = @{}
+        foreach ($marker in $ciProviderMarkers) {
+            $previousCiProviderMarkers[$marker] = [Environment]::GetEnvironmentVariable($marker, 'Process')
+            [Environment]::SetEnvironmentVariable($marker, $null, 'Process')
+        }
         [Environment]::SetEnvironmentVariable('CLOUDFLARE_API_TOKEN', $null, 'Process')
         [Environment]::SetEnvironmentVariable('CI', $null, 'Process')
         $zipPath = Join-Path $TestDrive 'Product.zip'
@@ -286,6 +295,9 @@ Describe 'Fab project file publishing' {
         finally {
             [Environment]::SetEnvironmentVariable('CLOUDFLARE_API_TOKEN', $previousToken, 'Process')
             [Environment]::SetEnvironmentVariable('CI', $previousCi, 'Process')
+            foreach ($marker in $ciProviderMarkers) {
+                [Environment]::SetEnvironmentVariable($marker, $previousCiProviderMarkers[$marker], 'Process')
+            }
         }
     }
 
