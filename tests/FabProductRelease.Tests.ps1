@@ -262,6 +262,10 @@ public sealed class FabProductTestHttpMessageHandler : HttpMessageHandler
             [System.IO.File]::WriteAllText((Join-Path $Root 'LICENSE'), 'MIT' + "`n")
             [System.IO.Directory]::CreateDirectory((Join-Path $Root 'Content')) | Out-Null
             [System.IO.File]::WriteAllText((Join-Path $Root 'Content\Known.txt'), 'known')
+            [System.IO.Directory]::CreateDirectory((Join-Path $Root 'Content\Materials')) | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $Root 'Content\Materials\M_SearchableSurface_Alt.txt'), 'alt')
+            [System.IO.File]::WriteAllText((Join-Path $Root 'Content\Materials\M_SearchableSurface.txt'), 'material')
+            [System.IO.File]::WriteAllText((Join-Path $Root 'Content\Materials\MI_SearchableSurface.txt'), 'instance')
             [void](Invoke-ArchiveTestGit -Root $Root -Arguments @('add', '--all'))
             [void](Invoke-ArchiveTestGit -Root $Root -Arguments @('commit', '-m', 'fixture'))
             [void](Invoke-ArchiveTestGit -Root $Root -Arguments @('remote', 'add', 'origin', 'https://github.com/metyatech/FindInMaterialsDemo.git'))
@@ -831,6 +835,12 @@ public sealed class FabProductTestHttpMessageHandler : HttpMessageHandler
             @($archive.Entries | ForEach-Object FullName) | Should -Contain 'Demo/Content/Known.txt'
             @($archive.Entries | ForEach-Object FullName) | Should -Contain 'Demo/LICENSE'
             @($archive.Entries | ForEach-Object FullName) | Should -Not -Contain 'Demo/.git/config'
+            @($archive.Entries | ForEach-Object FullName | Where-Object { $_ -like 'Demo/Content/Materials/*' }) |
+                Should -BeExactly @(
+                    'Demo/Content/Materials/M_SearchableSurface_Alt.txt',
+                    'Demo/Content/Materials/M_SearchableSurface.txt',
+                    'Demo/Content/Materials/MI_SearchableSurface.txt'
+                )
         }
         finally { $archive.Dispose() }
     }

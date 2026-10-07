@@ -2098,7 +2098,7 @@ function Write-FabTestProjectArchive {
         $archive = [System.IO.Compression.ZipArchive]::new($stream, [System.IO.Compression.ZipArchiveMode]::Create, $true)
         try {
             $orderedPaths = [string[]]@($trackedEntries | ForEach-Object { [string]$_.Path })
-            [Array]::Sort($orderedPaths, [System.StringComparer]::Ordinal)
+            [Array]::Sort($orderedPaths, [System.StringComparer]::InvariantCulture)
             foreach ($path in $orderedPaths) {
                 $bytes = [byte[]](Invoke-FabTestProjectGit -Root $root -Arguments @('show', "$sourceCommit`:$path") -Binary)
                 $entry = $archive.CreateEntry("$projectName/$($path.Replace('\', '/'))", [System.IO.Compression.CompressionLevel]::Optimal)
