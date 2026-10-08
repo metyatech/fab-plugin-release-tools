@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/metyatech/fab-plugin-release-tools/FabPortalUploadEvidence.schema.json",
+  "title": "Fab Portal Additional File Upload Evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "listingId", "manifestSha256", "additionalFiles"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "listingId": { "type": "string", "format": "uuid" },
+    "manifestSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "additionalFiles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["fileName", "localSha256", "sizeBytes", "uploadCompleted", "completedAtUtc"],
+        "properties": {
+          "fileName": { "type": "string", "minLength": 1 },
+          "localSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "sizeBytes": { "type": "integer", "minimum": 0 },
+          "uploadCompleted": { "const": true },
+          "completedAtUtc": { "type": "string", "format": "date-time", "pattern": "Z$" }
+        }
+      }
+    }
+  }
+}

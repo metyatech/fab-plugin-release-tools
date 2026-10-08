@@ -208,9 +208,28 @@ pwsh .\Publish-FabProjectFiles.ps1 -PluginPath <path> `
   -TestProjectPath <clean-demo-project-repository> -UpdateListingFields
 ```
 
-Upload the exact generated filename to Fab Additional Files manually; portal
-automation does not upload it. Smoke-test the Quick Start in Unreal Editor
+Upload the generated archive through `Add new format` → `Additional files`;
+this is separate from Media Gallery (`Images`, `3D models`, and `Videos`). Portal
+automation does not upload it. For `fab-additional-file`, live pre-submit
+verification requires the Additional files format and the expected example
+project registration with its Additional File role and expected byte size. The
+manifest loader re-hashes the actual bundled ZIP and checks its byte size before
+Portal comparison; the visible registered row is the upload-completion evidence.
+Fab may normalize the displayed filename, so the name is supporting evidence,
+not the identity key. The bundle's verified local SHA-256 is checked against
+the manifest before upload. Report a remote hash as verified only when Fab
+exposes one and it was actually compared. A missing local artifact, or a Portal
+role or size mismatch, fails closed. Smoke-test the Quick Start in Unreal Editor
 before submitting for review.
+
+For pre-submit checks of a listing with Additional Files, record each completed
+upload in `FabPortalUploadEvidence.json` using the [schema](FabPortalUploadEvidence.schema.json)
+and pass it as `-AdditionalFileUploadEvidencePath`. The evidence binds the
+completed operation to the listing, manifest hash, local artifact hash, and
+size. Get `manifestSha256` from the exact `FabPortalSubmission.json` bytes and
+`localSha256`/`sizeBytes` from the bundled ZIP; record `uploadCompleted: true`
+and its UTC completion time only after the upload finishes. A visible same-size
+Portal row alone cannot prove which upload created it.
 
 Without `-PublishProjectFiles`, project file links must be supplied in
 `project_file_links` for every engine version. The legacy singular
@@ -238,9 +257,13 @@ GitHub SHA-256 digests, publishes the release, and verifies each public
 `sourceCommit` marker are bound to the exact validated, pushed local HEAD;
 existing releases that resolve to another source commit fail before any remote
 release mutation. Matching assets are reused on retry. A successful
-`portalReady` value means every current automation field, media item, package,
-and public project file link has passed validation. It is true only when the
-current media bytes also match a human-approved `FabMediaApproval.json`.
+`portalReady` is the generated-artifact and input-readiness flag: current
+automation metadata, media, packages, and public project-file links passed
+local validation, and media matches a human-approved `FabMediaApproval.json`.
+It does not say that Fab Portal contains those values. The live verifier reports
+`portalVerified` separately; Preview acceptance remains `UNKNOWN` without
+human or Computer Use evidence, so the tool cannot infer `readyToSubmit` from
+generated artifacts alone. Verification also never means `submitted`.
 
 ## Guarded submission preparation
 
@@ -530,12 +553,25 @@ pwsh .\Invoke-FabPortalSubmission.ps1 `
 
 Pre-submit verification requires `portalReady: true`, attaches to the exact
 existing listing, requires Draft status, disables the cache and reloads the
-page once, then compares only the reloaded live DOM. It reports
-`preSubmitReady=true` only when the listing identity and Draft status still
-match, `MISMATCH=0`, unresolved critical fields are zero, and observed network
-mutations are zero. Observation transport is explicitly rejected for this
-mode. It remains verify-only: it does not edit, save, submit, or publish, and
-a live PASS is not a guarantee of Fab approval.
+page once, then compares only the reloaded live DOM. The contract covers
+Technical Information, Example Project, Documentation, supported engine
+versions, Personal and Professional prices, Additional Files, package/project
+links, and the relevant Description structure. Technical Information reports
+each canonical `Label: value` item as `MATCH`, `STALE`, `MISSING`, or
+`PORTAL_ONLY`. `STALE` and `MISSING` block; Portal-only items are reported but
+do not fail the canonical comparison. The canonical artifact being correct
+does not prove that the Portal was updated.
+
+`preSubmitReady=true` means only that the live machine-readable Portal field
+check passed: listing identity and Draft status match, `MISMATCH=0`, unresolved
+critical fields are zero, and observed network mutations are zero. It does not
+claim human visual acceptance or submission. Results keep `artifactReady`,
+`portalInputsReady`, `portalVerified`, `humanVisualAcceptance`, `readyToSubmit`,
+and `submitted` separate. Preview-dependent visual evidence remains `UNKNOWN`
+until a human or Computer Use observation records it; without that evidence,
+`readyToSubmit` stays false. Observation transport is explicitly rejected for
+the live pre-submit gate. It remains verify-only: it does not edit, save,
+submit, or publish, and a live PASS is not a guarantee of Fab approval.
 
 To check whether proposed tags are selectable in the current seller-side
 selector, run a read-only discovery against the same existing Draft:
@@ -567,8 +603,38 @@ semantic DOM in `FabPortalObservation.json`. A heading rendered as a paragraph,
 a literal `-` rendered as text instead of a list, missing marks, or a changed
 HTTPS anchor is a mismatch. For Additional information, the agent opens the
 Unreal Engine format, applies the generated structure, and observes it the
-same way. The shared tool performs no editor, FAQ, Save Draft, Submit, or
-publication writes.
+same way. Separately inspect the actual Portal Preview: paragraphs must remain
+distinct, unordered and ordered lists must render as lists, query examples must
+remain distinguishable, headings must remain headings, and links must work.
+Raw canonical `\n\n` or editor DOM alone is not Preview evidence. A collapsed
+one-line Preview fails; preserved structure with tight Fab-controlled margins
+passes with a platform-style limitation. Do not add repeated `<br>` elements,
+spaces, or blank lines to override Fab typography. The shared tool performs no
+editor, FAQ, Save Draft, Submit, or publication writes.
+
+To preserve a human or Computer Use Preview check in `FabPortalObservation.json`,
+include the optional `descriptionPreview` object. Mark all six structural
+checks true for `PASS` or `PASS_WITH_PLATFORM_STYLE_LIMITATION`; use the latter
+only when Fab styling controls spacing while structure and content remain
+correct. A failed structural check is `FAIL`. Omitting the object keeps the
+result `UNKNOWN`.
+
+```json
+{
+  "descriptionPreview": {
+    "evidenceSource": "computer-use",
+    "state": "PASS_WITH_PLATFORM_STYLE_LIMITATION",
+    "paragraphsDistinct": true,
+    "unorderedListsRendered": true,
+    "orderedListsRendered": true,
+    "queryExamplesDistinct": true,
+    "headingsDistinct": true,
+    "linksCorrect": true,
+    "styleLimitation": true,
+    "note": "Preview structure is preserved; Fab heading margins are compact."
+  }
+}
+```
 
 Fab's current editor persists its toolbar `Heading 2` choice as an `h5`
 element. The Portal adapter canonicalizes that proven Fab representation to
@@ -590,12 +656,16 @@ supported workflow. After an interactive agent edits a field:
 5. run read-only verification.
 
 The shared tool never writes Portal fields. The external interactive agent or
-human handles proven mismatch edits and the final Submit for review flow. At
-submission, select the activation option specified by
-`FabPortalSubmission.json` and the product listing metadata. Both Automatic
-activation and Manual activation are sourced from product metadata; the shared
-tool and interactive agent must not choose Manual activation as an independent
-default.
+human handles proven mismatch edits. Edit/pre-submit preparation covers edit,
+upload, save/autosave, reload, Preview, and validation. `Automatic activation`
+(currently labelled `Automatic publication`) is selected in the submission
+flow after `Submit for review`, not in the ordinary Listing editor. Treat
+`Submit for review`, publication-mode selection, final confirmation, and
+post-submission status as consequential submission actions. Continue through
+them only after the user explicitly authorizes submission. Verify the selected
+mode, final confirmation, and resulting status separately. If Automatic
+publication was selected, do not perform a later manual Publish or Activate.
+If the Portal UI differs from the documented flow, stop without guessing.
 
 ```mermaid
 sequenceDiagram

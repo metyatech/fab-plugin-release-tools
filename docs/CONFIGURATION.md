@@ -105,6 +105,30 @@ is optional on ordinary release and project-file publication commands; the
 guarded preparation path forwards it when regenerating missing project-file
 links.
 
+When `distribution` is `fab-additional-file`, upload the generated ZIP from
+`FabPortalSubmission.json` through Fab's `Add new format` → `Additional files`
+flow. This is separate from Media Gallery (`Images`, `3D models`, and `Videos`).
+Live pre-submit verification requires the Additional files format and expected
+artifact registration, including its Additional File role and byte size.
+Before comparison, the manifest loader re-hashes the actual bundled artifact
+and checks its byte size against the manifest. The visible registered Portal
+row is upload-completion evidence. Filename display is supporting evidence
+because Fab may normalize it. Report a Fab-side hash only if Portal metadata
+exposes one and it was compared. A missing local artifact or Portal size/role
+conflict fails closed.
+
+The generated manifest's `portalReady` records local artifact/input readiness,
+not Portal state. Live Portal verification is reported separately. Preview
+structure needs human or Computer Use evidence; without it the state remains
+`UNKNOWN`, and `readyToSubmit` is false. Technical Information compares each
+canonical `Label: value` entry as `MATCH`, `STALE`, or `MISSING`; extra
+Portal-only entries are reported as `PORTAL_ONLY` without failing by themselves.
+When a manifest includes Additional Files, live pre-submit also requires a
+`FabPortalUploadEvidence.json` created after upload and supplied with
+`-AdditionalFileUploadEvidencePath`. It binds the completed operation to the
+listing, manifest SHA-256, and verified local hash/size; a same-size pre-existing
+Portal row alone is insufficient. See `FabPortalUploadEvidence.schema.json`.
+
 `forbiddenPackagePatterns` is additive. The built-in policy always rejects Fab-
 unsupported package formats such as executables, installers, and non-ZIP
 archives, and always scans distributed source files under `Source/` for

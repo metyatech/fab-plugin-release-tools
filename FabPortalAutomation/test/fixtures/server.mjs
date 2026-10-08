@@ -87,7 +87,8 @@ function pageMarkup(state, listingId) {
       ${state.additionalExtraContenteditable ? '<div role="textbox" aria-label="Additional note" contenteditable="true"><p>Additional editor companion</p></div>' : ''}
     </section>
     <section data-testid="media-gallery" data-existing="${html(state.mediaExisting)}" data-order="${html(state.mediaOrder ?? '')}" data-upload-order="${html(initialStateMediaOrder(state))}">${html(state.mediaExisting === 'existing' ? 'Existing media' : state.mediaExisting === 'known' || state.mediaExisting === 'uploaded' ? '001 thumbnail 002 gallery' : 'Empty gallery')}</section>
-    <input type="file" data-testid="media-upload" multiple>`;
+    <input type="file" data-testid="media-upload" multiple>
+    ${state.additionalFilesFormat ? '<section role="region" aria-label="Additional files"><ul>' + (state.additionalFileRows ?? []).map((item) => '<li data-fab-role="' + html(item.role) + '" data-size-bytes="' + html(item.sizeBytes) + '">' + html(item.fileName) + '</li>').join('') + '</ul></section>' : ''}`;
   return `<!doctype html><html><head><title>Fab fixture</title></head><body>
   <main id="listing-view">${listingControls}</main>
   <main id="format-view" hidden>${formatControls}</main>

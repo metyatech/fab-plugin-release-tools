@@ -5,6 +5,7 @@ param(
     [string]$ManifestPath,
     [string]$CdpEndpoint,
     [string]$ObservationPath,
+    [string]$AdditionalFileUploadEvidencePath,
     [string]$OutputDirectory,
     [string[]]$Tags,
     [switch]$PreSubmit,
@@ -94,6 +95,17 @@ if ($TagAvailability -and (-not $Tags -or $Tags.Count -eq 0)) {
 if (-not $TagAvailability -and $Tags) {
     throw '-Tags is valid only with -TagAvailability.'
 }
+$hasUploadEvidence = -not [string]::IsNullOrWhiteSpace($AdditionalFileUploadEvidencePath)
+if ($hasUploadEvidence -and -not $PreSubmit) {
+    throw 'AdditionalFileUploadEvidencePath is valid only with -PreSubmit.'
+}
+$uploadEvidenceFullPath = $null
+if ($hasUploadEvidence) {
+    $uploadEvidenceFullPath = [System.IO.Path]::GetFullPath($AdditionalFileUploadEvidencePath)
+    if (-not (Test-Path -LiteralPath $uploadEvidenceFullPath -PathType Leaf)) {
+        throw 'AdditionalFileUploadEvidencePath must point to an existing evidence file.'
+    }
+}
 $runtime = Join-Path $PSScriptRoot 'FabPortalAutomation'
 if (-not (Test-Path -LiteralPath (Join-Path $runtime 'node_modules\playwright-core\package.json') -PathType Leaf)) {
     throw "Portal automation dependencies are not installed. Run npm ci in $runtime."
@@ -117,6 +129,10 @@ if (-not [string]::IsNullOrWhiteSpace($OutputDirectory)) {
 if ($Json) { [void]$arguments.Add('--json') }
 if ($VerboseOutput) { [void]$arguments.Add('--verbose') }
 if ($PreSubmit) { [void]$arguments.Add('--pre-submit') }
+if ($hasUploadEvidence) {
+    [void]$arguments.Add('--additional-file-upload-evidence')
+    [void]$arguments.Add($uploadEvidenceFullPath)
+}
 if ($TagAvailability) {
     [void]$arguments.Add('--tag-availability')
     foreach ($tag in $Tags) {

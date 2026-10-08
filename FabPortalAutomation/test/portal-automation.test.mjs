@@ -21,14 +21,20 @@ test.after(async () => {
   await browser.close();
 });
 
-async function scenario({ manifest = makeManifest(), state = {}, fixtureOptions = {}, mediaFiles = [], manualInteraction = null, preSubmit = false } = {}) {
+async function scenario({ manifest = makeManifest(), state = {}, fixtureOptions = {}, mediaFiles = [], manifestInfoOverrides = {}, uploadEvidence = null, manualInteraction = null, preSubmit = false } = {}) {
   const fixture = await startFixture(fixtureState(manifest, state), fixtureOptions);
   const context = await browser.newContext();
   const page = await context.newPage();
-  const info = await makeManifestInfo(manifest, { mediaFiles });
+  const info = { ...(await makeManifestInfo(manifest, { mediaFiles })), ...manifestInfoOverrides };
+  const recordedUploadEvidence = uploadEvidence ? {
+    listingId: info.manifest.listingId,
+    manifestSha256: info.manifestSha256,
+    ...uploadEvidence,
+    additionalFiles: uploadEvidence.additionalFiles.map((item) => ({ completedAtUtc: '2026-10-08T06:00:00Z', ...item })),
+  } : null;
   try {
     await page.goto(`${fixture.origin}/portal/listings/${listingId}/edit`);
-    const result = await runPortalAutomation({ manifestInfo: info, origin: fixture.origin, page, context, manualInteraction, preSubmit });
+    const result = await runPortalAutomation({ manifestInfo: info, origin: fixture.origin, page, context, manualInteraction, preSubmit, uploadEvidence: recordedUploadEvidence });
     return { result, fixture };
   } finally {
     await context.close();
@@ -107,11 +113,111 @@ test('pre-submit passes only when the reloaded Professional price remains select
   assert.equal(result.result, 'PASS');
   assert.equal(result.preSubmitGate, true);
   assert.equal(result.preSubmitReady, true);
+  assert.equal(result.artifactReady, true);
+  assert.equal(result.portalInputsReady, true);
+  assert.equal(result.portalVerified, true);
+  assert.equal(result.humanVisualAcceptance, 'UNKNOWN');
+  assert.equal(result.descriptionPreview.state, 'UNKNOWN');
+  assert.equal(result.readyToSubmit, false);
+  assert.equal(result.submitted, false);
   assert.equal(result.reloadCount, 1);
   assert.equal(result.writeInteractionsPerformed, 0);
   assert.equal(result.submitInvoked, false);
   assert.equal(result.network.networkMutationRequestsObserved, 0);
   assert.equal(fixture.mutations.length, 0);
+});
+
+test('pre-submit blocks a stale Example Project value in live Technical Information', async () => {
+  const canonical = 'Example Project: Included as Fab Additional File (UE5.8).';
+  const stale = 'Example Project: Not applicable — No example project is distributed or required.';
+  const manifest = makeManifest({
+    technicalInformationText: canonical,
+    additionalInformationRichText: { blocks: [{ type: 'paragraph', runs: [{ text: canonical }] }] },
+  });
+  const { result } = await scenario({ manifest, state: {
+    technicalInformationText: stale,
+    additionalInformationRichText: { blocks: [{ type: 'paragraph', runs: [{ text: stale }] }] },
+  }, preSubmit: true });
+  const field = result.comparison.fields.find((item) => item.manifestJsonPath === 'technicalInformationFile');
+  assert.equal(field.classification, 'MISMATCH');
+  assert.equal(field.itemComparison.items.find((item) => item.key === 'Example Project').state, 'STALE');
+  assert.equal(result.preSubmitReady, false);
+});
+
+test('Portal-only Technical Information items are reported without blocking canonical matches', async () => {
+  const canonical = 'Engine versions: 5.8';
+  const portalOnly = 'Seller note: Portal-only guidance';
+  const manifest = makeManifest({
+    technicalInformationText: canonical,
+    additionalInformationRichText: { blocks: [{ type: 'paragraph', runs: [{ text: canonical }] }] },
+  });
+  const actualRichText = { blocks: [
+    { type: 'paragraph', runs: [{ text: canonical }] },
+    { type: 'paragraph', runs: [{ text: portalOnly }] },
+  ] };
+  const { result } = await scenario({ manifest, preSubmit: true, state: { additionalInformationRichText: actualRichText, technicalInformationText: `${canonical}\n\n${portalOnly}` } });
+  const technical = result.comparison.fields.find((field) => field.manifestJsonPath === 'technicalInformationFile');
+  const semantic = result.comparison.fields.find((field) => field.manifestJsonPath === 'additionalInformationRichText' && field.view === 'format');
+  assert.equal(technical.itemComparison.counts.PORTAL_ONLY, 1);
+  assert.equal(technical.classification, 'MATCH');
+  assert.equal(semantic.classification, 'MATCH');
+  assert.equal(result.preSubmitReady, true);
+});
+
+test('Portal-only Technical Information cannot mask canonical rich-text structure changes', async () => {
+  const canonical = 'Engine versions: 5.8';
+  const manifest = makeManifest({
+    technicalInformationText: canonical,
+    additionalInformationRichText: { blocks: [{ type: 'paragraph', runs: [{ text: canonical }] }] },
+  });
+  const actualRichText = { blocks: [
+    { type: 'heading', level: 2, runs: [{ text: canonical }] },
+    { type: 'paragraph', runs: [{ text: 'Seller note: Portal-only guidance' }] },
+  ] };
+  const { result } = await scenario({ manifest, preSubmit: true, state: { additionalInformationRichText: actualRichText, technicalInformationText: `${canonical}\n\nSeller note: Portal-only guidance` } });
+  const semantic = result.comparison.fields.find((field) => field.manifestJsonPath === 'additionalInformationRichText' && field.view === 'format');
+  assert.equal(semantic.classification, 'MISMATCH');
+  assert.equal(result.preSubmitReady, false);
+});
+
+test('pre-submit requires an expected demo file in the Additional files format', async () => {
+  const demo = { role: 'example-project', fileName: 'Demo_UE5.8.zip', bundleRelativePath: 'additional-files/Demo_UE5.8.zip', engineVersion: '5.8', sizeBytes: 2048, sha256: 'c'.repeat(64), sourceRepository: 'metyatech/Demo', sourceCommit: 'd'.repeat(40) };
+  const manifest = makeManifest({ additionalFiles: [demo] });
+  const missing = await scenario({ manifest, preSubmit: true });
+  const missingField = missing.result.comparison.fields.find((field) => field.manifestJsonPath === 'additionalFiles[0]');
+  assert.equal(missingField.classification, 'NOT_DISCOVERED');
+  assert.equal(missing.result.preSubmitReady, false);
+
+  const present = await scenario({ manifest, preSubmit: true, state: {
+    additionalFilesFormat: true,
+    additionalFileRows: [{ role: 'Additional File', fileName: 'demo_ue58.zip', sizeBytes: demo.sizeBytes }],
+  }, uploadEvidence: { additionalFiles: [{ fileName: demo.fileName, localSha256: demo.sha256, sizeBytes: demo.sizeBytes, uploadCompleted: true }] } });
+  const presentField = present.result.comparison.fields.find((field) => field.manifestJsonPath === 'additionalFiles[0]');
+  assert.equal(presentField.classification, 'MATCH');
+  assert.equal(presentField.identityEvidence.nameNormalized, true);
+  assert.equal(present.result.preSubmitReady, true);
+});
+
+test('pre-submit fails closed when the local Additional File hash was not verified', async () => {
+  const demo = { role: 'example-project', fileName: 'Demo_UE5.8.zip', bundleRelativePath: 'additional-files/Demo_UE5.8.zip', engineVersion: '5.8', sizeBytes: 2048, sha256: 'c'.repeat(64), sourceRepository: 'metyatech/Demo', sourceCommit: 'd'.repeat(40) };
+  const manifest = makeManifest({ additionalFiles: [demo] });
+  const { result } = await scenario({ manifest, preSubmit: true, uploadEvidence: { additionalFiles: [{ fileName: demo.fileName, localSha256: demo.sha256, sizeBytes: demo.sizeBytes, uploadCompleted: true }] }, manifestInfoOverrides: { verifiedAdditionalFiles: [] }, state: {
+    additionalFilesFormat: true,
+    additionalFileRows: [{ role: 'Additional File', fileName: 'demo_ue58.zip', sizeBytes: demo.sizeBytes }],
+  } });
+  assert.equal(result.comparison.fields.find((field) => field.manifestJsonPath === 'additionalFiles[0]').classification, 'MISMATCH');
+  assert.equal(result.preSubmitReady, false);
+});
+
+test('pre-submit does not treat a pre-existing same-size Portal row as proof of this upload operation', async () => {
+  const demo = { role: 'example-project', fileName: 'Demo_UE5.8.zip', bundleRelativePath: 'additional-files/Demo_UE5.8.zip', engineVersion: '5.8', sizeBytes: 2048, sha256: 'c'.repeat(64), sourceRepository: 'metyatech/Demo', sourceCommit: 'd'.repeat(40) };
+  const manifest = makeManifest({ additionalFiles: [demo] });
+  const { result } = await scenario({ manifest, preSubmit: true, state: {
+    additionalFilesFormat: true,
+    additionalFileRows: [{ role: 'Additional File', fileName: 'old_demo.zip', sizeBytes: demo.sizeBytes }],
+  } });
+  assert.equal(result.comparison.fields.find((field) => field.manifestJsonPath === 'additionalFiles[0]').classification, 'MISMATCH');
+  assert.equal(result.preSubmitReady, false);
 });
 
 test('pre-submit rejects non-Draft listings before reloading', async () => {

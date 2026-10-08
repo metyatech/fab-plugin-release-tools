@@ -246,6 +246,14 @@ export async function loadSubmissionManifest(manifestPath, { requirePortalReady 
     });
   }
 
+  const verifiedAdditionalFiles = [];
+  for (const [index, item] of (manifest.additionalFiles ?? []).entries()) {
+    const sha256 = requireSha256(item.sha256, `additionalFiles[${index}].sha256`);
+    const verified = await verifyBundleFile(bundleRoot, item.bundleRelativePath, sha256, `additionalFiles[${index}].bundleRelativePath`);
+    if (verified.bytes !== item.sizeBytes) fail(`additionalFiles[${index}].sizeBytes does not match the local file.`);
+    verifiedAdditionalFiles.push({ ...item, ...verified, sha256 });
+  }
+
   return {
     manifest,
     manifestPath: resolvedManifestPath,
@@ -255,6 +263,7 @@ export async function loadSubmissionManifest(manifestPath, { requirePortalReady 
     technicalInformationText,
     mediaFiles,
     packageFiles,
+    verifiedAdditionalFiles,
   };
 }
 

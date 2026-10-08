@@ -1,5 +1,6 @@
 import { chromium } from 'playwright-core';
 import { compareManifest, summarizeComparison } from './comparison.mjs';
+import { deriveReadiness } from './portal-contract.mjs';
 import { createStdinManualInteraction, DEFAULT_MANUAL_CHALLENGE_MAX_CYCLES, normalizeManualInteractionDecision } from './manual-handoff.mjs';
 import { installNetworkGuard } from './network-guard.mjs';
 import { dangerousActionCandidates } from './locators.mjs';
@@ -499,13 +500,14 @@ function comparisonEvidenceRank(field) {
 function mergeComparisonField(mainField, formatField) {
   if (!formatField) return mainField;
   const path = mainField.manifestJsonPath;
-  const formatOwned = FORMAT_COMPARISON_FIELDS.has(path) || /^packages\[\d+\]\.projectFileLink$/.test(path);
+  const additionalFile = /^additionalFiles\[\d+\]$/.test(path);
+  const formatOwned = FORMAT_COMPARISON_FIELDS.has(path) || /^packages\[\d+\]\.projectFileLink$/.test(path) || additionalFile;
   const formatReadEvidence = FORMAT_READ_EVIDENCE_FIELDS.has(path);
   if (!formatOwned && !formatReadEvidence) return mainField;
   const mainRank = comparisonEvidenceRank(mainField);
   const formatRank = comparisonEvidenceRank(formatField);
-  if (formatRank > mainRank) return formatField;
-  return mainField;
+  const selected = formatRank > mainRank ? formatField : mainField;
+  return additionalFile ? { ...selected, view: 'format' } : selected;
 }
 
 export function mergeListingAndFormatComparisons(listingComparison, formatComparison, manifest) {
@@ -520,16 +522,16 @@ export function mergeListingAndFormatComparisons(listingComparison, formatCompar
   return summarizeComparison(fields);
 }
 
-export async function collectPortalComparison(page, manifestInfo, { guard, origin = 'https://www.fab.com' } = {}) {
+export async function collectPortalComparison(page, manifestInfo, { guard, origin = 'https://www.fab.com', uploadEvidence = null } = {}) {
   const actions = [];
   const manifest = manifestInfo.manifest;
   await ensureListingView(page, manifest, origin, guard);
   actions.push(...await prepareReadOnlySections(page, guard));
-  const listingComparison = await compareManifest(page, manifestInfo, { view: 'listing' });
+  const listingComparison = await compareManifest(page, manifestInfo, { view: 'listing', uploadEvidence });
   await ensureFormatView(page, manifest, origin, guard);
   actions.push('opened Unreal Engine format section');
   actions.push(...await prepareReadOnlySections(page, guard));
-  const formatComparison = await compareManifest(page, manifestInfo, { view: 'format' });
+  const formatComparison = await compareManifest(page, manifestInfo, { view: 'format', uploadEvidence });
   return { comparison: mergeListingAndFormatComparisons(listingComparison, formatComparison, manifest), readOnlyUiActions: actions };
 }
 
@@ -574,7 +576,7 @@ async function readDangerousActions(page) {
   return found;
 }
 
-export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'verify', preSubmit = false, origin = 'https://www.fab.com', page: injectedPage = null, context: injectedContext = null, manualInteraction = null, maxManualChallengeCycles = DEFAULT_MANUAL_CHALLENGE_MAX_CYCLES }) {
+export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'verify', preSubmit = false, uploadEvidence = null, origin = 'https://www.fab.com', page: injectedPage = null, context: injectedContext = null, manualInteraction = null, maxManualChallengeCycles = DEFAULT_MANUAL_CHALLENGE_MAX_CYCLES }) {
   if (mode !== 'verify') throw new Error('Fab Portal automation supports verify mode only.');
   if (preSubmit && !manifestInfo.manifest.portalReady) throw new Error('Pre-submit verification requires manifest.portalReady=true.');
   let browser = null;
@@ -604,6 +606,13 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     observationSource: 'cdp',
     observationSha256: null,
     portalReady: manifestInfo.manifest.portalReady,
+    artifactReady: manifestInfo.manifest.portalReady === true,
+    portalInputsReady: manifestInfo.manifest.portalReady === true,
+    portalVerified: false,
+    humanVisualAcceptance: 'UNKNOWN',
+    readyToSubmit: false,
+    submitted: false,
+    descriptionPreview: { state: 'UNKNOWN', blocker: false, note: 'Portal Preview requires human or Computer Use visual verification evidence.' },
     preSubmitGate: preSubmit,
     preSubmitReady: false,
     comparison: null,
@@ -728,7 +737,7 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
       manualInteraction: interaction,
       maxCycles: maxManualChallengeCycles,
       diagnostics: result,
-      action: (candidatePage) => collectPortalComparison(candidatePage, manifestInfo, { guard, origin }),
+      action: (candidatePage) => collectPortalComparison(candidatePage, manifestInfo, { guard, origin, uploadEvidence }),
     });
     page = collectedResult.page;
     const collected = collectedResult.value;
@@ -737,6 +746,7 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
     result.portalMismatchCount = result.comparison.mismatchCount;
     result.portalUnresolvedCount = result.comparison.unresolvedCritical.length;
     result.portalVerificationComplete = result.portalMismatchCount === 0 && result.portalUnresolvedCount === 0;
+    result.portalVerified = result.portalVerificationComplete;
     if (result.comparison.mismatchCount > 0) result.blockers.push(`${result.comparison.mismatchCount} manifest mismatch(es).`);
     if (preSubmit) {
       if (result.portalUnresolvedCount > 0) result.blockers.push(`Pre-submit verification has unresolved fields: ${result.comparison.unresolvedCritical.join(', ')}.`);
@@ -748,6 +758,13 @@ export async function runPortalAutomation({ manifestInfo, cdpEndpoint, mode = 'v
         && result.portalMismatchCount === 0
         && result.portalUnresolvedCount === 0
         && observedMutations === 0;
+      Object.assign(result, deriveReadiness({
+        artifactReady: result.artifactReady,
+        portalInputsReady: result.portalInputsReady,
+        portalVerified: result.portalVerified && observedMutations === 0,
+        humanVisualAcceptance: result.humanVisualAcceptance,
+        submitted: false,
+      }));
       if (!result.preSubmitReady && result.blockers.length === 0) result.blockers.push('Pre-submit verification did not satisfy every live readiness condition.');
     }
     result.result = result.blockers.length === 0 && (!preSubmit || result.preSubmitReady) ? 'PASS' : 'FAIL';

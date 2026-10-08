@@ -3,12 +3,13 @@ import { compareDescriptionLinks } from './description-links.mjs';
 import { portalFieldLifecycle } from './lifecycle.mjs';
 import { isFormatView } from './view-detection.mjs';
 import { compareRichText, readRichTextFromEditor, richTextToPlainText } from './rich-text.mjs';
+import { assessRecordedDescriptionPreview, compareTechnicalInformationItems, verifyAdditionalFileIdentity } from './portal-contract.mjs';
 
 export const COMPARISON_STATES = ['MATCH', 'MISMATCH', 'NOT_VISIBLE', 'NOT_DISCOVERED', 'NOT_APPLICABLE'];
 const FORMAT_OWNED_FIELDS = new Set(['engineVersions', 'platforms', 'technicalInformationFile', 'additionalInformationRichText', 'media']);
 
 export function fieldView(field) {
-  return FORMAT_OWNED_FIELDS.has(field) || /^packages\[\d+\]\.projectFileLink$/.test(field) ? 'format' : 'listing';
+  return FORMAT_OWNED_FIELDS.has(field) || /^packages\[\d+\]\.projectFileLink$/.test(field) || /^additionalFiles\[\d+\]$/.test(field) ? 'format' : 'listing';
 }
 
 function writeTargetFor(field, view, target) {
@@ -208,6 +209,22 @@ function semanticState(current, desired, { rich = false } = {}) {
   return left === right ? 'MATCH' : 'MISMATCH';
 }
 
+function compareTechnicalRichText(actual, expected) {
+  const exactState = compareRichText(actual, expected);
+  if (exactState === 'MATCH') return exactState;
+  const itemComparison = compareTechnicalInformationItems(richTextToPlainText(expected), richTextToPlainText(actual));
+  if (!itemComparison.submissionReady || itemComparison.counts.PORTAL_ONLY === 0) return exactState;
+  const portalOnlyKeys = new Set(itemComparison.portalOnlyKeys);
+  const canonicalBlocks = actual.blocks.filter((block) => {
+    const lines = richTextToPlainText({ blocks: [block] }).split(/\r?\n/).map((line) => normalizeText(line)).filter(Boolean);
+    return !(lines.length > 0 && lines.every((line) => {
+      const separator = line.indexOf(':');
+      return separator > 0 && portalOnlyKeys.has(normalizeText(line.slice(0, separator)).toLocaleLowerCase());
+    }));
+  });
+  return compareRichText({ blocks: canonicalBlocks }, expected);
+}
+
 async function compareRichTextField(page, field, desired, labelName, view, { visibleText = null } = {}) {
   if (fieldView(field) !== view) return lifecycleField(field, labelName, desired, 'NOT_APPLICABLE', `${labelName} is owned by the ${fieldView(field)} view.`, view);
   const editor = await visibleContentEditor(page, field);
@@ -219,7 +236,9 @@ async function compareRichTextField(page, field, desired, labelName, view, { vis
     return fieldResult({ manifestJsonPath: field, portalLabel: labelName, desired, current: null, state: 'MISMATCH', resolved: contentEditorResolution(field), editableControlAvailable: false, notes: error.message, writeTarget: null });
   }
   const textMatches = visibleText === null || normalizeRichText(actual.visibleText) === normalizeRichText(visibleText);
-  const state = textMatches ? compareRichText(actual.model, desired) : 'MISMATCH';
+  const state = field === 'additionalInformationRichText'
+    ? compareTechnicalRichText(actual.model, desired)
+    : textMatches ? compareRichText(actual.model, desired) : 'MISMATCH';
   return fieldResult({ manifestJsonPath: field, portalLabel: labelName, desired, current: actual.model, state, resolved: contentEditorResolution(field), editableControlAvailable: false, notes: textMatches ? 'Semantic block and inline marks were read from the persisted contenteditable DOM.' : 'Semantic formatting was read, but its buyer-visible text does not match the source description.', writeTarget: null });
 }
 
@@ -470,15 +489,32 @@ async function compareTechnicalInformation(page, manifestInfo, view = 'listing')
       state = 'MISMATCH';
     }
   }
+  const itemComparison = compareTechnicalInformationItems(desired, current);
+  state = itemComparison.submissionReady ? 'MATCH' : 'MISMATCH';
   const editable = await editor.locator.isEditable().catch(() => false);
   const disabled = await editor.locator.isDisabled().catch(() => false);
   const writeTarget = editable && !disabled
     ? writeTargetFor('technicalInformationFile', view, { strategy: 'contenteditable', expression: 'page.locator(\'[contenteditable="true"]\')', field: 'technicalInformationFile', locator: { strategy: 'contenteditable', selector: '[contenteditable="true"]' } })
     : null;
-  return fieldResult({ manifestJsonPath: 'technicalInformationFile', portalLabel: 'Technical Information', desired, current, state, resolved: contentEditorResolution('additionalInformationRichText'), editableControlAvailable: editable && !disabled, notes: 'Read from the field-scoped Technical details contenteditable editor; the manifest file path remains provenance only.', writeTarget });
+  const result = fieldResult({ manifestJsonPath: 'technicalInformationFile', portalLabel: 'Technical Information', desired, current, state, resolved: contentEditorResolution('additionalInformationRichText'), editableControlAvailable: editable && !disabled, notes: 'Read from the field-scoped Technical details contenteditable editor; portal-only items are informational, while missing or stale canonical items block readiness.', writeTarget });
+  result.itemComparison = itemComparison;
+  return result;
 }
 
-export async function compareManifest(page, manifestInfo, { view = 'listing' } = {}) {
+async function portalFileSizeBytes(row, text) {
+  const rawBytes = await row.getAttribute('data-size-bytes').catch(() => null);
+  const exactBytes = rawBytes === null ? null : Number(rawBytes);
+  if (exactBytes !== null && Number.isSafeInteger(exactBytes) && exactBytes >= 0) return exactBytes;
+  const exactLabel = /\b([\d,]+)\s+bytes?\b/i.exec(text);
+  if (exactLabel) return Number(exactLabel[1].replaceAll(',', ''));
+  const display = /\b(\d+(?:\.\d+)?)\s*(B|KB|KIB|MB|MIB|GB|GIB)\b/i.exec(text);
+  if (!display) return null;
+  const multiplier = { B: 1, KB: 1_000, KIB: 1_024, MB: 1_000_000, MIB: 1_048_576, GB: 1_000_000_000, GIB: 1_073_741_824 }[display[2].toUpperCase()];
+  const bytes = Number(display[1]) * multiplier;
+  return Number.isSafeInteger(bytes) ? bytes : null;
+}
+
+export async function compareManifest(page, manifestInfo, { view = 'listing', uploadEvidence = null } = {}) {
   const { manifest } = manifestInfo;
   const fields = [];
   fields.push(await compareTextField(page, manifest, 'title', 'Title *', { view }));
@@ -581,6 +617,48 @@ export async function compareManifest(page, manifestInfo, { view = 'listing' } =
   fields.push(await compareTechnicalInformation(page, manifestInfo, view));
   fields.push(await compareRichTextField(page, 'additionalInformationRichText', manifest.additionalInformationRichText, 'Additional information', view, { visibleText: manifestInfo.technicalInformationText }));
   fields.push(await compareMedia(page, manifest, view));
+  for (const [index, file] of (manifest.additionalFiles ?? []).entries()) {
+    const manifestJsonPath = `additionalFiles[${index}]`;
+    const verifiedLocal = manifestInfo.verifiedAdditionalFiles?.[index] ?? null;
+    const uploadRecord = uploadEvidence?.additionalFiles?.find((record) => record.fileName === file.fileName) ?? null;
+    const uploadEvidenceMatches = Boolean(uploadEvidence?.listingId === manifest.listingId
+      && uploadEvidence?.manifestSha256 === manifestInfo.manifestSha256
+      && uploadRecord?.uploadCompleted === true
+      && typeof uploadRecord.completedAtUtc === 'string'
+      && /Z$/.test(uploadRecord.completedAtUtc)
+      && !Number.isNaN(Date.parse(uploadRecord.completedAtUtc))
+      && uploadRecord.localSha256?.toLowerCase() === verifiedLocal?.sha256?.toLowerCase()
+      && uploadRecord.sizeBytes === verifiedLocal?.bytes);
+    const section = page.getByRole('region', { name: /^Additional files$/i });
+    const sectionCount = await section.count();
+    const sectionVisible = sectionCount === 1 && await section.isVisible().catch(() => false);
+    const rows = section.getByRole('listitem');
+    const candidates = [];
+    for (let rowIndex = 0; rowIndex < await rows.count(); rowIndex += 1) {
+      const row = rows.nth(rowIndex);
+      const name = normalizeText(await row.textContent().catch(() => ''));
+      const accessibleName = normalizeText(await row.getAttribute('aria-label').catch(() => ''));
+      const role = await row.getAttribute('data-fab-role').catch(() => null)
+        ?? (/\bAdditional File\b/i.test(`${accessibleName} ${name}`) ? 'Additional File' : null);
+      candidates.push({ role, size: await portalFileSizeBytes(row, `${accessibleName} ${name}`), name: accessibleName || name });
+    }
+    const matching = candidates.filter((candidate) => candidate.size === file.sizeBytes);
+    const evidence = matching.length === 1 ? verifyAdditionalFileIdentity({
+      format: sectionVisible ? 'Additional files' : null,
+      role: matching[0].role,
+      uploadCompleted: uploadEvidenceMatches && sectionVisible && matching.length === 1,
+      expectedSizeBytes: file.sizeBytes,
+      portalSizeBytes: matching[0].size,
+      localSha256: verifiedLocal?.sha256 ?? null,
+      expectedSha256: file.sha256,
+      sourceFileName: file.fileName,
+      displayFileName: matching[0].name,
+    }) : null;
+    const state = !evidence || evidence.state !== 'PASS' ? (sectionVisible ? 'MISMATCH' : 'NOT_DISCOVERED') : 'MATCH';
+    const result = fieldResult({ manifestJsonPath, portalLabel: 'Additional File', desired: file, current: matching.length === 1 ? matching[0] : null, state, resolved: sectionVisible ? { metadata: { strategy: 'semantic-region', expression: 'Additional files region with role, byte-size, and upload evidence', matchCount: sectionCount, unique: true, confidence: 'medium' } } : null, editableControlAvailable: false, notes: evidence?.identityBasis ?? 'Expected artifact upload evidence is missing or does not match the verified local hash, or the Portal format/role/size evidence is ambiguous.', writeTarget: null });
+    result.identityEvidence = evidence;
+    fields.push(result);
+  }
   for (const [index, pkg] of manifest.packages.entries()) {
     const field = `packages[${index}].projectFileLink`;
     if (pkg.projectFileLink === null) {
@@ -739,15 +817,51 @@ export function compareObservation(manifestInfo, observation) {
     observationLifecycleField({ entry: entries.get('activation'), manifestJsonPath: 'activation', portalLabel: 'Activation', desired: manifest.activation, view: 'listing', note: 'Activation is selected after Submit for review and is not a Draft-owned field.' }),
     field('documentationUrl', 'Documentation', manifest.documentationUrl, (current, expected) => compareObservationScalar(current, expected)),
     derivedSupportObservation(manifest, entries),
-    field('technicalInformationFile', 'Technical information', manifestInfo.technicalInformationText, (current, expected) => compareObservationScalar(current, expected, { rich: true }), 'The observed value is the visible technical text; the manifest path is provenance.'),
-    field('additionalInformationRichText', 'Additional information formatting', manifest.additionalInformationRichText, (current, expected) => compareRichText(current, expected)),
+    field('technicalInformationFile', 'Technical information', manifestInfo.technicalInformationText, (current, expected) => compareTechnicalInformationItems(expected, current).submissionReady ? 'MATCH' : 'MISMATCH', 'The observed value is compared item by item; Portal-only items are informational.'),
+    field('additionalInformationRichText', 'Additional information formatting', manifest.additionalInformationRichText, (current, expected) => {
+      return compareTechnicalRichText(current, expected);
+    }),
     field('media', 'Media', manifest.media.map((item) => ({ order: item.order, role: item.role })), (current) => compareObservationMedia(current, manifest.media), 'Portal observation covers visible count/order/roles only; local approval owns source-byte hashes.'),
   ];
+  for (const [index, expected] of (manifest.additionalFiles ?? []).entries()) {
+    const manifestJsonPath = `additionalFiles[${index}]`;
+    const verifiedLocal = manifestInfo.verifiedAdditionalFiles?.[index] ?? null;
+    const additionalFileField = field(manifestJsonPath, 'Additional File', expected, (current, item) => verifiedLocal && verifyAdditionalFileIdentity({
+      format: current?.format,
+      role: current?.role,
+      uploadCompleted: current?.uploadCompleted,
+      expectedSizeBytes: item.sizeBytes,
+      portalSizeBytes: current?.sizeBytes,
+      localSha256: verifiedLocal.sha256,
+      expectedSha256: item.sha256,
+      portalSha256: current?.portalSha256,
+      sourceFileName: item.fileName,
+      displayFileName: current?.displayFileName,
+    }).state === 'PASS' ? 'MATCH' : 'MISMATCH', 'Identity uses format/role, upload result, byte size, and the exact locally verified source hash; display-name normalization is informational.');
+    const observed = entries.get(manifestJsonPath)?.value;
+    additionalFileField.identityEvidence = observed ? verifyAdditionalFileIdentity({
+      format: observed.format,
+      role: observed.role,
+      uploadCompleted: observed.uploadCompleted,
+      expectedSizeBytes: expected.sizeBytes,
+      portalSizeBytes: observed.sizeBytes,
+      localSha256: verifiedLocal?.sha256 ?? null,
+      expectedSha256: expected.sha256,
+      portalSha256: observed.portalSha256,
+      sourceFileName: expected.fileName,
+      displayFileName: observed.displayFileName,
+    }) : null;
+    fields.push(additionalFileField);
+  }
+  const technicalField = fields.find((item) => item.manifestJsonPath === 'technicalInformationFile');
+  technicalField.itemComparison = compareTechnicalInformationItems(manifestInfo.technicalInformationText, technicalField.currentVisibleValue);
   for (const [index, pkg] of manifest.packages.entries()) {
     const manifestJsonPath = `packages[${index}].projectFileLink`;
     fields.push(field(manifestJsonPath, `Project file link (${pkg.engineVersion})`, pkg.projectFileLink, (current, expected) => expected === null ? 'NOT_APPLICABLE' : compareObservationScalar(current, expected)));
   }
-  return summarizeComparison(fields);
+  const result = summarizeComparison(fields);
+  result.descriptionPreview = assessRecordedDescriptionPreview(observation.descriptionPreview);
+  return result;
 }
 
 export { compareDescriptionLinks, readLocator, fieldResult };

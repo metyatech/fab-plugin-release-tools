@@ -43,21 +43,41 @@ test('manifest loader exposes Technical Information file content separately', as
 
 test('manifest loader type-checks optional Additional Files without requiring portal upload', async () => {
   const fixture = await validManifestBundle();
+  const { mkdir } = await import('node:fs/promises');
+  const additionalFile = Buffer.from('example-project-archive');
+  await mkdir(path.join(path.dirname(fixture.manifestPath), 'additional-files'), { recursive: true });
+  await writeFile(path.join(path.dirname(fixture.manifestPath), 'additional-files', 'FindInMaterialsDemo_UE5.8.zip'), additionalFile);
   fixture.manifest.additionalFiles = [{
     role: 'example-project',
     fileName: 'FindInMaterialsDemo_UE5.8.zip',
     bundleRelativePath: 'additional-files/FindInMaterialsDemo_UE5.8.zip',
     engineVersion: '5.8',
-    sizeBytes: 123,
-    sha256: 'c'.repeat(64),
+    sizeBytes: additionalFile.length,
+    sha256: createHash('sha256').update(additionalFile).digest('hex'),
     sourceRepository: 'metyatech/FindInMaterialsDemo',
     sourceCommit: 'd'.repeat(40),
   }];
   await writeFile(fixture.manifestPath, JSON.stringify(fixture.manifest));
   const loaded = await loadSubmissionManifest(fixture.manifestPath);
   assert.deepEqual(loaded.manifest.additionalFiles, fixture.manifest.additionalFiles);
+  assert.equal(loaded.verifiedAdditionalFiles[0].bytes, additionalFile.length);
+  assert.equal(loaded.verifiedAdditionalFiles[0].sha256, fixture.manifest.additionalFiles[0].sha256);
   assert.equal(loaded.mediaFiles.length, 1);
   assert.equal(loaded.packageFiles.length, 1);
+});
+
+test('manifest loader rejects a changed Additional File bundle artifact', async () => {
+  const fixture = await validManifestBundle();
+  const { mkdir } = await import('node:fs/promises');
+  const actual = Buffer.from('changed archive');
+  await mkdir(path.join(path.dirname(fixture.manifestPath), 'additional-files'), { recursive: true });
+  await writeFile(path.join(path.dirname(fixture.manifestPath), 'additional-files', 'demo.zip'), actual);
+  fixture.manifest.additionalFiles = [{
+    role: 'example-project', fileName: 'demo.zip', bundleRelativePath: 'additional-files/demo.zip', engineVersion: '5.8',
+    sizeBytes: actual.length, sha256: 'c'.repeat(64), sourceRepository: 'metyatech/Demo', sourceCommit: 'd'.repeat(40),
+  }];
+  await writeFile(fixture.manifestPath, JSON.stringify(fixture.manifest));
+  await assert.rejects(() => loadSubmissionManifest(fixture.manifestPath), /additionalFiles\[0\]\.bundleRelativePath SHA-256/);
 });
 
 test('manifest loader rejects malformed optional Additional Files metadata', async () => {

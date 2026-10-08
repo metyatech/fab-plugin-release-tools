@@ -11,7 +11,7 @@ const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const OBSERVATION_STATES = new Set(['OBSERVED', 'NOT_VISIBLE', 'NOT_DISCOVERED', 'NOT_APPLICABLE']);
 const SOURCES = new Set(['interactive-browser', 'cdp']);
 const VIEWS = new Set(['listing', 'format']);
-const ROOT_KEYS = new Set(['schemaVersion', 'source', 'manifestSha256', 'observedAtUtc', 'listingId', 'listingTitle', 'listingStatus', 'fields']);
+const ROOT_KEYS = new Set(['schemaVersion', 'source', 'manifestSha256', 'observedAtUtc', 'listingId', 'listingTitle', 'listingStatus', 'fields', 'descriptionPreview']);
 const FIELD_KEYS = new Set(['manifestJsonPath', 'state', 'value', 'view', 'note']);
 const BASE_PATHS = [
   'title', 'shortDescription', 'longDescription', 'productType', 'category', 'subcategory', 'tags',
@@ -38,7 +38,7 @@ function assertExactKeys(value, allowed, field) {
 
 function expectedPaths(manifest) {
   const paths = BASE_PATHS.filter((fieldPath) => fieldPath !== 'descriptionRichText' || manifest.descriptionRichText !== undefined);
-  return [...paths, ...manifest.packages.map((_item, index) => `packages[${index}].projectFileLink`)].sort();
+  return [...paths, ...manifest.packages.map((_item, index) => `packages[${index}].projectFileLink`), ...(manifest.additionalFiles ?? []).map((_item, index) => `additionalFiles[${index}]`)].sort();
 }
 
 function requireNonBlankString(value, field) {
@@ -119,6 +119,20 @@ function validateObservedValue(fieldPath, value, manifest) {
     if (manifest.packages[index].projectFileLink === null) fail(`${fieldPath} must be NOT_APPLICABLE because the manifest link is null.`);
     return requireNonBlankString(value, `${fieldPath}.value`);
   }
+  if (fieldPath.startsWith('additionalFiles[')) {
+    const match = /^additionalFiles\[(\d+)\]$/.exec(fieldPath);
+    const expected = manifest.additionalFiles[Number(match[1])];
+    if (!isRecord(value)) fail(`${fieldPath}.value must be an object.`);
+    assertExactKeys(value, new Set(['format', 'role', 'uploadCompleted', 'sizeBytes', 'localSha256', 'portalSha256', 'displayFileName']), `${fieldPath}.value`);
+    if (typeof value.format !== 'string' || typeof value.role !== 'string') fail(`${fieldPath}.value requires format and role labels.`);
+    if (typeof value.uploadCompleted !== 'boolean') fail(`${fieldPath}.value.uploadCompleted must be boolean.`);
+    if (!Number.isSafeInteger(value.sizeBytes) || value.sizeBytes < 0) fail(`${fieldPath}.value.sizeBytes must be a non-negative integer.`);
+    if (typeof value.localSha256 !== 'string' || !SHA256_PATTERN.test(value.localSha256)) fail(`${fieldPath}.value.localSha256 must be a SHA-256 hexadecimal value.`);
+    if (value.portalSha256 !== null && value.portalSha256 !== undefined && (typeof value.portalSha256 !== 'string' || !SHA256_PATTERN.test(value.portalSha256))) fail(`${fieldPath}.value.portalSha256 must be null or a SHA-256 hexadecimal value.`);
+    requireNonBlankString(value.displayFileName, `${fieldPath}.value.displayFileName`);
+    if (!expected) fail(`${fieldPath} does not have a matching manifest Additional File.`);
+    return;
+  }
   requireNonBlankString(value, `${fieldPath}.value`);
 }
 
@@ -135,6 +149,22 @@ function validateObservation(observation, manifestInfo) {
   requireNonBlankString(observation.listingTitle, 'listingTitle');
   if (normalizeText(observation.listingTitle) !== normalizeText(manifestInfo.manifest.title)) fail('listingTitle does not match the manifest title after normalization.');
   requireNonBlankString(observation.listingStatus, 'listingStatus');
+  if (observation.descriptionPreview !== undefined) {
+    const preview = observation.descriptionPreview;
+    if (!isRecord(preview)) fail('descriptionPreview must be an object.');
+    const keys = new Set(['evidenceSource', 'state', 'paragraphsDistinct', 'unorderedListsRendered', 'orderedListsRendered', 'queryExamplesDistinct', 'headingsDistinct', 'linksCorrect', 'styleLimitation', 'note']);
+    assertExactKeys(preview, keys, 'descriptionPreview');
+    if (!['human', 'computer-use'].includes(preview.evidenceSource)) fail('descriptionPreview.evidenceSource must be human or computer-use.');
+    if (!['PASS', 'PASS_WITH_PLATFORM_STYLE_LIMITATION', 'FAIL'].includes(preview.state)) fail('descriptionPreview.state is invalid.');
+    for (const check of ['paragraphsDistinct', 'unorderedListsRendered', 'orderedListsRendered', 'queryExamplesDistinct', 'headingsDistinct', 'linksCorrect', 'styleLimitation']) {
+      if (typeof preview[check] !== 'boolean') fail(`descriptionPreview.${check} must be boolean.`);
+    }
+    requireNonBlankString(preview.note, 'descriptionPreview.note');
+    const allStructurePass = ['paragraphsDistinct', 'unorderedListsRendered', 'orderedListsRendered', 'queryExamplesDistinct', 'headingsDistinct', 'linksCorrect'].every((key) => preview[key] === true);
+    if (preview.state === 'PASS' && (!allStructurePass || preview.styleLimitation)) fail('descriptionPreview PASS requires all structure checks and no platform style limitation.');
+    if (preview.state === 'PASS_WITH_PLATFORM_STYLE_LIMITATION' && (!allStructurePass || !preview.styleLimitation)) fail('descriptionPreview PASS_WITH_PLATFORM_STYLE_LIMITATION requires preserved structure and an explicit style limitation.');
+    if (preview.state === 'FAIL' && allStructurePass) fail('descriptionPreview FAIL requires at least one failed structure or content check.');
+  }
   if (!Array.isArray(observation.fields) || observation.fields.length === 0) fail('fields must be a non-empty array.');
   const allowedPaths = new Set(expectedPaths(manifestInfo.manifest));
   const seen = new Set();

@@ -49,6 +49,36 @@ test('pre-submit CLI path requires portalReady and opts into the live gate', asy
   assert.equal(received.preSubmit, true);
 });
 
+test('pre-submit with an Additional File requires hash-bound completed-upload evidence', async () => {
+  const withFile = {
+    ...manifestInfo,
+    manifest: { ...manifestInfo.manifest, additionalFiles: [{ fileName: 'Demo.zip' }] },
+    verifiedAdditionalFiles: [{ fileName: 'Demo.zip', sha256: 'b'.repeat(64), bytes: 2048 }],
+  };
+  await assert.rejects(() => main(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', '--pre-submit'], {
+    loadManifest: async () => withFile,
+  }), /requires --additional-file-upload-evidence/);
+
+  let receivedEvidence;
+  const code = await main(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', '--pre-submit', '--additional-file-upload-evidence', 'upload.json', '--json'], {
+    loadManifest: async () => withFile,
+    loadUploadEvidence: async (filePath, loadedManifest) => { receivedEvidence = { filePath, loadedManifest }; return { verified: true }; },
+    createDirectory: async () => 'fixture-artifact-directory',
+    run: async (options) => ({ result: 'PASS', mode: options.mode, listingId: options.manifestInfo.manifest.listingId, listingTitle: options.manifestInfo.manifest.title, listingStatus: 'Draft', writeInteractionsPerformed: 0, saveInvoked: false, submitInvoked: false, comparison: null, network: {}, blockers: [] }),
+    writeReport: async () => undefined,
+  });
+  assert.equal(code, 0);
+  assert.equal(receivedEvidence.filePath, 'upload.json');
+  assert.equal(receivedEvidence.loadedManifest, withFile);
+});
+
+test('upload evidence option is only accepted for pre-submit verification', () => {
+  assert.throws(
+    () => parseArgs(['--manifest', 'manifest.json', '--cdp-endpoint', 'http://127.0.0.1:1', '--additional-file-upload-evidence', 'upload.json']),
+    /valid only with --pre-submit/,
+  );
+});
+
 test('pre-submit CLI rejects Observation transport before loading any artifact', async () => {
   await assert.rejects(
     () => main(['--manifest', 'manifest.json', '--observation', 'observation.json', '--pre-submit'], {}),

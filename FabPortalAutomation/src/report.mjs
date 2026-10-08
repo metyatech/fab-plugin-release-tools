@@ -32,6 +32,9 @@ function markdown(result, comparison, after, network) {
 - Portal mismatch count: ${result.portalMismatchCount ?? comparison?.mismatchCount ?? 0}
 - Portal unresolved count: ${result.portalUnresolvedCount ?? comparison?.unresolvedCritical?.length ?? 0}
 - Portal verification complete: ${result.portalVerificationComplete ?? false}
+- Artifact ready / Portal inputs ready / Portal verified: ${result.artifactReady ?? false} / ${result.portalInputsReady ?? false} / ${result.portalVerified ?? false}
+- Human visual acceptance / ready to submit / submitted: ${result.humanVisualAcceptance ?? 'UNKNOWN'} / ${result.readyToSubmit ?? false} / ${result.submitted ?? false}
+- Description Preview: ${result.descriptionPreview?.state ?? 'UNKNOWN'}
 - Legacy write diagnostics: interactions=${result.writeInteractionsPerformed}; saveInvoked=${result.saveInvoked}; submitInvoked=${result.submitInvoked}; submitAccepted=${result.submitAccepted}; postSubmitStatus=${result.postSubmitStatus ?? 'null'}
 - Write ready: ${result.writeReady}
 - Write interactions: ${result.writeInteractionsPerformed}
@@ -84,6 +87,13 @@ export async function writeRunReport({ directory, result, comparison, comparison
     observationSource: result.observationSource ?? null,
     observationSha256: result.observationSha256 ?? null,
     portalReady: result.portalReady,
+    artifactReady: result.artifactReady ?? false,
+    portalInputsReady: result.portalInputsReady ?? false,
+    portalVerified: result.portalVerified ?? false,
+    humanVisualAcceptance: result.humanVisualAcceptance ?? 'UNKNOWN',
+    readyToSubmit: result.readyToSubmit ?? false,
+    submitted: result.submitted ?? false,
+    descriptionPreview: result.descriptionPreview ?? { state: 'UNKNOWN' },
     comparisonCounts: comparison?.counts ?? null,
     portalMismatchCount: result.portalMismatchCount ?? comparison?.mismatchCount ?? 0,
     portalUnresolvedCount: result.portalUnresolvedCount ?? comparison?.unresolvedCritical?.length ?? 0,

@@ -6,6 +6,8 @@ import { createStdinManualInteraction } from './manual-handoff.mjs';
 import { loadFabPortalObservation } from './observation.mjs';
 import { runPortalAutomation, runTagAvailabilityDiscovery } from './portal.mjs';
 import { createRunDirectory, writeRunReport } from './report.mjs';
+import { deriveReadiness } from './portal-contract.mjs';
+import { loadFabPortalUploadEvidence } from './upload-evidence.mjs';
 
 const VERSION = '0.8.3';
 
@@ -14,7 +16,7 @@ function help() {
 
 Usage:
   pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> (-CdpEndpoint <endpoint> | -ObservationPath <FabPortalObservation.json>)
-  pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> -CdpEndpoint <endpoint> -PreSubmit
+  pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> -CdpEndpoint <endpoint> -PreSubmit [-AdditionalFileUploadEvidencePath <FabPortalUploadEvidence.json>]
   pwsh .\\Invoke-FabPortalSubmission.ps1 -ManifestPath <FabPortalSubmission.json> -CdpEndpoint <endpoint> -TagAvailability -Tags <candidate...>
 
 Fab Portal automation supports verify mode only. Listing changes must be made
@@ -32,7 +34,8 @@ Acquisition modes (choose exactly one):
 Options:
   --manifest <path>       FabPortalSubmission.json (required)
   --output <directory>    Artifact root (default: ./artifacts)
-  --pre-submit            Require live CDP, reload the exact Draft, and prove persisted submit readiness
+  --pre-submit            Require live CDP, reload the exact Draft, and verify persisted Portal fields
+  --additional-file-upload-evidence <path>  Hash-bound record of completed Additional File uploads
   --tag-availability      Read current seller-side tag selector options without selecting any option
   --tag <candidate>       Candidate tag (repeat for tag-availability mode only)
   --json                  Emit one machine-readable result object
@@ -45,6 +48,8 @@ attach to a browser. It is audit evidence, not authoritative submit readiness.
 Pre-submit mode is live CDP only, requires portalReady and Draft status, hard
 reloads once before comparison, and reports preSubmitReady only when persisted
 DOM, comparison, unresolved fields, and the network mutation guard all pass.
+preSubmitReady is a machine Portal-field check, not readyToSubmit: Description
+Preview acceptance remains UNKNOWN until human or Computer Use evidence is recorded.
 Description text stays separate from structured
 descriptionLinks; when descriptionRichText is present, block and inline
 semantics must also match. FAQs and Additional information rich text are
@@ -65,6 +70,11 @@ function parseArgs(argv) {
     else if (arg === '--verbose') result.verbose = true;
     else if (arg === '--pre-submit') result.presubmit = true;
     else if (arg === '--tag-availability') result.tagavailability = true;
+    else if (arg === '--additional-file-upload-evidence') {
+      const value = argv[++index];
+      if (!value || value.startsWith('--')) throw new Error('--additional-file-upload-evidence requires a path.');
+      result.additionalfileuploadevidence = value;
+    }
     else if (arg === '--tag') {
       const value = argv[++index];
       if (!value || value.startsWith('--')) throw new Error('--tag requires a candidate value.');
@@ -84,6 +94,7 @@ function parseArgs(argv) {
     if (result.presubmit && (hasObservation || !hasCdp)) {
       throw new Error('Pre-submit verification requires live browser/CDP verification and cannot be satisfied by an observation artifact.');
     }
+    if (result.additionalfileuploadevidence && !result.presubmit) throw new Error('--additional-file-upload-evidence is valid only with --pre-submit.');
     if (result.tagavailability && (!hasCdp || hasObservation || result.presubmit)) {
       throw new Error('Tag availability discovery requires live browser/CDP verification and cannot use an observation artifact.');
     }
@@ -124,6 +135,17 @@ function observationResult(manifestInfo, observationInfo, comparison) {
   const blockers = [];
   if (comparison.mismatchCount > 0) blockers.push(`${comparison.mismatchCount} manifest mismatch(es).`);
   if (unresolved.length > 0) blockers.push(`Unresolved portal fields: ${unresolved.join(', ')}.`);
+  if (comparison.descriptionPreview?.blocker) blockers.push('Portal Preview Description structure failed visual verification.');
+  const humanVisualAcceptance = comparison.descriptionPreview?.state === 'PASS' || comparison.descriptionPreview?.state === 'PASS_WITH_PLATFORM_STYLE_LIMITATION'
+    ? 'PASS'
+    : comparison.descriptionPreview?.state === 'FAIL' ? 'FAIL' : 'UNKNOWN';
+  const readiness = deriveReadiness({
+    artifactReady: manifestInfo.manifest.portalReady === true,
+    portalInputsReady: manifestInfo.manifest.portalReady === true,
+    portalVerified: false,
+    humanVisualAcceptance,
+    submitted: false,
+  });
   return {
     schemaVersion: 1,
     mode: 'verify',
@@ -135,6 +157,8 @@ function observationResult(manifestInfo, observationInfo, comparison) {
     listingStatus: observation.listingStatus,
     manifestSha256: manifestInfo.manifestSha256,
     portalReady: manifestInfo.manifest.portalReady,
+    ...readiness,
+    descriptionPreview: comparison.descriptionPreview,
     preSubmitGate: false,
     preSubmitReady: false,
     portalWritesAllowed: false,
@@ -183,9 +207,15 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
   const run = dependencies.run ?? runPortalAutomation;
   const runTagDiscovery = dependencies.runTagDiscovery ?? runTagAvailabilityDiscovery;
   const loadObservation = dependencies.loadObservation ?? loadFabPortalObservation;
+  const loadUploadEvidence = dependencies.loadUploadEvidence ?? loadFabPortalUploadEvidence;
   const compareObservationValue = dependencies.compareObservation ?? compareObservation;
   const manualInteraction = args.observation ? null : dependencies.manualInteraction ?? createStdinManualInteraction();
   const manifestInfo = await loadManifest(args.manifest, { requirePortalReady: Boolean(args.presubmit) });
+  let uploadEvidence = null;
+  if (args.presubmit && (manifestInfo.manifest.additionalFiles?.length ?? 0) > 0) {
+    if (!args.additionalfileuploadevidence) throw new Error('Pre-submit verification for Additional Files requires --additional-file-upload-evidence tied to this manifest and the completed upload operation.');
+    uploadEvidence = await loadUploadEvidence(args.additionalfileuploadevidence, manifestInfo);
+  }
   const artifactDirectory = await createDirectory(args.output ?? path.resolve('artifacts'), manifestInfo.manifest.pluginName);
   let result;
   if (args.observation) {
@@ -194,7 +224,7 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
   } else if (args.tagavailability) {
     result = await runTagDiscovery({ manifestInfo, cdpEndpoint: args.cdpendpoint, tags: args.tags });
   } else {
-    result = await run({ manifestInfo, cdpEndpoint: args.cdpendpoint, manualInteraction, ...(args.presubmit ? { preSubmit: true } : {}) });
+    result = await run({ manifestInfo, cdpEndpoint: args.cdpendpoint, manualInteraction, ...(args.presubmit ? { preSubmit: true } : {}), ...(uploadEvidence ? { uploadEvidence } : {}) });
   }
   result.artifactDirectory = artifactDirectory;
   await writeReportFile({ directory: artifactDirectory, result, comparison: result.comparison, comparisonAfter: result.comparisonAfter, network: result.network, page: result.page });

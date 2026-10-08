@@ -22,6 +22,7 @@
     "listingId": { "$ref": "#/$defs/lowercaseUuid" },
     "listingTitle": { "type": "string", "minLength": 1 },
     "listingStatus": { "type": "string", "minLength": 1 },
+    "descriptionPreview": { "$ref": "#/$defs/descriptionPreview" },
     "fields": {
       "type": "array",
       "minItems": 1,
@@ -45,6 +46,23 @@
           "additionalProperties": { "$ref": "#/$defs/jsonValue" }
         }
       ]
+    },
+    "descriptionPreview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidenceSource", "state", "paragraphsDistinct", "unorderedListsRendered", "orderedListsRendered", "queryExamplesDistinct", "headingsDistinct", "linksCorrect", "styleLimitation", "note"],
+      "properties": {
+        "evidenceSource": { "enum": ["human", "computer-use"] },
+        "state": { "enum": ["PASS", "PASS_WITH_PLATFORM_STYLE_LIMITATION", "FAIL"] },
+        "paragraphsDistinct": { "type": "boolean" },
+        "unorderedListsRendered": { "type": "boolean" },
+        "orderedListsRendered": { "type": "boolean" },
+        "queryExamplesDistinct": { "type": "boolean" },
+        "headingsDistinct": { "type": "boolean" },
+        "linksCorrect": { "type": "boolean" },
+        "styleLimitation": { "type": "boolean" },
+        "note": { "type": "string", "minLength": 1, "maxLength": 500 }
+      }
     },
     "fieldObservation": {
       "type": "object",
@@ -87,6 +105,13 @@
         },
         {
           "if": {
+            "properties": { "manifestJsonPath": { "pattern": "^additionalFiles\\[[0-9]+\\]$" } },
+            "required": ["manifestJsonPath"]
+          },
+          "then": { "properties": { "value": { "$ref": "#/$defs/additionalFileObservation" } } }
+        },
+        {
+          "if": {
             "properties": { "manifestJsonPath": { "enum": ["descriptionRichText", "additionalInformationRichText"] } },
             "required": ["manifestJsonPath"]
           },
@@ -122,6 +147,20 @@
       "properties": {
         "question": { "type": "string", "minLength": 1, "pattern": "\\S" },
         "answer": { "type": "string", "minLength": 1, "pattern": "\\S" }
+      }
+    },
+    "additionalFileObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "role", "uploadCompleted", "sizeBytes", "localSha256", "displayFileName"],
+      "properties": {
+        "format": { "type": "string", "minLength": 1 },
+        "role": { "type": "string", "minLength": 1 },
+        "uploadCompleted": { "type": "boolean" },
+        "sizeBytes": { "type": "integer", "minimum": 0 },
+        "localSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "portalSha256": { "anyOf": [{ "type": "null" }, { "type": "string", "pattern": "^[0-9a-f]{64}$" }] },
+        "displayFileName": { "type": "string", "minLength": 1 }
       }
     },
     "richText": {

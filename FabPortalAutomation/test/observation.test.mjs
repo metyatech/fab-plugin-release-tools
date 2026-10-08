@@ -106,6 +106,36 @@ test('valid exact observation file loads with its raw SHA', async () => {
   assert.equal(loaded.observationSha256.length, 64);
 });
 
+test('Description Preview observation preserves platform-style limitation as a non-blocking pass', async () => {
+  const fixtureData = await loadFixture((observation) => {
+    observation.descriptionPreview = {
+      evidenceSource: 'computer-use', state: 'PASS_WITH_PLATFORM_STYLE_LIMITATION',
+      paragraphsDistinct: true, unorderedListsRendered: true, orderedListsRendered: true,
+      queryExamplesDistinct: true, headingsDistinct: true, linksCorrect: true,
+      styleLimitation: true, note: 'Heading and paragraph margins are compact in Fab Preview.',
+    };
+  });
+  const loaded = await loadFabPortalObservation(fixtureData.observationPath, fixtureData.manifestInfo);
+  const comparison = compareObservation(fixtureData.manifestInfo, loaded.observation);
+  assert.equal(comparison.descriptionPreview.state, 'PASS_WITH_PLATFORM_STYLE_LIMITATION');
+  assert.equal(comparison.descriptionPreview.blocker, false);
+});
+
+test('collapsed Description Preview observation is a blocking failure', async () => {
+  const fixtureData = await loadFixture((observation) => {
+    observation.descriptionPreview = {
+      evidenceSource: 'human', state: 'FAIL',
+      paragraphsDistinct: false, unorderedListsRendered: true, orderedListsRendered: true,
+      queryExamplesDistinct: false, headingsDistinct: true, linksCorrect: true,
+      styleLimitation: false, note: 'Preview collapsed paragraphs and query examples.',
+    };
+  });
+  const loaded = await loadFabPortalObservation(fixtureData.observationPath, fixtureData.manifestInfo);
+  const comparison = compareObservation(fixtureData.manifestInfo, loaded.observation);
+  assert.equal(comparison.descriptionPreview.state, 'FAIL');
+  assert.equal(comparison.descriptionPreview.blocker, true);
+});
+
 for (const [name, mutator, pattern] of [
   ['invalid schemaVersion', (value) => { value.schemaVersion = 2; }, /schemaVersion/],
   ['malformed listing ID', (value) => { value.listingId = 'NOT-A-UUID'; }, /listingId/],

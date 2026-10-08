@@ -103,7 +103,7 @@ export function fixtureState(manifest, overrides = {}) {
 export async function makeManifestInfo(manifest, { mediaFiles = [] } = {}) {
   const temp = await fsTemp();
   await writeFile(path.join(temp, 'manifest.json'), JSON.stringify(manifest));
-  return { manifest, manifestPath: path.join(temp, 'manifest.json'), manifestSha256: createHash('sha256').update(JSON.stringify(manifest)).digest('hex'), bundleRoot: temp, technicalInformationText: manifest.technicalInformationText ?? 'Fixture technical information', mediaFiles, packageFiles: [] };
+  return { manifest, manifestPath: path.join(temp, 'manifest.json'), manifestSha256: createHash('sha256').update(JSON.stringify(manifest)).digest('hex'), bundleRoot: temp, technicalInformationText: manifest.technicalInformationText ?? 'Fixture technical information', mediaFiles, packageFiles: [], verifiedAdditionalFiles: (manifest.additionalFiles ?? []).map((item) => ({ ...item, bytes: item.sizeBytes })) };
 }
 
 async function fsTemp() {
