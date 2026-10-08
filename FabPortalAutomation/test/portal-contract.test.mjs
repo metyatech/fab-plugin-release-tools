@@ -35,9 +35,9 @@ test('duplicate Portal Technical Information values cannot hide a stale canonica
 });
 
 test('Additional Files contract distinguishes the format route from Media Gallery', () => {
-  const mediaOnly = verifyAdditionalFileIdentity({ format: 'Media Gallery', role: 'Image', uploadCompleted: true, expectedSizeBytes: 100, portalSizeBytes: 100, localSha256: 'a'.repeat(64) });
+  const mediaOnly = verifyAdditionalFileIdentity({ format: 'Media Gallery', role: 'Image', uploadCompleted: true, expectedSizeBytes: 100, portalSizeBytes: 100, localSha256: 'a'.repeat(64), sourceFileName: 'demo.zip', displayFileName: 'demo.zip' });
   assert.equal(mediaOnly.state, 'FAIL');
-  const additional = verifyAdditionalFileIdentity({ format: 'Additional files', role: 'Additional File', uploadCompleted: true, expectedSizeBytes: 100, portalSizeBytes: 100, localSha256: 'a'.repeat(64) });
+  const additional = verifyAdditionalFileIdentity({ format: 'Additional files', role: 'Additional File', uploadCompleted: true, expectedSizeBytes: 100, portalSizeBytes: 100, localSha256: 'a'.repeat(64), sourceFileName: 'demo.zip', displayFileName: 'demo.zip' });
   assert.equal(additional.state, 'PASS');
 });
 
@@ -53,14 +53,14 @@ test('Fab normalized display filename does not invalidate verified Additional Fi
 });
 
 test('Additional File role and size contradictions fail closed', () => {
-  const wrongRole = verifyAdditionalFileIdentity({ format: 'Additional files', role: 'Media Gallery', uploadCompleted: true, expectedSizeBytes: 100, portalSizeBytes: 100, localSha256: 'a'.repeat(64) });
-  const wrongSize = verifyAdditionalFileIdentity({ format: 'Additional files', role: 'Additional File', uploadCompleted: true, expectedSizeBytes: 100, portalSizeBytes: 99, localSha256: 'a'.repeat(64) });
+  const wrongRole = verifyAdditionalFileIdentity({ format: 'Additional files', role: 'Media Gallery', uploadCompleted: true, expectedSizeBytes: 100, portalSizeBytes: 100, localSha256: 'a'.repeat(64), sourceFileName: 'demo.zip', displayFileName: 'demo.zip' });
+  const wrongSize = verifyAdditionalFileIdentity({ format: 'Additional files', role: 'Additional File', uploadCompleted: true, expectedSizeBytes: 100, portalSizeBytes: 99, localSha256: 'a'.repeat(64), sourceFileName: 'demo.zip', displayFileName: 'demo.zip' });
   assert.equal(wrongRole.state, 'FAIL');
   assert.equal(wrongSize.state, 'FAIL');
 });
 
 test('available remote hash is compared and a contradictory hash fails closed', () => {
-  const expected = { format: 'Additional files', role: 'Additional File', uploadCompleted: true, expectedSizeBytes: 100, portalSizeBytes: 100, localSha256: 'a'.repeat(64), expectedSha256: 'a'.repeat(64) };
+  const expected = { format: 'Additional files', role: 'Additional File', uploadCompleted: true, expectedSizeBytes: 100, portalSizeBytes: 100, localSha256: 'a'.repeat(64), expectedSha256: 'a'.repeat(64), sourceFileName: 'demo.zip', displayFileName: 'demo.zip' };
   const match = verifyAdditionalFileIdentity({ ...expected, portalSha256: 'a'.repeat(64) });
   const mismatch = verifyAdditionalFileIdentity({ ...expected, portalSha256: 'b'.repeat(64) });
   assert.equal(match.remoteHashVerified, true);

@@ -4,6 +4,7 @@ import { portalFieldLifecycle } from './lifecycle.mjs';
 import { isFormatView } from './view-detection.mjs';
 import { compareRichText, readRichTextFromEditor, richTextToPlainText } from './rich-text.mjs';
 import { assessRecordedDescriptionPreview, compareTechnicalInformationItems, verifyAdditionalFileIdentity } from './portal-contract.mjs';
+import { normalizePortalFileName, parsePortalFileSizeEvidence } from './portal-file-identity.mjs';
 
 export const COMPARISON_STATES = ['MATCH', 'MISMATCH', 'NOT_VISIBLE', 'NOT_DISCOVERED', 'NOT_APPLICABLE'];
 const FORMAT_OWNED_FIELDS = new Set(['engineVersions', 'platforms', 'technicalInformationFile', 'additionalInformationRichText', 'media']);
@@ -501,17 +502,21 @@ async function compareTechnicalInformation(page, manifestInfo, view = 'listing')
   return result;
 }
 
-async function portalFileSizeBytes(row, text) {
+async function portalFileSizeEvidence(row, text) {
   const rawBytes = await row.getAttribute('data-size-bytes').catch(() => null);
-  const exactBytes = rawBytes === null ? null : Number(rawBytes);
-  if (exactBytes !== null && Number.isSafeInteger(exactBytes) && exactBytes >= 0) return exactBytes;
-  const exactLabel = /\b([\d,]+)\s+bytes?\b/i.exec(text);
-  if (exactLabel) return Number(exactLabel[1].replaceAll(',', ''));
-  const display = /\b(\d+(?:\.\d+)?)\s*(B|KB|KIB|MB|MIB|GB|GIB)\b/i.exec(text);
-  if (!display) return null;
-  const multiplier = { B: 1, KB: 1_000, KIB: 1_024, MB: 1_000_000, MIB: 1_048_576, GB: 1_000_000_000, GIB: 1_073_741_824 }[display[2].toUpperCase()];
-  const bytes = Number(display[1]) * multiplier;
-  return Number.isSafeInteger(bytes) ? bytes : null;
+  return parsePortalFileSizeEvidence({ rawBytes, displayText: text });
+}
+
+async function portalFileDisplayName(row) {
+  const links = row.getByRole('link');
+  if (await links.count() === 1) {
+    const linkName = normalizeText(await links.first().innerText().catch(() => ''));
+    if (linkName) return linkName;
+  }
+  const accessibleName = normalizeText(await row.getAttribute('aria-label').catch(() => ''));
+  const raw = accessibleName || normalizeText(await row.innerText().catch(() => ''));
+  const withoutSize = normalizeText(raw.replace(/\s+[\d,]+(?:\.\d+)?\s*(?:bytes?|kB|KB|KiB|MB|MiB|GB|GiB)\s*$/i, ''));
+  return withoutSize || null;
 }
 
 export async function compareManifest(page, manifestInfo, { view = 'listing', uploadEvidence = null } = {}) {
@@ -628,7 +633,8 @@ export async function compareManifest(page, manifestInfo, { view = 'listing', up
       && /Z$/.test(uploadRecord.completedAtUtc)
       && !Number.isNaN(Date.parse(uploadRecord.completedAtUtc))
       && uploadRecord.localSha256?.toLowerCase() === verifiedLocal?.sha256?.toLowerCase()
-      && uploadRecord.sizeBytes === verifiedLocal?.bytes);
+      && uploadRecord.sizeBytes === verifiedLocal?.bytes
+      && normalizePortalFileName(uploadRecord.portalFileName) === normalizePortalFileName(file.fileName));
     const section = page.getByRole('region', { name: /^Additional files$/i });
     const sectionCount = await section.count();
     const sectionVisible = sectionCount === 1 && await section.isVisible().catch(() => false);
@@ -638,25 +644,35 @@ export async function compareManifest(page, manifestInfo, { view = 'listing', up
       const row = rows.nth(rowIndex);
       const name = normalizeText(await row.textContent().catch(() => ''));
       const accessibleName = normalizeText(await row.getAttribute('aria-label').catch(() => ''));
-      const role = await row.getAttribute('data-fab-role').catch(() => null)
-        ?? (/\bAdditional File\b/i.test(`${accessibleName} ${name}`) ? 'Additional File' : null);
-      candidates.push({ role, size: await portalFileSizeBytes(row, `${accessibleName} ${name}`), name: accessibleName || name });
+      candidates.push({
+        role: sectionVisible ? 'Additional File' : null,
+        sizeEvidence: await portalFileSizeEvidence(row, `${accessibleName} ${name}`),
+        name: await portalFileDisplayName(row),
+      });
     }
-    const matching = candidates.filter((candidate) => candidate.size === file.sizeBytes);
-    const evidence = matching.length === 1 ? verifyAdditionalFileIdentity({
+    const evidenceName = normalizePortalFileName(uploadRecord?.portalFileName);
+    const namedCandidates = evidenceName ? candidates.filter((candidate) => normalizePortalFileName(candidate.name) === evidenceName) : [];
+    const matchedRow = namedCandidates.length === 1 ? namedCandidates[0] : null;
+    const identityEvidence = matchedRow ? verifyAdditionalFileIdentity({
       format: sectionVisible ? 'Additional files' : null,
-      role: matching[0].role,
-      uploadCompleted: uploadEvidenceMatches && sectionVisible && matching.length === 1,
+      role: matchedRow.role,
+      uploadCompleted: uploadEvidenceMatches && sectionVisible,
       expectedSizeBytes: file.sizeBytes,
-      portalSizeBytes: matching[0].size,
+      portalSizeBytes: matchedRow.sizeEvidence.precision === 'exact' ? matchedRow.sizeEvidence.bytes : null,
+      portalSizeRange: matchedRow.sizeEvidence.range,
       localSha256: verifiedLocal?.sha256 ?? null,
       expectedSha256: file.sha256,
       sourceFileName: file.fileName,
-      displayFileName: matching[0].name,
+      displayFileName: matchedRow.name,
     }) : null;
-    const state = !evidence || evidence.state !== 'PASS' ? (sectionVisible ? 'MISMATCH' : 'NOT_DISCOVERED') : 'MATCH';
-    const result = fieldResult({ manifestJsonPath, portalLabel: 'Additional File', desired: file, current: matching.length === 1 ? matching[0] : null, state, resolved: sectionVisible ? { metadata: { strategy: 'semantic-region', expression: 'Additional files region with role, byte-size, and upload evidence', matchCount: sectionCount, unique: true, confidence: 'medium' } } : null, editableControlAvailable: false, notes: evidence?.identityBasis ?? 'Expected artifact upload evidence is missing or does not match the verified local hash, or the Portal format/role/size evidence is ambiguous.', writeTarget: null });
-    result.identityEvidence = evidence;
+    const state = !sectionVisible ? 'NOT_DISCOVERED'
+      : !uploadEvidence || !verifiedLocal ? 'NOT_DISCOVERED'
+        : !uploadEvidenceMatches ? 'MISMATCH'
+          : namedCandidates.length !== 1 ? (candidates.some((candidate) => candidate.name) ? 'MISMATCH' : 'NOT_DISCOVERED')
+            : identityEvidence.sizeEvidenceState === 'UNKNOWN' ? 'NOT_DISCOVERED'
+              : identityEvidence.state === 'PASS' ? 'MATCH' : 'MISMATCH';
+    const result = fieldResult({ manifestJsonPath, portalLabel: 'Additional File', desired: file, current: matchedRow, state, resolved: sectionVisible ? { metadata: { strategy: 'semantic-region', expression: 'Additional files region with filename, role context, byte-size evidence, and hash-bound upload evidence', matchCount: sectionCount, unique: true, confidence: 'medium' } } : null, editableControlAvailable: false, notes: identityEvidence?.identityBasis ?? 'Expected artifact upload evidence, filename correspondence, or Portal size evidence is missing or contradictory.', writeTarget: null });
+    result.identityEvidence = identityEvidence;
     fields.push(result);
   }
   for (const [index, pkg] of manifest.packages.entries()) {

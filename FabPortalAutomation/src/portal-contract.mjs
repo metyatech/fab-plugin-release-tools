@@ -1,3 +1,4 @@
+import { normalizePortalFileName } from './portal-file-identity.mjs';
 function normalizeText(value) { return String(value ?? '').replace(/\s+/g, ' ').trim(); }
 
 export const TECHNICAL_ITEM_STATES = ['MATCH', 'STALE', 'MISSING', 'PORTAL_ONLY'];
@@ -45,33 +46,46 @@ export function compareTechnicalInformationItems(canonical, portal) {
   return { items, counts: Object.fromEntries(TECHNICAL_ITEM_STATES.map((state) => [state, items.filter((item) => item.state === state).length])), submissionReady: !blocking, portalOnlyKeys: items.filter((item) => item.state === 'PORTAL_ONLY').map((item) => normalizeText(item.key).toLocaleLowerCase()) };
 }
 
-export function verifyAdditionalFileIdentity({ format = null, role = null, uploadCompleted = false, expectedSizeBytes = null, portalSizeBytes = null, localSha256 = null, expectedSha256 = null, portalSha256 = null, sourceFileName = null, displayFileName = null } = {}) {
+export function verifyAdditionalFileIdentity({ format = null, role = null, uploadCompleted = false, expectedSizeBytes = null, portalSizeBytes = null, portalSizeRange = null, localSha256 = null, expectedSha256 = null, portalSha256 = null, sourceFileName = null, displayFileName = null } = {}) {
   const roleMatches = normalizeText(format).toLocaleLowerCase() === 'additional files'
     && normalizeText(role).toLocaleLowerCase() === 'additional file';
-  const sizeMatches = Number.isSafeInteger(expectedSizeBytes) && expectedSizeBytes >= 0
-    && Number.isSafeInteger(portalSizeBytes) && expectedSizeBytes === portalSizeBytes;
+  const exactSizeKnown = Number.isSafeInteger(portalSizeBytes) && portalSizeBytes >= 0;
+  const roundedSizeKnown = portalSizeRange
+    && Number.isSafeInteger(portalSizeRange.minimumBytes) && Number.isSafeInteger(portalSizeRange.maximumBytes)
+    && portalSizeRange.minimumBytes >= 0 && portalSizeRange.maximumBytes >= portalSizeRange.minimumBytes;
+  const sizeEvidenceState = !Number.isSafeInteger(expectedSizeBytes) || expectedSizeBytes < 0 || (!exactSizeKnown && !roundedSizeKnown)
+    ? 'UNKNOWN'
+    : (exactSizeKnown ? expectedSizeBytes === portalSizeBytes : expectedSizeBytes >= portalSizeRange.minimumBytes && expectedSizeBytes <= portalSizeRange.maximumBytes)
+      ? 'MATCH' : 'MISMATCH';
+  const sizeMatches = sizeEvidenceState === 'MATCH';
   const localHashVerified = /^[a-f0-9]{64}$/i.test(localSha256 ?? '')
     && (!expectedSha256 || localSha256.toLowerCase() === expectedSha256.toLowerCase());
+  const filenameCorresponds = Boolean(sourceFileName && displayFileName)
+    && normalizePortalFileName(sourceFileName) === normalizePortalFileName(displayFileName);
   const remoteHashPresent = portalSha256 !== null && portalSha256 !== undefined && portalSha256 !== '';
   const remoteHashVerified = !remoteHashPresent
     ? null
     : /^[a-f0-9]{64}$/i.test(portalSha256) && localHashVerified
       ? localSha256.toLowerCase() === portalSha256.toLowerCase()
       : false;
-  const nameNormalized = Boolean(sourceFileName && displayFileName)
+  const nameNormalized = filenameCorresponds
     && normalizeText(sourceFileName).toLocaleLowerCase() !== normalizeText(displayFileName).toLocaleLowerCase();
-  const passed = roleMatches && uploadCompleted && sizeMatches && localHashVerified && remoteHashVerified !== false;
+  const passed = roleMatches && uploadCompleted && sizeMatches && localHashVerified && filenameCorresponds && remoteHashVerified !== false;
   return {
     state: passed ? 'PASS' : 'FAIL',
     roleMatches,
     uploadCompleted: uploadCompleted === true,
     sizeMatches,
+    sizeEvidenceState,
+    portalSizeBytes: exactSizeKnown ? portalSizeBytes : null,
+    portalSizeRange: roundedSizeKnown ? { minimumBytes: portalSizeRange.minimumBytes, maximumBytes: portalSizeRange.maximumBytes } : null,
     localHashVerified,
     remoteHashVerified,
     nameNormalized,
+    filenameCorresponds,
     sourceFileName,
     displayFileName,
-    identityBasis: passed ? 'role, completed upload, size, and pre-upload local SHA-256; remote hash is reported only when available' : 'identity evidence is incomplete or contradictory',
+    identityBasis: passed ? 'Additional files section role, completed upload, displayed size range, local SHA-256, and filename correspondence; remote hash is reported only when available' : 'identity evidence is incomplete or contradictory',
   };
 }
 

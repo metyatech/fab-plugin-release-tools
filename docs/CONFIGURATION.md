@@ -112,10 +112,17 @@ Live pre-submit verification requires the Additional files format and expected
 artifact registration, including its Additional File role and byte size.
 Before comparison, the manifest loader re-hashes the actual bundled artifact
 and checks its byte size against the manifest. The visible registered Portal
-row is upload-completion evidence. Filename display is supporting evidence
-because Fab may normalize it. Report a Fab-side hash only if Portal metadata
-exposes one and it was compared. A missing local artifact or Portal size/role
-conflict fails closed.
+row is upload-completion evidence. Filename display may be normalized, but the
+completed upload record must include the Portal-displayed name and the visible
+row must correspond after case/punctuation normalization. An unrelated name
+is not accepted even when its size matches. The verifier scopes the row to the
+visible `Additional files` section; Media Gallery is not an Additional File
+source. Prefer exact Portal byte metadata. If only a rounded size is visible,
+compare against its mathematically consistent byte interval and leave the
+exact Portal byte count unknown. Missing size evidence remains unknown, and a
+size or role conflict fails closed. Report a Fab-side hash only if Portal
+metadata exposes one and it was compared; the local source hash is not remote
+hash evidence.
 
 The generated manifest's `portalReady` records local artifact/input readiness,
 not Portal state. Live Portal verification is reported separately. Preview
@@ -126,8 +133,9 @@ Portal-only entries are reported as `PORTAL_ONLY` without failing by themselves.
 When a manifest includes Additional Files, live pre-submit also requires a
 `FabPortalUploadEvidence.json` created after upload and supplied with
 `-AdditionalFileUploadEvidencePath`. It binds the completed operation to the
-listing, manifest SHA-256, and verified local hash/size; a same-size pre-existing
-Portal row alone is insufficient. See `FabPortalUploadEvidence.schema.json`.
+listing, manifest SHA-256, verified local hash/size, and Portal-displayed
+filename; a same-size pre-existing Portal row alone is insufficient. See
+`FabPortalUploadEvidence.schema.json`.
 
 `forbiddenPackagePatterns` is additive. The built-in policy always rejects Fab-
 unsupported package formats such as executables, installers, and non-ZIP

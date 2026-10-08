@@ -23,7 +23,7 @@ function evidence(overrides = {}) {
     schemaVersion: 1,
     listingId: manifestInfo.manifest.listingId,
     manifestSha256: manifestInfo.manifestSha256,
-    additionalFiles: [{ fileName: 'Demo_UE5.8.zip', localSha256: 'b'.repeat(64), sizeBytes: 2048, uploadCompleted: true, completedAtUtc: '2026-10-08T06:00:00Z' }],
+    additionalFiles: [{ fileName: 'Demo_UE5.8.zip', portalFileName: 'demo_ue58.zip', localSha256: 'b'.repeat(64), sizeBytes: 2048, uploadCompleted: true, completedAtUtc: '2026-10-08T06:00:00Z' }],
     ...overrides,
   };
 }
@@ -38,6 +38,7 @@ test('upload evidence rejects a different manifest, artifact hash, size, or inco
     evidence({ manifestSha256: 'c'.repeat(64) }),
     evidence({ additionalFiles: [{ ...evidence().additionalFiles[0], localSha256: 'c'.repeat(64) }] }),
     evidence({ additionalFiles: [{ ...evidence().additionalFiles[0], sizeBytes: 2047 }] }),
+    evidence({ additionalFiles: [{ ...evidence().additionalFiles[0], portalFileName: 'old_demo.zip' }] }),
     evidence({ additionalFiles: [{ ...evidence().additionalFiles[0], uploadCompleted: false }] }),
   ]) {
     const filePath = await evidenceFile(value);

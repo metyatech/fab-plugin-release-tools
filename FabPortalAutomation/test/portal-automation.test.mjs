@@ -191,11 +191,20 @@ test('pre-submit requires an expected demo file in the Additional files format',
   const present = await scenario({ manifest, preSubmit: true, state: {
     additionalFilesFormat: true,
     additionalFileRows: [{ role: 'Additional File', fileName: 'demo_ue58.zip', sizeBytes: demo.sizeBytes }],
-  }, uploadEvidence: { additionalFiles: [{ fileName: demo.fileName, localSha256: demo.sha256, sizeBytes: demo.sizeBytes, uploadCompleted: true }] } });
+  }, uploadEvidence: { additionalFiles: [{ fileName: demo.fileName, portalFileName: 'demo_ue58.zip', localSha256: demo.sha256, sizeBytes: demo.sizeBytes, uploadCompleted: true }] } });
   const presentField = present.result.comparison.fields.find((field) => field.manifestJsonPath === 'additionalFiles[0]');
   assert.equal(presentField.classification, 'MATCH');
   assert.equal(presentField.identityEvidence.nameNormalized, true);
   assert.equal(present.result.preSubmitReady, true);
+});
+
+test('a same-name file in Media Gallery does not satisfy the Additional files format contract', async () => {
+  const demo = { role: 'example-project', fileName: 'Demo_UE5.8.zip', bundleRelativePath: 'additional-files/Demo_UE5.8.zip', engineVersion: '5.8', sizeBytes: 2048, sha256: 'c'.repeat(64), sourceRepository: 'metyatech/Demo', sourceCommit: 'd'.repeat(40) };
+  const manifest = makeManifest({ additionalFiles: [demo] });
+  const { result } = await scenario({ manifest, preSubmit: true, state: { mediaExisting: 'known', mediaGalleryFileRows: [{ fileName: 'demo_ue58.zip', sizeBytes: demo.sizeBytes }] }, uploadEvidence: { additionalFiles: [{ fileName: demo.fileName, portalFileName: 'demo_ue58.zip', localSha256: demo.sha256, sizeBytes: demo.sizeBytes, uploadCompleted: true }] } });
+  const field = result.comparison.fields.find((item) => item.manifestJsonPath === 'additionalFiles[0]');
+  assert.equal(field.classification, 'NOT_DISCOVERED');
+  assert.equal(result.preSubmitReady, false);
 });
 
 test('pre-submit fails closed when the local Additional File hash was not verified', async () => {
@@ -205,7 +214,7 @@ test('pre-submit fails closed when the local Additional File hash was not verifi
     additionalFilesFormat: true,
     additionalFileRows: [{ role: 'Additional File', fileName: 'demo_ue58.zip', sizeBytes: demo.sizeBytes }],
   } });
-  assert.equal(result.comparison.fields.find((field) => field.manifestJsonPath === 'additionalFiles[0]').classification, 'MISMATCH');
+  assert.equal(result.comparison.fields.find((field) => field.manifestJsonPath === 'additionalFiles[0]').classification, 'NOT_DISCOVERED');
   assert.equal(result.preSubmitReady, false);
 });
 
@@ -216,7 +225,32 @@ test('pre-submit does not treat a pre-existing same-size Portal row as proof of 
     additionalFilesFormat: true,
     additionalFileRows: [{ role: 'Additional File', fileName: 'old_demo.zip', sizeBytes: demo.sizeBytes }],
   } });
-  assert.equal(result.comparison.fields.find((field) => field.manifestJsonPath === 'additionalFiles[0]').classification, 'MISMATCH');
+  assert.equal(result.comparison.fields.find((field) => field.manifestJsonPath === 'additionalFiles[0]').classification, 'NOT_DISCOVERED');
+  assert.equal(result.preSubmitReady, false);
+});
+
+test('rounded Fab kB display accepts the source byte count without claiming exact Portal bytes', async () => {
+  const demo = { role: 'example-project', fileName: 'Demo_UE5.8.zip', bundleRelativePath: 'additional-files/Demo_UE5.8.zip', engineVersion: '5.8', sizeBytes: 16946, sha256: 'c'.repeat(64), sourceRepository: 'metyatech/Demo', sourceCommit: 'd'.repeat(40) };
+  const manifest = makeManifest({ additionalFiles: [demo] });
+  const { result } = await scenario({ manifest, preSubmit: true, state: {
+    additionalFilesFormat: true,
+    additionalFileRows: [{ fileName: 'demo_ue58.zip', sizeLabel: '16.55 kB' }],
+  }, uploadEvidence: { additionalFiles: [{ fileName: demo.fileName, portalFileName: 'demo_ue58.zip', localSha256: demo.sha256, sizeBytes: demo.sizeBytes, uploadCompleted: true }] } });
+  const field = result.comparison.fields.find((item) => item.manifestJsonPath === 'additionalFiles[0]');
+  assert.equal(field.classification, 'MATCH');
+  assert.equal(field.identityEvidence.portalSizeBytes, null);
+  assert.deepEqual(field.identityEvidence.portalSizeRange, { minimumBytes: 16943, maximumBytes: 16952 });
+});
+
+test('valid upload evidence cannot identify a same-size row with a different filename', async () => {
+  const demo = { role: 'example-project', fileName: 'Demo_UE5.8.zip', bundleRelativePath: 'additional-files/Demo_UE5.8.zip', engineVersion: '5.8', sizeBytes: 2048, sha256: 'c'.repeat(64), sourceRepository: 'metyatech/Demo', sourceCommit: 'd'.repeat(40) };
+  const manifest = makeManifest({ additionalFiles: [demo] });
+  const { result } = await scenario({ manifest, preSubmit: true, state: {
+    additionalFilesFormat: true,
+    additionalFileRows: [{ role: 'Additional File', fileName: 'old_demo.zip', sizeBytes: demo.sizeBytes }],
+  }, uploadEvidence: { additionalFiles: [{ fileName: demo.fileName, portalFileName: 'demo_ue58.zip', localSha256: demo.sha256, sizeBytes: demo.sizeBytes, uploadCompleted: true }] } });
+  const field = result.comparison.fields.find((item) => item.manifestJsonPath === 'additionalFiles[0]');
+  assert.notEqual(field.classification, 'MATCH');
   assert.equal(result.preSubmitReady, false);
 });
 

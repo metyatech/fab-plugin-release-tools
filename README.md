@@ -211,22 +211,24 @@ pwsh .\Publish-FabProjectFiles.ps1 -PluginPath <path> `
 Upload the generated archive through `Add new format` → `Additional files`;
 this is separate from Media Gallery (`Images`, `3D models`, and `Videos`). Portal
 automation does not upload it. For `fab-additional-file`, live pre-submit
-verification requires the Additional files format and the expected example
-project registration with its Additional File role and expected byte size. The
-manifest loader re-hashes the actual bundled ZIP and checks its byte size before
-Portal comparison; the visible registered row is the upload-completion evidence.
-Fab may normalize the displayed filename, so the name is supporting evidence,
-not the identity key. The bundle's verified local SHA-256 is checked against
-the manifest before upload. Report a remote hash as verified only when Fab
-exposes one and it was actually compared. A missing local artifact, or a Portal
-role or size mismatch, fails closed. Smoke-test the Quick Start in Unreal Editor
+verification requires the visible Additional files format and expected example
+project registration. The manifest loader re-hashes the bundled ZIP and checks
+its byte size before Portal comparison. The completed upload record includes
+the filename shown by Fab; punctuation and case normalization is accepted, but
+an unrelated Portal filename does not match even at the same size. The visible
+row is located inside the Additional files section, not Media Gallery. Exact
+Portal bytes are preferred; rounded display sizes are compared as a compatible
+byte interval, and no exact remote count is claimed. Missing size remains
+unknown; role or size contradictions fail closed. The bundle's local SHA-256
+does not prove a Portal-side hash. Report a remote hash only when Fab exposes
+one and it was actually compared. Smoke-test the Quick Start in Unreal Editor
 before submitting for review.
 
 For pre-submit checks of a listing with Additional Files, record each completed
 upload in `FabPortalUploadEvidence.json` using the [schema](FabPortalUploadEvidence.schema.json)
 and pass it as `-AdditionalFileUploadEvidencePath`. The evidence binds the
-completed operation to the listing, manifest hash, local artifact hash, and
-size. Get `manifestSha256` from the exact `FabPortalSubmission.json` bytes and
+completed operation to the listing, manifest hash, local artifact hash, size,
+and Portal-displayed filename. Get `manifestSha256` from the exact `FabPortalSubmission.json` bytes and
 `localSha256`/`sizeBytes` from the bundled ZIP; record `uploadCompleted: true`
 and its UTC completion time only after the upload finishes. A visible same-size
 Portal row alone cannot prove which upload created it.
@@ -572,6 +574,19 @@ until a human or Computer Use observation records it; without that evidence,
 `readyToSubmit` stays false. Observation transport is explicitly rejected for
 the live pre-submit gate. It remains verify-only: it does not edit, save,
 submit, or publish, and a live PASS is not a guarantee of Fab approval.
+
+For a `fab-additional-file` upload, record the Portal-displayed filename in
+`FabPortalUploadEvidence.json` after the upload completes. Case and punctuation
+normalization such as `Demo_UE5.8.zip` → `demo_ue58.zip` is accepted; an
+unrelated name such as `old_demo.zip` is not. The verifier locates rows only
+inside the visible `Additional files` format section, never in Media Gallery,
+and binds the visible filename to the upload record. It prefers exact Portal
+byte metadata; Fab's observed `16.55 kB` for a 16,946-byte file establishes a
+1024-byte `kB` unit for that display. It compares that rounded value against
+the mathematically compatible byte interval without reporting an exact Portal
+byte count. Other ambiguous unit labels remain unknown. Missing size evidence remains
+unknown, and a size or filename contradiction fails closed. A local SHA-256
+proves the source file before upload; it does not prove a remote hash.
 
 To check whether proposed tags are selectable in the current seller-side
 selector, run a read-only discovery against the same existing Draft:

@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { normalizePortalFileName } from './portal-file-identity.mjs';
 
 function fail(message) {
   throw new Error(`Fab Portal upload evidence invalid: ${message}`);
@@ -23,10 +24,11 @@ export async function loadFabPortalUploadEvidence(filePath, manifestInfo) {
     const matches = evidence.additionalFiles.filter((item) => item?.fileName === file.fileName);
     if (matches.length !== 1) fail(`expected exactly one upload record for ${file.fileName}.`);
     const [record] = matches;
-    const recordKeys = ['fileName', 'localSha256', 'sizeBytes', 'uploadCompleted', 'completedAtUtc'];
+    const recordKeys = ['fileName', 'portalFileName', 'localSha256', 'sizeBytes', 'uploadCompleted', 'completedAtUtc'];
     if (Object.keys(record).length !== recordKeys.length || recordKeys.some((key) => !Object.hasOwn(record, key))) fail(`upload record for ${file.fileName} must contain exactly the documented fields.`);
     if (record.localSha256?.toLowerCase() !== file.sha256.toLowerCase()) fail(`localSha256 does not match the verified local artifact for ${file.fileName}.`);
     if (record.sizeBytes !== file.bytes) fail(`sizeBytes does not match the verified local artifact for ${file.fileName}.`);
+    if (typeof record.portalFileName !== 'string' || normalizePortalFileName(record.portalFileName) !== normalizePortalFileName(file.fileName)) fail(`portalFileName does not correspond to the verified local artifact for ${file.fileName}.`);
     if (record.uploadCompleted !== true) fail(`uploadCompleted must be true for ${file.fileName}.`);
     if (typeof record.completedAtUtc !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(record.completedAtUtc) || Number.isNaN(Date.parse(record.completedAtUtc))) {
       fail(`completedAtUtc must be a valid UTC timestamp for ${file.fileName}.`);

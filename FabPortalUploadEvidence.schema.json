@@ -14,9 +14,10 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["fileName", "localSha256", "sizeBytes", "uploadCompleted", "completedAtUtc"],
+        "required": ["fileName", "portalFileName", "localSha256", "sizeBytes", "uploadCompleted", "completedAtUtc"],
         "properties": {
           "fileName": { "type": "string", "minLength": 1 },
+          "portalFileName": { "type": "string", "minLength": 1, "description": "Filename shown by Fab after upload; punctuation and case normalization are accepted, unrelated names are not." },
           "localSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
           "sizeBytes": { "type": "integer", "minimum": 0 },
           "uploadCompleted": { "const": true },
